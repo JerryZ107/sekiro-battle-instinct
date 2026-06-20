@@ -26,4 +26,5 @@ features = [
 ]
 
 [lib]
+name = "dinput8"
 crate-type = ["cdylib"]
