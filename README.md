@@ -1,50 +1,60 @@
-# Battle Instinct（双键搓招改版）
+# Battle Instinct（双键搓招版）
 
-本仓库基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 修改。
+基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 修改的只狼武技 / 忍具 MOD。
 
-原作者实现了只狼武技 / 忍具的**方向序列搓招**与自动换槽。本改版在其工程与换槽、注入、冷却等机制之上，**重新设计了武技搓招逻辑**（借助 AI 完成大量实现与调试），把武技触发简化为：**任意两个键位的组合**即可切槽并放招。
+原版用**方向序列 + 防御/攻击**切换武技；本分支在保留原作者换槽、注入、忍具等核心机制的前提下，**重新设计了武技搓招逻辑**（借助 AI 辅助实现），把武技触发简化为**两个键位**的短窗口连招。
 
-忍具仍沿用原版方向序列方案，未改其核心逻辑。
+## 与原版的关系
 
-## 与原版的主要差异
+- **上游**：[@dec32](https://github.com/dec32) 的 [Battle Instinct](https://github.com/dec32/sekiro-battle-instinct)
+- **本仓库**：理念不同的独立维护版（双键搓招），**不是**上游官方分支
+- 忍具仍基本沿用原版方向序列 / ∅ / ⛉ / M4/M5 逻辑
 
-| | 原版 Battle Instinct | 本改版 |
-|---|---|---|
-| 武技搓招 | 方向序列（如 `↑` / `↑↑`），再按防御+攻击 | **恰好两个键**：方向 / 防 `r` / 攻 `l` / 动作 `f` |
-| 放招 | 玩家自己按防御+攻击（部分序列可省略防御） | 命中后自动换槽，再注入防御+攻击 |
-| 默认武技 | 无方向时按防御切默认 | 例如 `rl` 等双键绑定（见 cfg） |
+若你更需要原版手感，请直接使用上游发布页。
 
-键位约定（cfg 最后一列）：
+## 武技搓招（两个键）
 
-- `r` = 鼠标右键 / 防御
-- `l` = 鼠标左键 / 攻击
-- `f` = 「动作、(长按)吸引」
-- `↑↓←→` = 移动
-- `ff` = 连按两次动作键
+键位含义（与改键无关，跟游戏动作绑定）：
 
-示例：`r↑`、`↑l`、`fl`、`rf`、`fr`、`↓r`、`rl` 等。
+| 符号 | 含义 |
+|------|------|
+| 
+ | 防御（鼠标右键 / 格挡） |
+| l | 攻击（鼠标左键） |
+|  | 动作、(长按)吸引 |
+| ↑↓←→ | 移动方向（WASD / 摇杆） |
+| f | 连按两次  |
+| 
+l / 
+f / r / l 等 | 两个键的顺序组合 |
+
+双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入攻击（方便蓄力），松开即停。
+
+默认中文表示例见 [
+es/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg)。
 
 ## 安装
 
-将以下文件放到 `sekiro.exe` 同目录：
+编译或使用发布包后，将以下文件放到 sekiro.exe 同目录：
 
-1. `dinput8.dll`
-2. `battle_instinct.cfg`（可用 `res/battle_instinct_zh.cfg` 的中文表）
+1. dinput8.dll
+2. attle_instinct.cfg（可用中文表 attle_instinct_zh.cfg 改名）
 
 > [!TIP]
-> 若已安装 MOD Engine 或其他 `dinput8.dll`，请把**其他** dll 重命名为 `dinput8_*.dll`。本 MOD 会链式加载它们。
+> 若已有其它 dinput8.dll（如 MOD Engine），把**其它** DLL 改名为 dinput8_xxx.dll。本 MOD 会链式加载它们。
 
-构建：`cargo build --release`，将 `target/release/sekiro_battle_instinct.dll` 改名为 `dinput8.dll`。
+### 自行编译
 
-## 自定义
+\\ash
+cargo build --release
+\
+## 感谢
 
-编辑 `battle_instinct.cfg`。第一列为 UID，最后列为搓招；武技请使用上述双键写法，忍具仍用方向 / `∅` / `⛉` / `M4`/`M5`。
-
-## 致谢
-
-- **[dec32](https://github.com/dec32)**：[sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者。本改版建立在其代码与思路之上，感谢开源。
+- **[dec32](https://github.com/dec32)**：[Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者——本 MOD 基于其代码与架构
 - [Tmsrise](https://github.com/tmsrise)：[Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
 - [ReaperAnon](https://github.com/ReaperAnon)：[Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
 - [Yuzheng Wu](https://github.com/Persona-woo)：原版输入手感测试与改进
 
-若你需要原版方向序列体验，请使用上游仓库：https://github.com/dec32/sekiro-battle-instinct
+## 声明
+
+请遵守上游仓库的许可与只狼 MOD 使用惯例。本仓库仅为个人搓招理念下的衍生作品，问题请在本仓库反馈，勿打扰原作者。
