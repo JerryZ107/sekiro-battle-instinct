@@ -1,90 +1,50 @@
-# Battle Instinct
+# Battle Instinct（双键搓招改版）
 
-Battle Instinct is a MOD for *Sekiro: Shadows Die Twice*. It gives players the ability to use combat arts and prosthetic tools with **motion inputs**, without manually switching between them.
+本仓库基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 修改。
 
-The MOD supports both keyboard and mouse, and gamepads (supporting both XInput and DualSense natively).
+原作者实现了只狼武技 / 忍具的**方向序列搓招**与自动换槽。本改版在其工程与换槽、注入、冷却等机制之上，**重新设计了武技搓招逻辑**（借助 AI 完成大量实现与调试），把武技触发简化为：**任意两个键位的组合**即可切槽并放招。
 
-## Install
+忍具仍沿用原版方向序列方案，未改其核心逻辑。
 
-Download the MOD via the link below.
+## 与原版的主要差异
 
-[![[DOWNLOAD]](https://img.shields.io/badge/DOWNLOAD-battle--instinct.zip-blue)](https://github.com/dec32/sekiro-battle-instinct/releases/latest/download/battle-instinct.zip)
+| | 原版 Battle Instinct | 本改版 |
+|---|---|---|
+| 武技搓招 | 方向序列（如 `↑` / `↑↑`），再按防御+攻击 | **恰好两个键**：方向 / 防 `r` / 攻 `l` / 动作 `f` |
+| 放招 | 玩家自己按防御+攻击（部分序列可省略防御） | 命中后自动换槽，再注入防御+攻击 |
+| 默认武技 | 无方向时按防御切默认 | 例如 `rl` 等双键绑定（见 cfg） |
 
-To install it, unzip the archive into the game directory. You should have the following 2 files next to `sekiro.exe`:
+键位约定（cfg 最后一列）：
+
+- `r` = 鼠标右键 / 防御
+- `l` = 鼠标左键 / 攻击
+- `f` = 「动作、(长按)吸引」
+- `↑↓←→` = 移动
+- `ff` = 连按两次动作键
+
+示例：`r↑`、`↑l`、`fl`、`rf`、`fr`、`↓r`、`rl` 等。
+
+## 安装
+
+将以下文件放到 `sekiro.exe` 同目录：
 
 1. `dinput8.dll`
-2. `battle_instinct.cfg`
+2. `battle_instinct.cfg`（可用 `res/battle_instinct_zh.cfg` 的中文表）
 
 > [!TIP]
-> If you have MOD Engine or any other MOD that utilizes `dinput8.dll` installed, rename the **other** `dinput8.dll` files to `dinput8_{whatever_you_like}.dll`. For example you may have:
-> ```
-> Sekiro/
-> ├─ dinput8.dll
-> ├─ dinput8_debug.dll
-> ├─ dinput8_fps_unlock.dll
-> ├─ dinput8_mod_engine.dll
-> ├─ sekiro.exe
-> └─ ...
-> ```
->
-> The MOD will automatically chain load the renamed `.dll` files for you.
-> 
+> 若已安装 MOD Engine 或其他 `dinput8.dll`，请把**其他** dll 重命名为 `dinput8_*.dll`。本 MOD 会链式加载它们。
 
-## Use
+构建：`cargo build --release`，将 `target/release/sekiro_battle_instinct.dll` 改名为 `dinput8.dll`。
 
-Press <kbd>Block</kbd> + <kbd>Attack</kbd> to perform the default combat art.
+## 自定义
 
-![](./docs/combat_art_0.webp)
+编辑 `battle_instinct.cfg`。第一列为 UID，最后列为搓招；武技请使用上述双键写法，忍具仍用方向 / `∅` / `⛉` / `M4`/`M5`。
 
-Press <kbd>Block</kbd> + <kbd>Attack</kbd> while **holding** a direction to perform the corresponding combat art. This is similar to how you perform Nightjar Slash Reversal in the vanilla game.
+## 致谢
 
-![](./docs/combat_art_1.webp)
+- **[dec32](https://github.com/dec32)**：[sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者。本改版建立在其代码与思路之上，感谢开源。
+- [Tmsrise](https://github.com/tmsrise)：[Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
+- [ReaperAnon](https://github.com/ReaperAnon)：[Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
+- [Yuzheng Wu](https://github.com/Persona-woo)：原版输入手感测试与改进
 
-Combat arts can also be bound to input sequences (e.g., ↑↑). When performing these, <kbd>Block</kbd> can be omitted, and the motion inputs maybe be **released** before pressing <kbd>Attack</kbd>.
-
-![](./docs/combat_art_2.webp)
-
-Prosthetic tools follow similar principles.
-
-> [!TIP]
-> Combining left <kbd>Ctrl</kbd> with motion inputs can be pretty unergonomic. Remap it to one of the mouse side buttons for a better experience.
-
-## Customize
-
-You can customize your control scheme by editing `battle_instinct.cfg`. Here's a short example:
-
-```
-# Combat Arts
-5300  Ichimonji
-7100  Ichimonji: Double           NONE
-5200  Nightjar Slash              ↑
-7600  Shadowfall                  ↑↑
-
-# Prosthetic Tools
-70000 Loaded Shuriken
-70500 Lazulite Shuriken           NONE
-76300 Phoenixs Lilac Umbrella     BLOCK
-78400 Leaping Flame               ↑↑
-78300 Spiral Spear                ↑↑
-
-# Extra Buttons
-74200 Great Feather Mist Raven     M4
-```
-
-The file is a plain text table formatted with whitespace characters. The first column stores the UIDs of the skills (combat arts or prosthetic tools). The last column specifies how you perform the skills. In the last column you can write:
-
-1. Nothing, which means this skill is ignored.
-2. A sequence of `↑`/`→`/`↓`/`←`, which spells the corresponding motion inputs.
-3. `NONE`, which means this is the skill to use when there's no motion inputs.
-4. `BLOCK`, which means this is the prosthetic tool to use when <kbd>Block</kbd> is held.
-5. `M4`/`M5`, which means this is the prosthetic tool to use when one of the two mouse side buttons is pressed.
-
-Notice that you can bind **multiple prosthetic tools** to the **same input sequence**. The MOD always prefers the already equipped prosthetic tools and tries to switch to them first. If none equipped, the MOD will choose the first one that is configured in the file.
-
-The columns in between store the names of the skills. They're only there for reference. Feel free to modify or delete them.
-
-## Credits
-
-- [Tmsrise](https://github.com/tmsrise): Sharing the source code of [Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058).
-- [ReaperAnon](https://github.com/ReaperAnon): Sharing the source code of [Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648).
-- [Yuzheng Wu](https://github.com/Persona-woo): Testing and improving input ergonomics.
+若你需要原版方向序列体验，请使用上游仓库：https://github.com/dec32/sekiro-battle-instinct

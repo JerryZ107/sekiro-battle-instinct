@@ -9,7 +9,10 @@ use widestring::U16CStr;
 use crate::{
     core::UID,
     game,
-    input::{Input::*, Inputs, InputsTrie},
+    input::{
+        ArtCombo, ArtToken, Inputs, InputsTrie,
+        Input::*,
+    },
 };
 
 const COMBART_ART_UID_MIN: UID = 5000;
@@ -19,7 +22,8 @@ const PROSTHETIC_TOOL_UID_MAX: UID = 100000;
 
 #[derive(Debug)]
 pub struct Config {
-    pub arts: InputsTrie<UID>,
+    /// Combat arts keyed by r/l/f + direction pairs (or empty for ∅).
+    pub arts: HashMap<ArtCombo, UID>,
     pub tools: InputsTrie<&'static [UID]>,
     pub tools_for_block: &'static [UID],
     pub tools_on_x1: &'static [UID],
@@ -28,14 +32,19 @@ pub struct Config {
 
 impl Config {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Config> {
-        Ok(fs::read_to_string(path)?.to_ascii_uppercase().into())
+        // Do not uppercase the whole file: art tokens use lowercase r/l/f.
+        Ok(fs::read_to_string(path)?.into())
+    }
+
+    pub fn art(&self, combo: ArtCombo) -> Option<UID> {
+        self.arts.get(&combo).copied()
     }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            arts: InputsTrie::new(),
+            arts: HashMap::new(),
             tools: InputsTrie::new(),
             tools_for_block: &[],
             tools_on_x1: &[],
@@ -54,14 +63,12 @@ impl<S: AsRef<str>> From<S> for Config {
         let mut used_inputs = HashSet::new();
         for line in value.as_ref().lines() {
             let mut items = line.split_whitespace().take_while(|item| !item.starts_with("#"));
-            // between IDs and inputs there're names of combat arts. They're ignored here
             let Some(id) = items.next().and_then(|id| id.parse::<UID>().ok()) else {
                 continue;
             };
             let Some(inputs) = items.last() else {
                 continue;
             };
-            // filter out all illegal IDs to prevent possible bugs
             let tool = match id {
                 PROSTHETIC_TOOL_UID_MIN..=PROSTHETIC_TOOL_UID_MAX => true,
                 COMBART_ART_UID_MIN..=COMBART_ART_UID_MAX => false,
@@ -72,27 +79,29 @@ impl<S: AsRef<str>> From<S> for Config {
             };
 
             if tool {
-                // tools to use when BLOCK is heled, usually umbrella
-                match inputs {
+                let upper = inputs.to_ascii_uppercase();
+                match upper.as_str() {
                     "X1" | "M4" => tools_on_x1.push(id),
                     "X2" | "M5" => tools_on_x2.push(id),
-                    "⛉" | "BLOCK" => tools_for_block.push(id),
+                    "BLOCK" => tools_for_block.push(id),
+                    _ if inputs == "\u{26c9}" || inputs == "\u{26e8}" => {
+                        tools_for_block.push(id);
+                    }
                     other => {
-                        if let Some(inputs) = parse_motion(other) {
-                            used_inputs.insert(inputs);
-                            tools.entry(inputs).or_insert_with(Vec::new).push(id);
+                        if let Some(motion) = parse_motion(other) {
+                            used_inputs.insert(motion);
+                            tools.entry(motion).or_insert_with(Vec::new).push(id);
+                        } else if let Some(motion) = parse_motion(inputs) {
+                            used_inputs.insert(motion);
+                            tools.entry(motion).or_insert_with(Vec::new).push(id);
                         }
                     }
                 }
-            } else {
-                if let Some(inputs) = parse_motion(inputs) {
-                    used_inputs.insert(inputs);
-                    config.arts.insert(inputs, id);
-                }
+            } else if let Some(combo) = parse_art_combo(inputs) {
+                config.arts.insert(combo, id);
             }
         }
 
-        // leak vecs into slices
         for (inputs, tools) in tools {
             config.tools.insert(inputs, tools.leak());
         }
@@ -100,12 +109,8 @@ impl<S: AsRef<str>> From<S> for Config {
         config.tools_on_x1 = tools_on_x1.leak();
         config.tools_on_x2 = tools_on_x2.leak();
 
-        // fault tolernce
         for inputs in used_inputs {
             for alt_inputs in possible_altenrnatives(inputs) {
-                if let Some(art) = config.arts.get(inputs) {
-                    config.arts.try_insert(alt_inputs, art);
-                }
                 if let Some(tools) = config.tools.get(inputs) {
                     config.tools.try_insert(alt_inputs, tools);
                 }
@@ -115,9 +120,37 @@ impl<S: AsRef<str>> From<S> for Config {
     }
 }
 
-// reuturns the input represented by the string and its alternative form when fault tolerance is available
+/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, f} (e.g. `r↑`, `ff`, `rl`, `rf`, `fr`, `fl`).
+/// `r` = mouse right (block), `l` = mouse left (attack), `f` = interact.
+fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
+    let motion = motion.trim();
+    if matches!(motion, "∅" | "NONE" | "none") {
+        return Some(ArtCombo::empty());
+    }
+
+    let mut tokens = Vec::new();
+    for ch in motion.chars() {
+        let token = match ch {
+            '↑' => ArtToken::Up,
+            '→' => ArtToken::Right,
+            '↓' => ArtToken::Down,
+            '←' => ArtToken::Left,
+            'r' | 'R' => ArtToken::Block,
+            'l' | 'L' => ArtToken::Attack,
+            'f' | 'F' => ArtToken::Interact,
+            _ => return None,
+        };
+        tokens.push(token);
+    }
+    if tokens.len() == 2 {
+        Some(ArtCombo::pair(tokens[0], tokens[1]))
+    } else {
+        None
+    }
+}
+
 fn parse_motion(motion: &str) -> Option<Inputs> {
-    if matches!(motion, "∅" | "NONE") {
+    if matches!(motion, "∅" | "NONE" | "none") {
         Some(Inputs::new())
     } else {
         let chars = motion.chars();
@@ -127,7 +160,6 @@ fn parse_motion(motion: &str) -> Option<Inputs> {
             .chars()
             .filter_map(|ch| ch.try_into().ok())
             .collect::<Vec<_>>();
-        // the last element of the line may not be the inputs but rather the name of the combat arts
         if inputs.len() != char_count {
             return None;
         }
@@ -138,17 +170,13 @@ fn parse_motion(motion: &str) -> Option<Inputs> {
 #[allow(unused)]
 fn possible_altenrnatives(mut inputs: Inputs) -> Vec<Inputs> {
     if inputs.len() == 2 {
-        // fault tolerance for keyboards
-        // example: if ←→ is used while →← is not, treat →← as ←→ so that players can press A and D at the same time
         let mut possible_inputs = Vec::new();
         possible_inputs.push(inputs.rev());
         let tail = inputs.pop().unwrap();
         let head = inputs.pop().unwrap();
         if tail == head {
-            // button smash
             possible_inputs.push(Inputs::from([tail, tail, tail]));
         } else if tail == head.opposite() {
-            // semicircle, for gamepads
             possible_inputs.push(Inputs::from([head, tail.rotate(), tail]));
             possible_inputs.push(Inputs::from([head, head.rotate(), tail]));
         }
@@ -179,31 +207,52 @@ fn get_item_name(uid: UID) -> Option<String> {
 
 #[cfg(test)]
 mod test {
-    use crate::{config::Config, input::Input::*};
+    use crate::{
+        config::Config,
+        input::{ArtCombo, ArtToken},
+        input::Input::*,
+    };
 
     #[test]
-    fn test_load() {
+    fn test_load_tools_and_arts() {
         let raw = "
-            # this is a line of comment
-            7100  Ichimonji: Double           ∅  # comment
-            70000 Loaded Shuriken             ∅  # comment
-            70100 Spinnging Shuriken          ∅  # comment
-            5600  Floating Passage           ←→  # comment
-            7200  Spiral Clound Passage      →←  # comment
-            74000 Mist Raven                 ←→  # comment
+            7100  Ichimonji: Double           rl
+            5500  Ashina Cross                r↓
+            7400  High Monk                   fl
+            7700  Sakura Dance                ff
+            5400  Dragon Flash                rf
+            6100  One Mind                    fr
+            70000 Loaded Shuriken             ∅
+            74000 Mist Raven                 ←→
             ";
         let config = Config::from(raw);
-        // default
-        assert_eq!(config.arts.get([]), Some(7100));
-        assert_eq!(config.tools.get_or_default([]), [70000, 70100]);
-        // inputs
-        assert_eq!(config.arts.get([Left, Right]), Some(5600));
-        assert_eq!(config.arts.get([Right, Left]), Some(7200));
-        // rev tolerance
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Attack)),
+            Some(7100)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Down)),
+            Some(5500)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Attack)),
+            Some(7400)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Interact)),
+            Some(7700)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Interact)),
+            Some(5400)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Block)),
+            Some(6100)
+        );
+        assert_eq!(config.tools.get_or_default([]), [70000]);
         assert_eq!(config.tools.get_or_default([Left, Right]), &[74000]);
-        assert_eq!(config.tools.get_or_default([Right, Left]), &[74000]);
-        // semicircle tolerance
-        assert_eq!(config.arts.get([Left, Down, Right]), Some(5600));
-        assert_eq!(config.arts.get([Right, Down, Left]), Some(7200));
     }
 }
+
+

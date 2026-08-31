@@ -6,7 +6,7 @@ use crate::{
     device::{Gamepad, is_key_down},
     frame::Frames,
     game::{self},
-    input::InputBuffer,
+    input::{ArtCombo, ArtComboWindow, ArtToken, InputBuffer},
 };
 
 //----------------------------------------------------------------------------
@@ -17,7 +17,9 @@ use crate::{
 
 // MOD behavior
 const BLOCK_INJECTION_DURATION: u8 = 10;
-const ATTACK_SUPRESSION_DURATION: u8 = 2;
+/// Block frames to inject when starting a combo-fired combat art.
+const ART_BLOCK_INJECTION_DURATION: u8 = 2;
+const ATTACK_SUPRESSION_DURATION: u8 = 4;
 const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
 const PROSTHETIC_ROLLBACK_COUNTDOWN: Frames = Frames::standard(120);
 
@@ -40,6 +42,8 @@ const EMPOWERED_MORTAL_DRAW: UID = 7300;
 const ATTACK: u64 = 0x1;
 const BLOCK: u64 = 0x4;
 const JUMP: u64 = 0x10;
+/// 「动作、(长按)吸引」— verified in-game via action probe.
+const INTERACT: u64 = 0x1000;
 const DODGE: u64 = 0x2000;
 const USE_PROSTHETIC: u64 = 0x40040002;
 
@@ -58,9 +62,11 @@ const PROSTHETIC_SLOT_2: u8 = 4;
 pub struct Mod {
     config: Config,
     buffer: InputBuffer,
+    art_combo: ArtComboWindow,
     cur_art: Option<UID>,
     blocking_last_frame: bool,
     attacking_last_frame: bool,
+    interacting_last_frame: bool,
     using_tool_last_frame: bool,
     swapout_countdown: Countdown,
     rollback_countdown: Countdown,
@@ -68,6 +74,14 @@ pub struct Mod {
     prosthetic_delay: u8,
     injected_blocks: u8,
     disable_block: bool,
+    /// After a fresh art swap, start rl fire once attack_delay ends.
+    pending_rl_attack: bool,
+    /// Keep injecting ATTACK while this combo's last token stays held.
+    hold_for_attack: Option<ArtToken>,
+    /// Remaining BLOCK-only prime frames (ATTACK suppressed) at art start.
+    art_block_inject_left: u8,
+    /// True after the first BLOCK|ATTACK frame that opens the art.
+    art_attack_latched: bool,
     prev_slot: Option<ProstheticSlot>,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
@@ -79,9 +93,11 @@ impl Mod {
             config: Config::open(path)?,
             gamepad: Gamepad::new()?,
             buffer: InputBuffer::new(),
+            art_combo: ArtComboWindow::new(),
             cur_art: None,
             blocking_last_frame: false,
             attacking_last_frame: false,
+            interacting_last_frame: false,
             using_tool_last_frame: false,
             swapout_countdown: Countdown::zero(),
             rollback_countdown: Countdown::zero(),
@@ -89,6 +105,10 @@ impl Mod {
             prosthetic_delay: 0,
             injected_blocks: 0,
             disable_block: false,
+            pending_rl_attack: false,
+            hold_for_attack: None,
+            art_block_inject_left: 0,
+            art_attack_latched: false,
             prev_slot: None,
             ejection: None,
         };
@@ -106,20 +126,36 @@ impl Mod {
         let x2_down = is_key_down(VK_XBUTTON2);
 
         /***** update the motion inputs *****/
-        let inputs = if let Some((x, y)) = self.gamepad.get_left_pos().filter(|pos| *pos != (0.0, 0.0)) {
+        let stick = self.gamepad.get_left_pos().filter(|pos| *pos != (0.0, 0.0));
+        let (combo_up, combo_right, combo_down, combo_left) = if let Some((x, y)) = stick {
+            let x_abs = x.abs();
+            let y_abs = y.abs();
+            if y_abs >= x_abs {
+                if y > 0.0 {
+                    (true, false, false, false)
+                } else {
+                    (false, false, true, false)
+                }
+            } else if x > 0.0 {
+                (false, true, false, false)
+            } else {
+                (false, false, false, true)
+            }
+        } else {
+            (w_down, d_down, s_down, a_down)
+        };
+        let inputs = if let Some((x, y)) = stick {
             self.buffer.update_joystick(x, y)
         } else {
-            let up = w_down;
-            let right = d_down;
-            let down = s_down;
-            let left = a_down;
-            self.buffer.update_keys(up, right, down, left)
+            self.buffer
+                .update_keys(combo_up, combo_right, combo_down, combo_left)
         };
 
         /***** parse the action bitflags *****/
         let action = &mut input_handler.action;
         let attacking = *action & ATTACK != 0;
         let blocking = *action & BLOCK != 0;
+        let interacting = *action & INTERACT != 0;
         let using_tool = *action & USE_PROSTHETIC != 0;
         let jumping = *action & JUMP != 0;
         let dodging = *action & DODGE != 0;
@@ -232,9 +268,22 @@ impl Mod {
             self.prosthetic_delay = PROSTHETIC_SUPRESSION_DURATION;
         }
 
+        /***** update combat-art token buffer (r/l/f + directions) *****/
+        // `f` = in-game「动作、(长按)吸引」(remap + pad), not a hardcoded VK_E.
+        self.art_combo.tick(
+            combo_up,
+            combo_right,
+            combo_down,
+            combo_left,
+            blocking,
+            attacking,
+            interacting,
+        );
+
         /***** query the desired combat art *****/
         let mut performed_block_free_art_just_now = false;
         let performed_art_just_now = blocking && attacked_just_now;
+        let mut pending_rl = false;
         let desired_art = if !self.swapout_countdown.is_done() {
             // fix buggy behavior of sakura dacne, ashina cross and one mind
             // One Mind has two windows for animation bugs to happen
@@ -243,25 +292,27 @@ impl Mod {
             // but only start counting it down after ATTACK is released
             self.swapout_countdown.count_on(!attacking);
             None
-        } else if attacked_just_now && !self.buffer.expired() {
-            // rolling back is postponed to when BLOCK is pressed
-            // only switch combat arts right before they are performed or else bugs can happen
-            // for example, doing it while using Sakura Dance triggers the falling animation of High Monk
-            // to cancel that unexpected animation, block/combat art need to take place
-            // thus the moment of switching is delayed to when block/combat art happens
-            self.config.arts.get(inputs).inspect(|_| {
-                if inputs.meant_for_art() {
-                    performed_block_free_art_just_now = true;
-                }
-            })
-        } else if blocked_just_now {
-            if self.buffer.expired() {
-                // when there're no recent inputs and the block button is just pressed, roll back to the default art
-                // also manually clear the input buffer so the desired art in the next few frames will still be the default art
-                self.buffer.clear();
-                self.config.arts.get([])
+        } else if let Some(combo) = self.art_combo.take_completed() {
+            // Two consecutive tokens matched (e.g. r↑, ↑f, ff, rl, rf, fr, fl).
+            if let Some(uid) = self.config.art(combo) {
+                performed_block_free_art_just_now = true;
+                pending_rl = true;
+                self.hold_for_attack = combo.second();
+                self.art_block_inject_left = 0;
+                self.art_attack_latched = false;
+                self.art_combo.clear();
+                Some(uid)
             } else {
-                self.config.arts.get(inputs)
+                None
+            }
+        } else if blocked_just_now {
+            // Bare right-click (r) → default ∅ if configured; skip when `r` is first half of a combo.
+            if self.art_combo.awaiting_second() {
+                None
+            } else {
+                self.art_combo.clear();
+                self.buffer.clear();
+                self.config.art(ArtCombo::empty())
             }
         } else {
             None
@@ -297,14 +348,16 @@ impl Mod {
                 }
             }
         }
+        // Auto rl: after settle (attack_delay), fire with short BLOCK + hold-tied ATTACK.
+        if pending_rl {
+            self.pending_rl_attack = true;
+        }
 
         /***** action injection *****/
-        // inputs like [Up, Up] or [Down, Up] clearly means combat art usage intead of moving
-        // in such cases, players can perform combat arts without pressing BLOCK,
-        // because the mod injects the BLOCK action for them
+        // Legacy block injection for paths that still set injected_blocks.
+        // Combo-fired arts use hold_for_attack + art_block_inject_left instead.
         if performed_block_free_art_just_now {
-            *action |= BLOCK;
-            self.injected_blocks = 1;
+            // Combo path: sustained fire starts after attack_delay (see below).
         } else if self.injected_blocks >= 1 {
             if jumping || dodging {
                 // DODGE and JUMP cancel the injection because they cancel the combat art itself
@@ -349,6 +402,48 @@ impl Mod {
         if self.attack_delay > 0 {
             *action &= !ATTACK;
             self.attack_delay -= 1;
+        } else if self.pending_rl_attack {
+            // Settle done: prime with BLOCK-only frames before any ATTACK inject.
+            self.pending_rl_attack = false;
+            self.art_block_inject_left = ART_BLOCK_INJECTION_DURATION;
+        }
+
+        // Cancel sustained fire on jump/dodge, or when the combo's last key is released.
+        if jumping || dodging {
+            self.hold_for_attack = None;
+            self.art_block_inject_left = 0;
+            self.art_attack_latched = false;
+            self.pending_rl_attack = false;
+        } else if let Some(token) = self.hold_for_attack {
+            if !self.art_combo.token_held(token) {
+                self.hold_for_attack = None;
+                self.art_block_inject_left = 0;
+                self.art_attack_latched = false;
+                self.pending_rl_attack = false;
+            }
+        }
+
+        // Sustained art fire:
+        // 1) first N frames: BLOCK only + suppress ATTACK (prevents a stray R1/whirlwind)
+        // 2) then: ATTACK while last combo token is held; include BLOCK on the first attack
+        //    frame so the game sees Block+Attack to start the art.
+        if self.attack_delay == 0 {
+            if let Some(token) = self.hold_for_attack {
+                if self.art_combo.token_held(token) {
+                    if self.art_block_inject_left > 0 {
+                        *action |= BLOCK;
+                        *action &= !ATTACK;
+                        self.art_block_inject_left -= 1;
+                    } else {
+                        *action |= ATTACK;
+                        // First attack frame after priming still needs BLOCK to open the art.
+                        if !self.art_attack_latched {
+                            *action |= BLOCK;
+                            self.art_attack_latched = true;
+                        }
+                    }
+                }
+            }
         }
         // similar principle also goes for prosthetic tools
         if self.prosthetic_delay != 0 {
@@ -359,6 +454,7 @@ impl Mod {
         /***** for next frame to refer to *****/
         self.attacking_last_frame = attacking;
         self.blocking_last_frame = blocking;
+        self.interacting_last_frame = interacting;
         self.using_tool_last_frame = using_tool;
     }
 }

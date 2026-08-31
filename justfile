@@ -1,12 +1,12 @@
 install *args:
     cargo build {{args}}
-    cp "./target/debug/dinput8.dll.dll" "C:/Program Files (x86)/Steam/steamapps/common/Sekiro/dinput8.dll"
+    cp "./target/debug/sekiro_battle_instinct.dll" "C:/Program Files (x86)/Steam/steamapps/common/Sekiro/dinput8.dll"
 logs:
     tail -f "C:/Program Files (x86)/Steam/steamapps/common/Sekiro/battle_instinct.log"
 pack:
     cargo build
     mkdir -p "./tmp"
-    cp "./target/release/dinput8.dll.dll" "./tmp/dinput8.dll"
+    cp "./target/release/sekiro_battle_instinct.dll" "./tmp/dinput8.dll"
 
     cp -f "./res/battle_instinct.cfg" "./tmp/battle_instinct.cfg"
     7z a -tzip -mx9 "./battle-instinct.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg"

@@ -387,6 +387,198 @@ where
     }
 }
 
+//----------------------------------------------------------------------------
+//
+//  Combat-art tokens: directions + mouse r/l + interact f
+//  (Separate from Input/Inputs so prosthetic tools stay unchanged.)
+//
+//----------------------------------------------------------------------------
+
+/// `r` = mouse right = block, `l` = mouse left = attack, `f` = interact.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ArtToken {
+    Up,
+    Right,
+    Down,
+    Left,
+    Block,
+    Attack,
+    Interact,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ArtCombo {
+    first: Option<ArtToken>,
+    second: Option<ArtToken>,
+}
+
+impl ArtCombo {
+    pub const fn empty() -> ArtCombo {
+        ArtCombo {
+            first: None,
+            second: None,
+        }
+    }
+
+    pub const fn pair(a: ArtToken, b: ArtToken) -> ArtCombo {
+        ArtCombo {
+            first: Some(a),
+            second: Some(b),
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.first.is_none() && self.second.is_none()
+    }
+
+    pub fn second(self) -> Option<ArtToken> {
+        self.second
+    }
+}
+
+/// Last two combat-art key edges within a short window.
+pub struct ArtComboWindow {
+    first: Option<ArtToken>,
+    second: Option<ArtToken>,
+    age: u16,
+    completed_this_frame: Option<ArtCombo>,
+    keys_down: [bool; 4],
+    block_down: bool,
+    attack_down: bool,
+    interact_down: bool,
+}
+
+impl ArtComboWindow {
+    /// ~133ms at 60fps for most two-token arts.
+    const MAX_AGE: u16 = 8;
+    /// Slightly looser window so `ff` (and other f-then-X) is easier to land.
+    const MAX_AGE_FF: u16 = 9;
+
+    pub const fn new() -> ArtComboWindow {
+        ArtComboWindow {
+            first: None,
+            second: None,
+            age: 0,
+            completed_this_frame: None,
+            keys_down: [false; 4],
+            block_down: false,
+            attack_down: false,
+            interact_down: false,
+        }
+    }
+
+    pub fn tick(
+        &mut self,
+        up: bool,
+        right: bool,
+        down: bool,
+        left: bool,
+        block: bool,
+        attack: bool,
+        interact: bool,
+    ) {
+        self.completed_this_frame = None;
+        let mut updated = false;
+
+        for (i, (held, token)) in [
+            (up, ArtToken::Up),
+            (right, ArtToken::Right),
+            (down, ArtToken::Down),
+            (left, ArtToken::Left),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if held && !self.keys_down[i] {
+                self.push(token);
+                updated = true;
+            }
+            self.keys_down[i] = held;
+        }
+
+        // Button edges: block → interact → attack so same-frame rf/fl resolve correctly;
+        // order-sensitive pairs (fr, lf) still need sequential presses.
+        if block && !self.block_down {
+            self.push(ArtToken::Block);
+            updated = true;
+        }
+        self.block_down = block;
+
+        if interact && !self.interact_down {
+            self.push(ArtToken::Interact);
+            updated = true;
+        }
+        self.interact_down = interact;
+
+        if attack && !self.attack_down {
+            self.push(ArtToken::Attack);
+            updated = true;
+        }
+        self.attack_down = attack;
+
+        if updated {
+            self.age = 0;
+        } else {
+            self.age = self.age.saturating_add(1);
+            let max_age = if self.first == Some(ArtToken::Interact) && self.second.is_none() {
+                Self::MAX_AGE_FF
+            } else {
+                Self::MAX_AGE
+            };
+            if self.age >= max_age {
+                self.clear();
+            }
+        }
+    }
+
+    fn push(&mut self, token: ArtToken) {
+        match (self.first, self.second) {
+            (None, _) => {
+                self.first = Some(token);
+                self.second = None;
+            }
+            (Some(a), None) => {
+                self.second = Some(token);
+                self.completed_this_frame = Some(ArtCombo::pair(a, token));
+            }
+            (Some(_), Some(_)) => {
+                self.first = Some(token);
+                self.second = None;
+            }
+        }
+    }
+
+    /// Two-token combo completed on this frame, if any.
+    pub fn take_completed(&mut self) -> Option<ArtCombo> {
+        self.completed_this_frame.take()
+    }
+
+    /// True when the first token is held and we are waiting for the second.
+    pub fn awaiting_second(&self) -> bool {
+        self.first.is_some() && self.second.is_none()
+    }
+
+    /// Whether the physical key/direction for `token` is currently held.
+    pub fn token_held(&self, token: ArtToken) -> bool {
+        match token {
+            ArtToken::Up => self.keys_down[0],
+            ArtToken::Right => self.keys_down[1],
+            ArtToken::Down => self.keys_down[2],
+            ArtToken::Left => self.keys_down[3],
+            ArtToken::Block => self.block_down,
+            ArtToken::Attack => self.attack_down,
+            ArtToken::Interact => self.interact_down,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.first = None;
+        self.second = None;
+        self.age = 0;
+        self.completed_this_frame = None;
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::input::{Input::*, Inputs};
@@ -472,5 +664,44 @@ mod test {
 
         println!("Inputs:     {:?}", push_and_pop!(inputs));
         println!("Vec<Input>: {:?}", push_and_pop!(vec));
+    }
+
+    #[test]
+    fn test_art_button_pairs() {
+        use super::{ArtCombo, ArtComboWindow, ArtToken};
+
+        // same-frame rl
+        let mut w = ArtComboWindow::new();
+        w.tick(false, false, false, false, true, true, false);
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
+        );
+
+        // same-frame rf
+        let mut w = ArtComboWindow::new();
+        w.tick(false, false, false, false, true, false, true);
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Block, ArtToken::Interact))
+        );
+
+        // same-frame fl
+        let mut w = ArtComboWindow::new();
+        w.tick(false, false, false, false, false, true, true);
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Interact, ArtToken::Attack))
+        );
+
+        // sequential fr
+        let mut w = ArtComboWindow::new();
+        w.tick(false, false, false, false, false, false, true);
+        assert!(w.take_completed().is_none());
+        w.tick(false, false, false, false, true, false, true);
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Interact, ArtToken::Block))
+        );
     }
 }
