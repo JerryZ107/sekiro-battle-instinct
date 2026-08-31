@@ -41,6 +41,9 @@
 
 源码侧中文表示例见 [res/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg)。
 
+> [!WARNING]
+> **不推荐 l+任意键**（以攻击键开头的双键，如 l↑）。由于未知的逻辑冲突，这类键位有较高的不触发机率。欢迎提交解决此 bug 的方案。
+
 ## 自行编译（可选）
 
 ```bash
