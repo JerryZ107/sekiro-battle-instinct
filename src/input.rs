@@ -451,8 +451,8 @@ pub struct ArtComboWindow {
 impl ArtComboWindow {
     /// ~133ms at 60fps for most two-token arts.
     const MAX_AGE: u16 = 8;
-    /// Slightly looser window so `ff` (and other f-then-X) is easier to land.
-    const MAX_AGE_FF: u16 = 9;
+    /// Looser window for `ff` (and other f-then-X) — ~200ms at 60fps.
+    const MAX_AGE_FF: u16 = 12;
 
     pub const fn new() -> ArtComboWindow {
         ArtComboWindow {
