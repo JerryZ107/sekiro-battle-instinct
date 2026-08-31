@@ -82,6 +82,10 @@ pub struct Mod {
     art_block_inject_left: u8,
     /// True after the first BLOCK|ATTACK frame that opens the art.
     art_attack_latched: bool,
+    /// Latest combo art waiting until sustained fire ends (size 1, newest wins).
+    queued_art: Option<(UID, ArtToken)>,
+    /// When hold key is already up (typical after queue flush), keep firing this many frames.
+    art_tap_frames: u8,
     prev_slot: Option<ProstheticSlot>,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
@@ -109,10 +113,41 @@ impl Mod {
             hold_for_attack: None,
             art_block_inject_left: 0,
             art_attack_latched: false,
+            queued_art: None,
+            art_tap_frames: 0,
             prev_slot: None,
             ejection: None,
         };
         Ok(modification)
+    }
+
+    /// True while a combo-fired art is still settling or hold-injecting.
+    fn art_fire_busy(&self) -> bool {
+        self.hold_for_attack.is_some()
+            || self.pending_rl_attack
+            || self.attack_delay > 0
+            || self.art_block_inject_left > 0
+            || self.art_tap_frames > 0
+    }
+
+    fn clear_art_fire(&mut self) {
+        self.hold_for_attack = None;
+        self.art_block_inject_left = 0;
+        self.art_attack_latched = false;
+        self.pending_rl_attack = false;
+        self.art_tap_frames = 0;
+    }
+
+    fn arm_combo_fire(&mut self, hold: ArtToken) {
+        self.hold_for_attack = Some(hold);
+        self.art_block_inject_left = 0;
+        self.art_attack_latched = false;
+        // If the last key is already up (common when flushing a queued tap), auto-fire briefly.
+        self.art_tap_frames = if self.art_combo.token_held(hold) {
+            0
+        } else {
+            ART_BLOCK_INJECTION_DURATION.saturating_add(3)
+        };
     }
 
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
@@ -280,33 +315,67 @@ impl Mod {
             interacting,
         );
 
+        /***** end sustained fire early when jump/dodge or last token released *****/
+        if jumping || dodging {
+            self.clear_art_fire();
+            self.queued_art = None;
+        } else if let Some(token) = self.hold_for_attack {
+            if !self.art_combo.token_held(token) && self.art_tap_frames == 0 {
+                self.clear_art_fire();
+            }
+        }
+
         /***** query the desired combat art *****/
         let mut performed_block_free_art_just_now = false;
         let performed_art_just_now = blocking && attacked_just_now;
         let mut pending_rl = false;
-        let desired_art = if !self.swapout_countdown.is_done() {
-            // fix buggy behavior of sakura dacne, ashina cross and one mind
+        if !self.swapout_countdown.is_done() {
+            // fix buggy behavior of sakura dance, ashina cross and one mind
             // One Mind has two windows for animation bugs to happen
             // one after pressing ATTACK (sheathing) and one after releasing ATTACK (drawing)
             // the current (ugly) solution is to apply the cooldown after pressing ATTACK,
             // but only start counting it down after ATTACK is released
             self.swapout_countdown.count_on(!attacking);
-            None
-        } else if let Some(combo) = self.art_combo.take_completed() {
+        }
+
+        let desired_art = if let Some(combo) = self.art_combo.take_completed() {
             // Two consecutive tokens matched (e.g. r↑, ↑f, ff, rl, rf, fr, fl).
-            if let Some(uid) = self.config.art(combo) {
+            if let (Some(uid), Some(hold)) = (self.config.art(combo), combo.second()) {
+                self.art_combo.clear();
+                if self.art_fire_busy() {
+                    // Sustained fire still running: queue and flush when it ends.
+                    self.queued_art = Some((uid, hold));
+                    None
+                } else {
+                    performed_block_free_art_just_now = true;
+                    pending_rl = true;
+                    self.arm_combo_fire(hold);
+                    self.queued_art = None;
+                    Some(uid)
+                }
+            } else {
+                None
+            }
+        } else if !self.art_fire_busy() {
+            if let Some((uid, hold)) = self.queued_art.take() {
+                // Previous sustained fire just ended — start the queued art.
                 performed_block_free_art_just_now = true;
                 pending_rl = true;
-                self.hold_for_attack = combo.second();
-                self.art_block_inject_left = 0;
-                self.art_attack_latched = false;
-                self.art_combo.clear();
+                self.arm_combo_fire(hold);
                 Some(uid)
             } else {
                 None
             }
-        } else if blocked_just_now {
-            // Bare right-click (r) → default ∅ if configured; skip when `r` is first half of a combo.
+        } else {
+            None
+        };
+
+        // Bare right-click (r) → default ∅ if configured; skip when `r` is first half of a combo.
+        let desired_art = desired_art.or_else(|| {
+            if !blocked_just_now || !self.swapout_countdown.is_done() || performed_block_free_art_just_now
+            {
+                return None;
+            }
             if self.art_combo.awaiting_second() {
                 None
             } else {
@@ -314,9 +383,7 @@ impl Mod {
                 self.buffer.clear();
                 self.config.art(ArtCombo::empty())
             }
-        } else {
-            None
-        };
+        });
 
         // if combat art switching happens too quick after performing certain combat arts
         // animation of other unrelated combat arts can be triggered
@@ -408,28 +475,15 @@ impl Mod {
             self.art_block_inject_left = ART_BLOCK_INJECTION_DURATION;
         }
 
-        // Cancel sustained fire on jump/dodge, or when the combo's last key is released.
-        if jumping || dodging {
-            self.hold_for_attack = None;
-            self.art_block_inject_left = 0;
-            self.art_attack_latched = false;
-            self.pending_rl_attack = false;
-        } else if let Some(token) = self.hold_for_attack {
-            if !self.art_combo.token_held(token) {
-                self.hold_for_attack = None;
-                self.art_block_inject_left = 0;
-                self.art_attack_latched = false;
-                self.pending_rl_attack = false;
-            }
-        }
-
         // Sustained art fire:
         // 1) first N frames: BLOCK only + suppress ATTACK (prevents a stray R1/whirlwind)
         // 2) then: ATTACK while last combo token is held; include BLOCK on the first attack
         //    frame so the game sees Block+Attack to start the art.
         if self.attack_delay == 0 {
             if let Some(token) = self.hold_for_attack {
-                if self.art_combo.token_held(token) {
+                let held = self.art_combo.token_held(token);
+                let tapping = self.art_tap_frames > 0;
+                if held || tapping {
                     if self.art_block_inject_left > 0 {
                         *action |= BLOCK;
                         *action &= !ATTACK;
@@ -440,6 +494,12 @@ impl Mod {
                         if !self.art_attack_latched {
                             *action |= BLOCK;
                             self.art_attack_latched = true;
+                        }
+                    }
+                    if tapping && !held {
+                        self.art_tap_frames -= 1;
+                        if self.art_tap_frames == 0 {
+                            self.clear_art_fire();
                         }
                     }
                 }
