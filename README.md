@@ -1,4 +1,4 @@
-# Battle Instinct（双键搓招版）
+# Battle Instinct（战斗本能）（双键搓招版）
 
 基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 修改的只狼武技 / 忍具 MOD。
 
