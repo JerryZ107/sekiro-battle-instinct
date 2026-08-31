@@ -4,11 +4,23 @@
 
 原版用**方向序列 + 防御/攻击**切换武技；本分支在保留原作者换槽、注入、忍具等核心机制的前提下，**重新设计了武技搓招逻辑**（借助 AI 辅助实现），把武技触发简化为**两个键位**的短窗口连招。
 
+## 直接使用（推荐）
+
+仓库里已带编译好的中文发行包，**无需自己编译**：
+
+- [`dist/zh/dinput8.dll`](dist/zh/dinput8.dll)
+- [`dist/zh/battle_instinct.cfg`](dist/zh/battle_instinct.cfg)（中文搓招表）
+
+把这两个文件复制到 `sekiro.exe` 同目录即可游玩。
+
+> [!TIP]
+> 若已有其它 `dinput8.dll`（如 MOD Engine），把**其它** DLL 改名为 `dinput8_xxx.dll`。本 MOD 会链式加载它们。
+
 ## 与原版的关系
 
 - **上游**：[@dec32](https://github.com/dec32) 的 [Battle Instinct](https://github.com/dec32/sekiro-battle-instinct)
 - **本仓库**：理念不同的独立维护版（双键搓招），**不是**上游官方分支
-- 忍具仍基本沿用原版方向序列 / ∅ / ⛉ / M4/M5 逻辑
+- 忍具仍基本沿用原版方向序列 / `∅` / `⛉` / `M4`/`M5` 逻辑
 
 若你更需要原版手感，请直接使用上游发布页。
 
@@ -18,36 +30,25 @@
 
 | 符号 | 含义 |
 |------|------|
-| 
- | 防御（鼠标右键 / 格挡） |
-| l | 攻击（鼠标左键） |
-|  | 动作、(长按)吸引 |
-| ↑↓←→ | 移动方向（WASD / 摇杆） |
-| f | 连按两次  |
-| 
-l / 
-f / r / l 等 | 两个键的顺序组合 |
+| `r` | 防御（鼠标右键 / 格挡） |
+| `l` | 攻击（鼠标左键） |
+| `f` | 动作、(长按)吸引 |
+| `↑↓←→` | 移动方向（WASD / 摇杆） |
+| `ff` | 连按两次 f |
+| `rl / rf / fr / fl 等` | 两个键的顺序组合 |
 
 双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入攻击（方便蓄力），松开即停。
 
-默认中文表示例见 [
-es/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg)。
+源码侧中文表示例见 [`res/battle_instinct_zh.cfg`](res/battle_instinct_zh.cfg)。
 
-## 安装
+## 自行编译（可选）
 
-编译或使用发布包后，将以下文件放到 sekiro.exe 同目录：
-
-1. dinput8.dll
-2. attle_instinct.cfg（可用中文表 attle_instinct_zh.cfg 改名）
-
-> [!TIP]
-> 若已有其它 dinput8.dll（如 MOD Engine），把**其它** DLL 改名为 dinput8_xxx.dll。本 MOD 会链式加载它们。
-
-### 自行编译
-
-\\ash
+```bash
 cargo build --release
-\
+```
+
+产物一般在 `target/release/`，也可更新到 `dist/zh/`。
+
 ## 感谢
 
 - **[dec32](https://github.com/dec32)**：[Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者——本 MOD 基于其代码与架构
