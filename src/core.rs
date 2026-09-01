@@ -2,11 +2,11 @@ use std::{fmt, num::NonZero, path::Path};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use crate::{
-    config::Config,
+    config::{Config, ToolCombo, ToolFirst, ToolTail},
     device::{Gamepad, is_key_down},
     frame::Frames,
     game::{self},
-    input::{ArtCombo, ArtComboWindow, ArtToken, InputBuffer},
+    input::{ArtCombo, ArtComboWindow, ArtToken},
 };
 
 //----------------------------------------------------------------------------
@@ -21,7 +21,12 @@ const BLOCK_INJECTION_DURATION: u8 = 10;
 const ART_BLOCK_INJECTION_DURATION: u8 = 2;
 const ATTACK_SUPRESSION_DURATION: u8 = 4;
 const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
-const PROSTHETIC_ROLLBACK_COUNTDOWN: Frames = Frames::standard(120);
+/// After tool lock expires, wait ~1.4s before returning to bare-`t` default.
+const PROSTHETIC_RETURN_DELAY: Frames = Frames::standard(84);
+/// After arming a tool, block switching ~1s; pressing `t` refreshes (multi-hit tools).
+const PROSTHETIC_TOOL_LOCK: Frames = Frames::standard(60);
+/// Window for first key → q/t (~0.3s @60fps).
+const TOOL_FIRST_MAX_AGE: u16 = 18;
 
 // UIDs
 const ASHINA_CROSS: UID = 5500;
@@ -46,6 +51,8 @@ const JUMP: u64 = 0x10;
 const INTERACT: u64 = 0x1000;
 const DODGE: u64 = 0x2000;
 const USE_PROSTHETIC: u64 = 0x40040002;
+/// 「切换忍具」— verified in-game via action probe (2026-09-01).
+const SWITCH_PROSTHETIC: u64 = 0x400;
 
 // slot index
 const COMBAT_ART_SLOT: u8 = 1;
@@ -61,7 +68,6 @@ const PROSTHETIC_SLOT_2: u8 = 4;
 
 pub struct Mod {
     config: Config,
-    buffer: InputBuffer,
     art_combo: ArtComboWindow,
     cur_art: Option<UID>,
     blocking_last_frame: bool,
@@ -69,7 +75,6 @@ pub struct Mod {
     interacting_last_frame: bool,
     using_tool_last_frame: bool,
     swapout_countdown: Countdown,
-    rollback_countdown: Countdown,
     attack_delay: u8,
     prosthetic_delay: u8,
     injected_blocks: u8,
@@ -86,7 +91,27 @@ pub struct Mod {
     queued_art: Option<(UID, ArtToken)>,
     /// When hold key is already up (typical after queue flush), keep firing this many frames.
     art_tap_frames: u8,
-    prev_slot: Option<ProstheticSlot>,
+    /// Pending first token for prosthetic combo (↑↓←→/r/l/f/q); waiting for q/t.
+    tool_first: Option<ToolFirst>,
+    tool_first_age: u16,
+    /// While set, keep injecting USE_PROSTHETIC until this tail key is released.
+    hold_tool_tail: Option<ToolTail>,
+    /// Guarantee a few USE frames after equip (tap-friendly).
+    tool_min_use: u8,
+    /// Last successfully armed prosthetic UID (for return-to-default).
+    cur_tool: Option<UID>,
+    /// Frames left after releasing tool before returning to bare-`t` default.
+    return_default_left: u16,
+    /// Frames left where switching tools is blocked; `t` refreshes for multi-hit.
+    tool_lock_left: u16,
+    /// Last frame「切换忍具」held (after we observe, before swallow).
+    switch_down_last: bool,
+    tools_inited: bool,
+    /// Edge memory for prosthetic first-key directions / r l f.
+    tool_keys_down: [bool; 4],
+    tool_block_down: bool,
+    tool_attack_down: bool,
+    tool_interact_down: bool,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
 }
@@ -96,7 +121,6 @@ impl Mod {
         let modification = Mod {
             config: Config::open(path)?,
             gamepad: Gamepad::new()?,
-            buffer: InputBuffer::new(),
             art_combo: ArtComboWindow::new(),
             cur_art: None,
             blocking_last_frame: false,
@@ -104,7 +128,6 @@ impl Mod {
             interacting_last_frame: false,
             using_tool_last_frame: false,
             swapout_countdown: Countdown::zero(),
-            rollback_countdown: Countdown::zero(),
             attack_delay: 0,
             prosthetic_delay: 0,
             injected_blocks: 0,
@@ -115,7 +138,19 @@ impl Mod {
             art_attack_latched: false,
             queued_art: None,
             art_tap_frames: 0,
-            prev_slot: None,
+            tool_first: None,
+            tool_first_age: 0,
+            hold_tool_tail: None,
+            tool_min_use: 0,
+            cur_tool: None,
+            return_default_left: 0,
+            tool_lock_left: 0,
+            switch_down_last: false,
+            tools_inited: false,
+            tool_keys_down: [false; 4],
+            tool_block_down: false,
+            tool_attack_down: false,
+            tool_interact_down: false,
             ejection: None,
         };
         Ok(modification)
@@ -150,17 +185,237 @@ impl Mod {
         };
     }
 
+    fn revert_ejection_if_left_slot(&mut self) {
+        let active_slot = get_active_prosthetic_slot();
+        if let Some((ejected_tool, original_slot)) = self.ejection {
+            if active_slot != original_slot {
+                equip_prosthetic(ejected_tool, original_slot);
+                self.ejection = None;
+            }
+        }
+    }
+
+    /// Equip `uid` into the **active** slot so the HUD shows it on the current highlight.
+    fn equip_tool_uid(&mut self, uid: UID) -> bool {
+        self.revert_ejection_if_left_slot();
+        let active_slot = get_active_prosthetic_slot();
+        let Some(want_id) = uid.get_item_id() else {
+            return false;
+        };
+
+        if get_prosthetic_tool(active_slot) == Some(want_id) {
+            return true;
+        }
+
+        if let Some(other_slot) = locate_prosthetic_tool(uid) {
+            // Tool already in another slot: swap into the active (highlighted) slot.
+            let displaced = get_prosthetic_tool(active_slot);
+            if equip_prosthetic(uid, active_slot) {
+                if let Some(displaced) = displaced {
+                    let _ = equip_prosthetic(displaced, other_slot);
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // Not equipped anywhere: inject into active slot, remember what we ejected.
+        let active_tool = get_prosthetic_tool(active_slot);
+        if equip_prosthetic(uid, active_slot) {
+            if let Some(active_tool) = active_tool {
+                self.ejection.get_or_insert((active_tool, active_slot));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn return_to_default_tool(&mut self) {
+        self.return_default_left = 0;
+        self.tool_lock_left = 0;
+        self.hold_tool_tail = None;
+        self.tool_min_use = 0;
+        if let Some(uid) = self.config.tool_on_t {
+            if self.equip_tool_uid(uid) {
+                self.cur_tool = Some(uid);
+                self.prosthetic_delay = PROSTHETIC_SUPRESSION_DURATION;
+            }
+        }
+    }
+
+    fn refresh_tool_lock(&mut self) {
+        self.tool_lock_left = PROSTHETIC_TOOL_LOCK.as_actual();
+        self.return_default_left = 0;
+    }
+
+    fn arm_tool(&mut self, uid: UID, tail: ToolTail) {
+        // During lock, only allow re-arming the same tool (multi-hit via t).
+        if self.tool_lock_left > 0 && self.cur_tool.is_some_and(|cur| cur != uid) {
+            return;
+        }
+        if self.equip_tool_uid(uid) {
+            self.cur_tool = Some(uid);
+            self.hold_tool_tail = Some(tail);
+            self.tool_min_use = 3;
+            self.prosthetic_delay = PROSTHETIC_SUPRESSION_DURATION;
+            self.refresh_tool_lock();
+            self.tool_first = None;
+            self.tool_first_age = 0;
+        }
+    }
+
+    fn push_tool_first(&mut self, token: ToolFirst) {
+        self.tool_first = Some(token);
+        self.tool_first_age = 0;
+    }
+
+    /// Track ↑↓←→/r/l/f/q as first key; on q/t complete combo → equip + hold-inject USE.
+    /// `t` alone (no pending first) arms the unique default. `q` may be first (e.g. `qt`).
+    fn handle_prosthetic_input(
+        &mut self,
+        input_handler: &mut game::InputHandler,
+        up: bool,
+        right: bool,
+        down: bool,
+        left: bool,
+        blocking: bool,
+        attacking: bool,
+        interacting: bool,
+        using_tool: bool,
+        used_tool_just_now: bool,
+    ) {
+        // First-key edges for directions / r / l / f (`t` is never first).
+        for (i, (held, token)) in [
+            (up, ArtToken::Up),
+            (right, ArtToken::Right),
+            (down, ArtToken::Down),
+            (left, ArtToken::Left),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if held && !self.tool_keys_down[i] {
+                self.push_tool_first(ToolFirst::from_art(token));
+            }
+            self.tool_keys_down[i] = held;
+        }
+        if blocking && !self.tool_block_down {
+            self.push_tool_first(ToolFirst::Block);
+        }
+        self.tool_block_down = blocking;
+        if attacking && !self.tool_attack_down {
+            self.push_tool_first(ToolFirst::Attack);
+        }
+        self.tool_attack_down = attacking;
+        if interacting && !self.tool_interact_down {
+            self.push_tool_first(ToolFirst::Interact);
+        }
+        self.tool_interact_down = interacting;
+
+        if self.tool_first.is_some() {
+            self.tool_first_age = self.tool_first_age.saturating_add(1);
+            if self.tool_first_age >= TOOL_FIRST_MAX_AGE {
+                self.tool_first = None;
+                self.tool_first_age = 0;
+            }
+        }
+
+        // q = switch prosthetic: observe hold, swallow vanilla 3-slot cycle.
+        let switch_down = input_handler.action & SWITCH_PROSTHETIC != 0;
+        if switch_down {
+            input_handler.action &= !SWITCH_PROSTHETIC;
+            input_handler.action_b &= !SWITCH_PROSTHETIC;
+            input_handler.action_c &= !SWITCH_PROSTHETIC;
+        }
+        let switch_rising = switch_down && !self.switch_down_last;
+        self.switch_down_last = switch_down;
+
+        if switch_rising {
+            if self.tool_lock_left > 0 {
+                self.tool_first = None;
+            } else if let Some(first) = self.tool_first {
+                // Pending first + q → try (first, Switch); else treat q as new first.
+                if let Some(uid) = self.config.tool(ToolCombo {
+                    first,
+                    tail: ToolTail::Switch,
+                }) {
+                    self.arm_tool(uid, ToolTail::Switch);
+                } else {
+                    self.push_tool_first(ToolFirst::Switch);
+                }
+            } else {
+                // Bare q: start a prosthetic first-key window (e.g. waiting for t → `qt`).
+                self.push_tool_first(ToolFirst::Switch);
+            }
+        }
+
+        if used_tool_just_now {
+            if self.tool_lock_left > 0 {
+                // Multi-hit window: refresh lock, keep current tool, inject more USE.
+                self.refresh_tool_lock();
+                self.tool_min_use = self.tool_min_use.max(3);
+                self.hold_tool_tail = Some(ToolTail::Use);
+                self.prosthetic_delay = 0;
+                self.tool_first = None;
+            } else if let Some(first) = self.tool_first {
+                if let Some(uid) = self.config.tool(ToolCombo {
+                    first,
+                    tail: ToolTail::Use,
+                }) {
+                    self.arm_tool(uid, ToolTail::Use);
+                } else {
+                    self.tool_first = None;
+                }
+            } else if let Some(uid) = self.config.tool_on_t {
+                self.arm_tool(uid, ToolTail::Use);
+            }
+        }
+
+        // Sustain / release of armed tool.
+        if self.hold_tool_tail.is_some() || self.tool_min_use > 0 {
+            let held = match self.hold_tool_tail {
+                Some(ToolTail::Switch) => switch_down,
+                Some(ToolTail::Use) => using_tool || used_tool_just_now,
+                None => false,
+            };
+            if self.prosthetic_delay > 0 || held || self.tool_min_use > 0 {
+                self.return_default_left = 0;
+            } else {
+                self.hold_tool_tail = None;
+                // Do not return to default while tool lock is active.
+            }
+        }
+
+        if self.tool_lock_left > 0 {
+            self.tool_lock_left -= 1;
+            self.return_default_left = 0;
+            if self.tool_lock_left == 0
+                && self.hold_tool_tail.is_none()
+                && self.tool_min_use == 0
+            {
+                let is_default =
+                    self.config.tool_on_t.is_some() && self.cur_tool == self.config.tool_on_t;
+                if !is_default {
+                    self.return_default_left = PROSTHETIC_RETURN_DELAY.as_actual();
+                }
+            }
+        } else if self.return_default_left > 0 {
+            self.return_default_left -= 1;
+            if self.return_default_left == 0 {
+                self.return_to_default_tool();
+            }
+        }
+    }
+
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
         /***** keystates *****/
         let w_down = is_key_down(VK_W);
         let a_down = is_key_down(VK_A);
         let s_down = is_key_down(VK_S);
         let d_down = is_key_down(VK_D);
-        // bind R3/R4 to x1/x2 in the future
-        let x1_down = is_key_down(VK_XBUTTON1);
-        let x2_down = is_key_down(VK_XBUTTON2);
 
-        /***** update the motion inputs *****/
+        /***** update combat-art directions (WASD / left stick) *****/
         let stick = self.gamepad.get_left_pos().filter(|pos| *pos != (0.0, 0.0));
         let (combo_up, combo_right, combo_down, combo_left) = if let Some((x, y)) = stick {
             let x_abs = x.abs();
@@ -179,129 +434,39 @@ impl Mod {
         } else {
             (w_down, d_down, s_down, a_down)
         };
-        let inputs = if let Some((x, y)) = stick {
-            self.buffer.update_joystick(x, y)
-        } else {
-            self.buffer
-                .update_keys(combo_up, combo_right, combo_down, combo_left)
-        };
 
         /***** parse the action bitflags *****/
-        let action = &mut input_handler.action;
-        let attacking = *action & ATTACK != 0;
-        let blocking = *action & BLOCK != 0;
-        let interacting = *action & INTERACT != 0;
-        let using_tool = *action & USE_PROSTHETIC != 0;
-        let jumping = *action & JUMP != 0;
-        let dodging = *action & DODGE != 0;
+        let action_snapshot = input_handler.action;
+        let attacking = action_snapshot & ATTACK != 0;
+        let blocking = action_snapshot & BLOCK != 0;
+        let interacting = action_snapshot & INTERACT != 0;
+        let using_tool = action_snapshot & USE_PROSTHETIC != 0;
+        let jumping = action_snapshot & JUMP != 0;
+        let dodging = action_snapshot & DODGE != 0;
         let attacked_just_now = !self.attacking_last_frame && attacking;
         let blocked_just_now = !self.blocking_last_frame && blocking;
-
-        /***** query the desired prosthetic tool *****/
-        // notice that `using_tool` is shadowed and it has a different semantics
-        // than `attacking`, `blocking`, `jumping`, etc
-        let using_tool = using_tool
-            | (x1_down && !self.config.tools_on_x1.is_empty())
-            | (x2_down && !self.config.tools_on_x2.is_empty());
         let used_tool_just_now = !self.using_tool_last_frame && using_tool;
 
-        let desired_tools = if used_tool_just_now {
-            // equip the alternative tools only right before using them
-            // so that the prosthetic slot doesn't change on plain character movement
-            self.rollback_countdown = Countdown::new(PROSTHETIC_ROLLBACK_COUNTDOWN);
-            let mut tools: &[UID] = &[];
-            if tools.is_empty() && x1_down {
-                tools = self.config.tools_on_x1;
-            }
-            if tools.is_empty() && x2_down {
-                tools = self.config.tools_on_x2;
-            }
-            if tools.is_empty() && blocking {
-                tools = self.config.tools_for_block;
-            }
-            if tools.is_empty() && !self.buffer.expired() {
-                tools = self.config.tools.get_or_default(inputs);
-            }
-            tools
-        } else if self.rollback_countdown.is_done() {
-            // equip the default tool as soon as it's availble
-            let tools = self.config.tools.get_or_default([]);
-            if tools.is_empty() {
-                // notice that it's possible that the player does not have any default tool configured
-                // in this case we need to rollback to the previous slot instead of the default tool
-                if let Some(prev_slot) = self.prev_slot.take() {
-                    activate_prosthetic_slot(prev_slot);
-                }
-                // the equipping code already handles the revert of ejected tools properly when there're default
-                // tools configured. revert at rollback is only for when there's no default tool configured
-                if let Some((ejected_tool, orignal_slot)) = self.ejection.take() {
-                    equip_prosthetic(ejected_tool, orignal_slot);
-                }
-            }
-            tools
-        } else {
-            self.rollback_countdown.count_on(!using_tool);
-            &[]
-        };
-
-        /***** equip the desired prosthetic tool *****/
-        // revert the ejected tool as soon as we move away from its original slot
-        // so that if any other tool needs to be ejected, it can be stored into `self.ejection`
-        let active_slot = get_active_prosthetic_slot();
-        if let Some((ejected_tool, original_slot)) = self.ejection {
-            if active_slot != original_slot {
-                equip_prosthetic(ejected_tool, original_slot);
-                self.ejection = None;
+        /***** prosthetic: (dir|r|l|f)+q/t or bare t → equip + hold-inject USE *****/
+        if !self.tools_inited {
+            self.tools_inited = true;
+            if self.config.tool_on_t.is_some() {
+                self.return_to_default_tool();
             }
         }
-        if !desired_tools.is_empty() {
-            if let Some(target_slot) = desired_tools.iter().copied().filter_map(locate_prosthetic_tool).next() {
-                // when multiple tools are bind to the same inputs, use the already equiped one first
-                if target_slot != active_slot {
-                    // remembers the active slot and rollback to it later if there're not default tools configured
-                    self.prev_slot.get_or_insert(active_slot);
-                    activate_prosthetic_slot(target_slot);
-                }
-            } else {
-                // if none equipped, check if the ejected one is desired
-                let mut equipped = false;
-                if let Some((ejected_tool, original_slot)) = self.ejection {
-                    for tool in desired_tools.iter().copied() {
-                        if tool.get_item_id() == Some(ejected_tool) {
-                            equip_prosthetic(ejected_tool, original_slot);
-                            equipped = true;
-                            self.ejection = None;
-                            break;
-                        }
-                    }
-                }
-                // use the first one (that is owned by the player) in the list as the last resort
-                if !equipped {
-                    // replace the tool in the active slot and remembers the ejected one for later revert
-                    // notice that only the first ever ejected tool is remembered because the latter ones are
-                    // placed into the slot by the MOD but not the player. there's not point in reverting them
-                    //
-                    // placing the desired tool into some dedicated slot and activating that slot later can cause bugs.
-                    // that is because `equip_prosthetic` must happen AFTER `activate_prosthetic_slot` when they occur
-                    // within the same tick. activating the dedicated slot BEFORE placing any tool into it solves
-                    // this problem of course but now it triggers a disgusting flickering in the slot UI instead
-                    //
-                    // bugs and disgust are both unacceptable. that's why the code chooses a more complex approach:
-                    // placing tools into arbitrary active slots (thus `activate_prosthetic_slot` is no longer needed)
-                    // and keep track of the arbitrary `self.prev_slot`s and the original slots of `self.ejection`
-                    let active_tool = get_prosthetic_tool(active_slot);
-                    for tool in desired_tools.iter().copied() {
-                        if equip_prosthetic(tool, active_slot) {
-                            if let Some(active_tool) = active_tool {
-                                self.ejection.get_or_insert((active_tool, active_slot));
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            self.prosthetic_delay = PROSTHETIC_SUPRESSION_DURATION;
-        }
+        self.handle_prosthetic_input(
+            input_handler,
+            combo_up,
+            combo_right,
+            combo_down,
+            combo_left,
+            blocking,
+            attacking,
+            interacting,
+            using_tool,
+            used_tool_just_now,
+        );
+        let action = &mut input_handler.action;
 
         /***** update combat-art token buffer (r/l/f + directions) *****/
         // `f` = in-game「动作、(长按)吸引」(remap + pad), not a hardcoded VK_E.
@@ -380,7 +545,6 @@ impl Mod {
                 None
             } else {
                 self.art_combo.clear();
-                self.buffer.clear();
                 self.config.art(ArtCombo::empty())
             }
         });
@@ -446,9 +610,6 @@ impl Mod {
         }
 
         /***** action supression *****/
-        // when binding umbrella to BLOCK|USE_PROSTHETIC, cross slash gets a bit harder to perform
-        // because now players need to release BLOCK first to prevent combat arts from happening
-        // the solution is, of course, supress BLOCK for the player
         if used_tool_just_now {
             self.disable_block = true;
         }
@@ -457,10 +618,6 @@ impl Mod {
         }
         if self.disable_block {
             *action &= !BLOCK;
-        }
-        // prosthetic tools may have extra keybind
-        if using_tool {
-            *action |= USE_PROSTHETIC;
         }
 
         // if ATTACK|BLOCK happens way too quick after combat art switching
@@ -505,10 +662,15 @@ impl Mod {
                 }
             }
         }
-        // similar principle also goes for prosthetic tools
+        // Prosthetic: settle a few frames after equip, then inject USE while tail held (or min tap).
         if self.prosthetic_delay != 0 {
             *action &= !USE_PROSTHETIC;
             self.prosthetic_delay -= 1;
+        } else if self.hold_tool_tail.is_some() || self.tool_min_use > 0 {
+            *action |= USE_PROSTHETIC;
+            if self.tool_min_use > 0 {
+                self.tool_min_use -= 1;
+            }
         }
 
         /***** for next frame to refer to *****/
@@ -643,7 +805,7 @@ impl ID for UID {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProstheticSlot {
     S0 = PROSTHETIC_SLOT_0,
     S1 = PROSTHETIC_SLOT_1,

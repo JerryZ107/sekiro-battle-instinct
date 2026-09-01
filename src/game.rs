@@ -54,8 +54,13 @@ pub struct InventoryData {
 
 #[rustfmt::skip]
 #[repr(C)]
-pub struct InputHandler { 
-    _0: [u8;16], pub action: u64 
+pub struct InputHandler {
+    _0: [u8;16],
+    /// Primary action bitfield (ATTACK/BLOCK/JUMP/DODGE/USE_PROSTHETIC/…).
+    pub action: u64,
+    /// Neighboring words — used when probing undocumented binds (e.g. switch prosthetic).
+    pub action_b: u64,
+    pub action_c: u64,
 }
 
 #[rustfmt::skip]

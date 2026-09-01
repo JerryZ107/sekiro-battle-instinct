@@ -1,18 +1,11 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs, io,
-    path::Path,
-};
+use std::{collections::HashMap, fs, io, path::Path};
 
 use widestring::U16CStr;
 
 use crate::{
     core::UID,
     game,
-    input::{
-        ArtCombo, ArtToken, Inputs, InputsTrie,
-        Input::*,
-    },
+    input::{ArtCombo, ArtToken},
 };
 
 const COMBART_ART_UID_MIN: UID = 5000;
@@ -20,24 +13,72 @@ const COMBART_ART_UID_MAX: UID = 10000;
 const PROSTHETIC_TOOL_UID_MIN: UID = 70000;
 const PROSTHETIC_TOOL_UID_MAX: UID = 100000;
 
+/// Tail key of a prosthetic combo: `q` = switch, `t` = use.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ToolTail {
+    /// In-game「切换忍具」(action 0x400).
+    Switch,
+    /// In-game「使用忍具」(USE_PROSTHETIC).
+    Use,
+}
+
+/// First key of a prosthetic combo. `t` cannot be first; `q` can.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ToolFirst {
+    Up,
+    Right,
+    Down,
+    Left,
+    Block,
+    Attack,
+    Interact,
+    /// `q` as first key (e.g. `qt`).
+    Switch,
+}
+
+impl ToolFirst {
+    pub fn from_art(token: ArtToken) -> ToolFirst {
+        match token {
+            ArtToken::Up => ToolFirst::Up,
+            ArtToken::Right => ToolFirst::Right,
+            ArtToken::Down => ToolFirst::Down,
+            ArtToken::Left => ToolFirst::Left,
+            ArtToken::Block => ToolFirst::Block,
+            ArtToken::Attack => ToolFirst::Attack,
+            ArtToken::Interact => ToolFirst::Interact,
+        }
+    }
+}
+
+/// First key (dir / r / l / f / q) + tail (`q` / `t`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ToolCombo {
+    pub first: ToolFirst,
+    pub tail: ToolTail,
+}
+
 #[derive(Debug)]
 pub struct Config {
     /// Combat arts keyed by r/l/f + direction pairs (or empty for ∅).
     pub arts: HashMap<ArtCombo, UID>,
-    pub tools: InputsTrie<&'static [UID]>,
-    pub tools_for_block: &'static [UID],
-    pub tools_on_x1: &'static [UID],
-    pub tools_on_x2: &'static [UID],
+    /// Two-key prosthetic binds: (↑↓←→|r|l|f|q) then (q|t). `t` cannot be first.
+    pub tools: HashMap<ToolCombo, UID>,
+    /// Unique bare-`t` prosthetic (default after other tools are released).
+    pub tool_on_t: Option<UID>,
 }
 
 impl Config {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Config> {
-        // Do not uppercase the whole file: art tokens use lowercase r/l/f.
+        // Do not uppercase the whole file: art tokens use lowercase r/l/f/q/t.
         Ok(fs::read_to_string(path)?.into())
     }
 
     pub fn art(&self, combo: ArtCombo) -> Option<UID> {
         self.arts.get(&combo).copied()
+    }
+
+    pub fn tool(&self, combo: ToolCombo) -> Option<UID> {
+        self.tools.get(&combo).copied()
     }
 }
 
@@ -45,10 +86,8 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             arts: HashMap::new(),
-            tools: InputsTrie::new(),
-            tools_for_block: &[],
-            tools_on_x1: &[],
-            tools_on_x2: &[],
+            tools: HashMap::new(),
+            tool_on_t: None,
         }
     }
 }
@@ -56,17 +95,9 @@ impl Default for Config {
 impl<S: AsRef<str>> From<S> for Config {
     fn from(value: S) -> Config {
         let mut config = Config::default();
-        let mut tools = HashMap::<Inputs, Vec<UID>>::new();
-        let mut tools_for_block = Vec::new();
-        let mut tools_on_x1 = Vec::new();
-        let mut tools_on_x2 = Vec::new();
-        let mut used_inputs = HashSet::new();
         for line in value.as_ref().lines() {
             let mut items = line.split_whitespace().take_while(|item| !item.starts_with("#"));
             let Some(id) = items.next().and_then(|id| id.parse::<UID>().ok()) else {
-                continue;
-            };
-            let Some(inputs) = items.last() else {
                 continue;
             };
             let tool = match id {
@@ -78,50 +109,83 @@ impl<S: AsRef<str>> From<S> for Config {
                 }
             };
 
+            let Some(motion) = items.last() else {
+                continue;
+            };
+
             if tool {
-                let upper = inputs.to_ascii_uppercase();
-                match upper.as_str() {
-                    "X1" | "M4" => tools_on_x1.push(id),
-                    "X2" | "M5" => tools_on_x2.push(id),
-                    "BLOCK" => tools_for_block.push(id),
-                    _ if inputs == "\u{26c9}" || inputs == "\u{26e8}" => {
-                        tools_for_block.push(id);
-                    }
-                    other => {
-                        if let Some(motion) = parse_motion(other) {
-                            used_inputs.insert(motion);
-                            tools.entry(motion).or_insert_with(Vec::new).push(id);
-                        } else if let Some(motion) = parse_motion(inputs) {
-                            used_inputs.insert(motion);
-                            tools.entry(motion).or_insert_with(Vec::new).push(id);
+                match parse_tool_motion(motion) {
+                    Some(ToolMotion::TAlone) => {
+                        if config.tool_on_t.is_some() {
+                            log::warn!("Multiple bare-t tools; keeping first, ignoring {id}");
+                        } else {
+                            config.tool_on_t = Some(id);
                         }
                     }
+                    Some(ToolMotion::Combo(combo)) => {
+                        if let Some(prev) = config.tools.get(&combo) {
+                            log::warn!(
+                                "Duplicate tool bind {:?}: keeping UID {prev}, ignoring {id}",
+                                combo
+                            );
+                        } else {
+                            config.tools.insert(combo, id);
+                        }
+                    }
+                    None => {
+                        // Unbound prosthetic line (name only) — ignore.
+                    }
                 }
-            } else if let Some(combo) = parse_art_combo(inputs) {
-                config.arts.insert(combo, id);
+                continue;
             }
-        }
 
-        for (inputs, tools) in tools {
-            config.tools.insert(inputs, tools.leak());
-        }
-        config.tools_for_block = tools_for_block.leak();
-        config.tools_on_x1 = tools_on_x1.leak();
-        config.tools_on_x2 = tools_on_x2.leak();
-
-        for inputs in used_inputs {
-            for alt_inputs in possible_altenrnatives(inputs) {
-                if let Some(tools) = config.tools.get(inputs) {
-                    config.tools.try_insert(alt_inputs, tools);
-                }
+            if let Some(combo) = parse_art_combo(motion) {
+                config.arts.insert(combo, id);
             }
         }
         config
     }
 }
 
-/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, f} (e.g. `r↑`, `ff`, `rl`, `rf`, `fr`, `fl`).
-/// `r` = mouse right (block), `l` = mouse left (attack), `f` = interact.
+enum ToolMotion {
+    TAlone,
+    Combo(ToolCombo),
+}
+
+/// `t` alone, or first∈{↑↓←→,r,l,f,q} then tail∈{q,t}. `t` cannot be the first key.
+fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
+    let motion = motion.trim();
+    if motion == "t" || motion == "T" {
+        return Some(ToolMotion::TAlone);
+    }
+
+    let mut chars = motion.chars();
+    let first_ch = chars.next()?;
+    let first = match first_ch {
+        '↑' => ToolFirst::Up,
+        '→' => ToolFirst::Right,
+        '↓' => ToolFirst::Down,
+        '←' => ToolFirst::Left,
+        'r' | 'R' => ToolFirst::Block,
+        'l' | 'L' => ToolFirst::Attack,
+        'f' | 'F' => ToolFirst::Interact,
+        'q' | 'Q' => ToolFirst::Switch,
+        't' | 'T' => return None, // t cannot be first
+        _ => return None,
+    };
+    let tail_ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    let tail = match tail_ch {
+        'q' | 'Q' => ToolTail::Switch,
+        't' | 'T' => ToolTail::Use,
+        _ => return None,
+    };
+    Some(ToolMotion::Combo(ToolCombo { first, tail }))
+}
+
+/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, f} (e.g. `r↑`, `ff`, `rl`).
 fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
     let motion = motion.trim();
     if matches!(motion, "∅" | "NONE" | "none") {
@@ -149,51 +213,6 @@ fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
     }
 }
 
-fn parse_motion(motion: &str) -> Option<Inputs> {
-    if matches!(motion, "∅" | "NONE" | "none") {
-        Some(Inputs::new())
-    } else {
-        let chars = motion.chars();
-        let char_count = chars.count();
-        let inputs = motion
-            .trim()
-            .chars()
-            .filter_map(|ch| ch.try_into().ok())
-            .collect::<Vec<_>>();
-        if inputs.len() != char_count {
-            return None;
-        }
-        Some(inputs.into_iter().take(3).collect::<Inputs>())
-    }
-}
-
-#[allow(unused)]
-fn possible_altenrnatives(mut inputs: Inputs) -> Vec<Inputs> {
-    if inputs.len() == 2 {
-        let mut possible_inputs = Vec::new();
-        possible_inputs.push(inputs.rev());
-        let tail = inputs.pop().unwrap();
-        let head = inputs.pop().unwrap();
-        if tail == head {
-            possible_inputs.push(Inputs::from([tail, tail, tail]));
-        } else if tail == head.opposite() {
-            possible_inputs.push(Inputs::from([head, tail.rotate(), tail]));
-            possible_inputs.push(Inputs::from([head, head.rotate(), tail]));
-        }
-        possible_inputs
-    } else if inputs == [Left, Down, Right].into() {
-        vec![
-            Inputs::from([Left, Right, Down]),
-            Inputs::from([Right, Left, Down]),
-            Inputs::from([Right, Down, Left]),
-            Inputs::from([Down, Left, Right]),
-            Inputs::from([Down, Right, Left]),
-        ]
-    } else {
-        Vec::new()
-    }
-}
-
 #[allow(unused)]
 fn get_item_name(uid: UID) -> Option<String> {
     let p = game::get_item_name(game::msg_repo(), uid);
@@ -208,9 +227,8 @@ fn get_item_name(uid: UID) -> Option<String> {
 #[cfg(test)]
 mod test {
     use crate::{
-        config::Config,
+        config::{Config, ToolCombo, ToolFirst, ToolTail},
         input::{ArtCombo, ArtToken},
-        input::Input::*,
     };
 
     #[test]
@@ -222,37 +240,45 @@ mod test {
             7700  Sakura Dance                ff
             5400  Dragon Flash                rf
             6100  One Mind                    fr
-            70000 Loaded Shuriken             ∅
-            74000 Mist Raven                 ←→
+            70500 Lazulite Shuriken           t
+            74100 Aged Feather Mist Raven     ↑q
+            75300 Lazulite Sabimaru           ↑t
+            72200 Long Spark                  ↓q
+            73200 Sparking Axe                qt
             ";
         let config = Config::from(raw);
         assert_eq!(
             config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Attack)),
             Some(7100)
         );
+        assert_eq!(config.tool_on_t, Some(70500));
         assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Down)),
-            Some(5500)
+            config.tool(ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Switch
+            }),
+            Some(74100)
         );
         assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Attack)),
-            Some(7400)
+            config.tool(ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Use
+            }),
+            Some(75300)
         );
         assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Interact)),
-            Some(7700)
+            config.tool(ToolCombo {
+                first: ToolFirst::Down,
+                tail: ToolTail::Switch
+            }),
+            Some(72200)
         );
         assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Interact)),
-            Some(5400)
+            config.tool(ToolCombo {
+                first: ToolFirst::Switch,
+                tail: ToolTail::Use
+            }),
+            Some(73200)
         );
-        assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Block)),
-            Some(6100)
-        );
-        assert_eq!(config.tools.get_or_default([]), [70000]);
-        assert_eq!(config.tools.get_or_default([Left, Right]), &[74000]);
     }
 }
-
-
