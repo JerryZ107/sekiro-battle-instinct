@@ -449,10 +449,12 @@ pub struct ArtComboWindow {
 }
 
 impl ArtComboWindow {
-    /// ~300ms at 60fps for all two-token arts (~0.3s).
+    /// ~300ms at 60fps for most two-token arts (~0.3s).
     const MAX_AGE: u16 = 18;
     /// Same window for `ff` / f-then-X (~0.3s).
     const MAX_AGE_FF: u16 = 18;
+    /// Longer window when first key is `l` (attack), ~0.7s @60fps.
+    const MAX_AGE_L: u16 = 42;
 
     pub const fn new() -> ArtComboWindow {
         ArtComboWindow {
@@ -520,10 +522,10 @@ impl ArtComboWindow {
             self.age = 0;
         } else {
             self.age = self.age.saturating_add(1);
-            let max_age = if self.first == Some(ArtToken::Interact) && self.second.is_none() {
-                Self::MAX_AGE_FF
-            } else {
-                Self::MAX_AGE
+            let max_age = match (self.first, self.second) {
+                (Some(ArtToken::Attack), None) => Self::MAX_AGE_L,
+                (Some(ArtToken::Interact), None) => Self::MAX_AGE_FF,
+                _ => Self::MAX_AGE,
             };
             if self.age >= max_age {
                 self.clear();
