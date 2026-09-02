@@ -7,10 +7,8 @@ use std::{
 use chrono::Local;
 use log::{self, Level, LevelFilter};
 
-#[cfg(debug_assertions)]
-const LEVEL: LevelFilter = LevelFilter::Debug;
-#[cfg(not(debug_assertions))]
-const LEVEL: LevelFilter = LevelFilter::Warn;
+// Temporary: Info so art-fire diagnostics show in release builds.
+const LEVEL: LevelFilter = LevelFilter::Info;
 
 pub fn init(path: &Path) {
     let _: anyhow::Result<()> = (|| {
@@ -24,7 +22,7 @@ pub fn init(path: &Path) {
             .format(|out, args, record| {
                 out.finish(format_args!(
                     "{} [{:<3}] {}",
-                    Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                    Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
                     record.level().abbr(),
                     args
                 ))

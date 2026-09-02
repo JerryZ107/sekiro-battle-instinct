@@ -91,6 +91,10 @@ pub struct Mod {
     queued_art: Option<(UID, ArtToken)>,
     /// When hold key is already up (typical after queue flush), keep firing this many frames.
     art_tap_frames: u8,
+    /// Diagnostic: frames since current art fire armed (0 = idle).
+    art_diag_n: u32,
+    /// Diagnostic: last inject phase label (to log transitions only).
+    art_diag_phase: &'static str,
     /// Pending first token for prosthetic combo (↑↓←→/r/l/f/q); waiting for q/t.
     tool_first: Option<ToolFirst>,
     tool_first_age: u16,
@@ -138,6 +142,8 @@ impl Mod {
             art_attack_latched: false,
             queued_art: None,
             art_tap_frames: 0,
+            art_diag_n: 0,
+            art_diag_phase: "idle",
             tool_first: None,
             tool_first_age: 0,
             hold_tool_tail: None,
@@ -166,23 +172,67 @@ impl Mod {
     }
 
     fn clear_art_fire(&mut self) {
+        if self.hold_for_attack.is_some() || self.art_diag_n > 0 {
+            log::info!(
+                "ART_CLEAR n={} hold={:?} tap={} blk={} latch={} pending_rl={} delay={} cur={:?} phase={}",
+                self.art_diag_n,
+                self.hold_for_attack,
+                self.art_tap_frames,
+                self.art_block_inject_left,
+                self.art_attack_latched,
+                self.pending_rl_attack,
+                self.attack_delay,
+                self.cur_art,
+                self.art_diag_phase,
+            );
+        }
         self.hold_for_attack = None;
         self.art_block_inject_left = 0;
         self.art_attack_latched = false;
         self.pending_rl_attack = false;
         self.art_tap_frames = 0;
+        self.art_diag_n = 0;
+        self.art_diag_phase = "idle";
     }
 
     fn arm_combo_fire(&mut self, hold: ArtToken) {
+        let held = self.art_combo.token_held(hold);
         self.hold_for_attack = Some(hold);
         self.art_block_inject_left = 0;
         self.art_attack_latched = false;
         // If the last key is already up (common when flushing a queued tap), auto-fire briefly.
-        self.art_tap_frames = if self.art_combo.token_held(hold) {
+        self.art_tap_frames = if held {
             0
         } else {
             ART_BLOCK_INJECTION_DURATION.saturating_add(3)
         };
+        self.art_diag_n = 0;
+        self.art_diag_phase = "armed";
+        log::info!(
+            "ART_ARM hold={:?} held={} tap={} cur={:?} delay={} swapout_done={}",
+            hold,
+            held,
+            self.art_tap_frames,
+            self.cur_art,
+            self.attack_delay,
+            self.swapout_countdown.is_done(),
+        );
+    }
+
+    fn art_diag_set_phase(&mut self, phase: &'static str) {
+        if self.art_diag_phase != phase {
+            log::info!(
+                "ART_PHASE {} -> {} n={} hold={:?} delay={} blk={} tap={}",
+                self.art_diag_phase,
+                phase,
+                self.art_diag_n,
+                self.hold_for_attack,
+                self.attack_delay,
+                self.art_block_inject_left,
+                self.art_tap_frames,
+            );
+            self.art_diag_phase = phase;
+        }
     }
 
     fn revert_ejection_if_left_slot(&mut self) {
@@ -482,10 +532,14 @@ impl Mod {
 
         /***** end sustained fire early when jump/dodge or last token released *****/
         if jumping || dodging {
+            if self.art_fire_busy() {
+                log::info!("ART_ABORT jump={} dodge={}", jumping, dodging);
+            }
             self.clear_art_fire();
             self.queued_art = None;
         } else if let Some(token) = self.hold_for_attack {
             if !self.art_combo.token_held(token) && self.art_tap_frames == 0 {
+                log::info!("ART_RELEASE hold={:?} (key up)", token);
                 self.clear_art_fire();
             }
         }
@@ -509,9 +563,23 @@ impl Mod {
                 self.art_combo.clear();
                 if self.art_fire_busy() {
                     // Sustained fire still running: queue and flush when it ends.
+                    log::info!(
+                        "ART_QUEUE uid={} hold={:?} busy cur={:?}",
+                        uid,
+                        hold,
+                        self.cur_art
+                    );
                     self.queued_art = Some((uid, hold));
                     None
                 } else {
+                    log::info!(
+                        "ART_HIT uid={} hold={:?} cur_before={:?} already={} swapout_done={}",
+                        uid,
+                        hold,
+                        self.cur_art,
+                        self.cur_art == Some(uid),
+                        self.swapout_countdown.is_done(),
+                    );
                     performed_block_free_art_just_now = true;
                     pending_rl = true;
                     self.arm_combo_fire(hold);
@@ -524,6 +592,7 @@ impl Mod {
         } else if !self.art_fire_busy() {
             if let Some((uid, hold)) = self.queued_art.take() {
                 // Previous sustained fire just ended — start the queued art.
+                log::info!("ART_FLUSH_QUEUE uid={} hold={:?}", uid, hold);
                 performed_block_free_art_just_now = true;
                 pending_rl = true;
                 self.arm_combo_fire(hold);
@@ -558,11 +627,22 @@ impl Mod {
         /***** equip the desired combat art (or its fallback version) *****/
         if let Some(desired_art) = desired_art {
             let mut desired_art = desired_art;
+            let log_equip = performed_block_free_art_just_now;
             loop {
                 if self.cur_art == Some(desired_art) {
+                    if log_equip {
+                        log::info!("ART_EQUIP uid={} same_slot=true (no set_combat_art)", desired_art);
+                    }
                     break;
                 }
                 if set_combat_art(desired_art) {
+                    if log_equip {
+                        log::info!(
+                            "ART_EQUIP uid={} same_slot=false delay={}",
+                            desired_art,
+                            ATTACK_SUPRESSION_DURATION
+                        );
+                    }
                     self.cur_art = Some(desired_art);
                     self.attack_delay = ATTACK_SUPRESSION_DURATION;
                     break;
@@ -626,10 +706,17 @@ impl Mod {
         if self.attack_delay > 0 {
             *action &= !ATTACK;
             self.attack_delay -= 1;
-        } else if self.pending_rl_attack {
-            // Settle done: prime with BLOCK-only frames before any ATTACK inject.
+            if self.hold_for_attack.is_some() {
+                self.art_diag_set_phase("delay");
+            }
+        }
+        // Start BLOCK prime only after settle. Must run even on the frame delay hits 0,
+        // otherwise sustained fire below opens B+A one frame early (then prime runs late),
+        // which is the Shadowfall "first cast after swap → trailing R1" bug.
+        if self.attack_delay == 0 && self.pending_rl_attack {
             self.pending_rl_attack = false;
             self.art_block_inject_left = ART_BLOCK_INJECTION_DURATION;
+            self.art_diag_set_phase("prime_start");
         }
 
         // Sustained art fire:
@@ -640,25 +727,56 @@ impl Mod {
             if let Some(token) = self.hold_for_attack {
                 let held = self.art_combo.token_held(token);
                 let tapping = self.art_tap_frames > 0;
+                self.art_diag_n = self.art_diag_n.saturating_add(1);
                 if held || tapping {
                     if self.art_block_inject_left > 0 {
                         *action |= BLOCK;
                         *action &= !ATTACK;
                         self.art_block_inject_left -= 1;
+                        self.art_diag_set_phase("prime_block");
                     } else {
                         *action |= ATTACK;
                         // First attack frame after priming still needs BLOCK to open the art.
                         if !self.art_attack_latched {
                             *action |= BLOCK;
                             self.art_attack_latched = true;
+                            self.art_diag_set_phase("open_rl");
+                            log::info!(
+                                "ART_OPEN n={} hold={:?} held={} tap={} out=B+A cur={:?}",
+                                self.art_diag_n,
+                                token,
+                                held,
+                                self.art_tap_frames,
+                                self.cur_art,
+                            );
+                        } else {
+                            self.art_diag_set_phase("hold_attack");
+                            // Sample while sustaining ATTACK (every 15f) to compare A vs B.
+                            if self.art_diag_n % 15 == 0 {
+                                log::info!(
+                                    "ART_HOLD n={} hold={:?} held={} tap={} out=A cur={:?}",
+                                    self.art_diag_n,
+                                    token,
+                                    held,
+                                    self.art_tap_frames,
+                                    self.cur_art,
+                                );
+                            }
                         }
                     }
                     if tapping && !held {
                         self.art_tap_frames -= 1;
                         if self.art_tap_frames == 0 {
+                            log::info!("ART_TAP_END");
                             self.clear_art_fire();
                         }
                     }
+                } else if self.art_diag_n % 15 == 0 {
+                    log::info!(
+                        "ART_IDLE_HOLD n={} hold={:?} held=false (waiting key?)",
+                        self.art_diag_n,
+                        token
+                    );
                 }
             }
         }
