@@ -23,7 +23,7 @@ const ATTACK_SUPRESSION_DURATION: u8 = 4;
 const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
 /// After tool lock expires, wait ~1.4s before returning to bare-`t` default.
 const PROSTHETIC_RETURN_DELAY: Frames = Frames::standard(84);
-/// After arming a tool, block switching ~1s; pressing `t` refreshes (multi-hit tools).
+/// After releasing the tool key, block switching ~1s; pressing `t`/`q` refreshes (multi-hit).
 const PROSTHETIC_TOOL_LOCK: Frames = Frames::standard(60);
 /// Window for first key → q/t (~0.3s @60fps).
 const TOOL_FIRST_MAX_AGE: u16 = 18;
@@ -320,8 +320,8 @@ impl Mod {
         self.tool_first_age = 0;
     }
 
-    /// Track ↑↓←→/r/l/f/q as first key; on q/t complete combo → equip + hold-inject USE.
-    /// `t` alone (no pending first) arms the unique default. `q` may be first (e.g. `qt`).
+    /// Track ↑↓←→/r/l/f as first key; on q/t complete combo → equip + hold-inject USE.
+    /// Bare `t` arms `tool_on_t`. Bare `q` arms `tool_on_q` (same fire style; return-default stays `t`).
     fn handle_prosthetic_input(
         &mut self,
         input_handler: &mut game::InputHandler,
@@ -335,7 +335,7 @@ impl Mod {
         using_tool: bool,
         used_tool_just_now: bool,
     ) {
-        // First-key edges for directions / r / l / f (`t` is never first).
+        // First-key edges for directions / r / l / f (`t` is never first; bare `q` is handled below).
         for (i, (held, token)) in [
             (up, ArtToken::Up),
             (right, ArtToken::Right),
@@ -383,19 +383,26 @@ impl Mod {
 
         if switch_rising {
             if self.tool_lock_left > 0 {
+                // Same multi-hit refresh as bare/held `t` during lock.
+                self.refresh_tool_lock();
+                self.tool_min_use = self.tool_min_use.max(3);
+                self.hold_tool_tail = Some(ToolTail::Switch);
+                self.prosthetic_delay = 0;
                 self.tool_first = None;
             } else if let Some(first) = self.tool_first {
-                // Pending first + q → try (first, Switch); else treat q as new first.
+                // Pending first + q → try (first, Switch); else clear (mirror bare-t mismatch).
                 if let Some(uid) = self.config.tool(ToolCombo {
                     first,
                     tail: ToolTail::Switch,
                 }) {
                     self.arm_tool(uid, ToolTail::Switch);
                 } else {
-                    self.push_tool_first(ToolFirst::Switch);
+                    self.tool_first = None;
                 }
+            } else if let Some(uid) = self.config.tool_on_q {
+                self.arm_tool(uid, ToolTail::Switch);
             } else {
-                // Bare q: start a prosthetic first-key window (e.g. waiting for t → `qt`).
+                // No bare-q: keep q as a possible first key (e.g. `qt`).
                 self.push_tool_first(ToolFirst::Switch);
             }
         }
@@ -438,16 +445,19 @@ impl Mod {
         }
 
         if self.tool_lock_left > 0 {
-            self.tool_lock_left -= 1;
             self.return_default_left = 0;
-            if self.tool_lock_left == 0
-                && self.hold_tool_tail.is_none()
-                && self.tool_min_use == 0
-            {
-                let is_default =
-                    self.config.tool_on_t.is_some() && self.cur_tool == self.config.tool_on_t;
-                if !is_default {
-                    self.return_default_left = PROSTHETIC_RETURN_DELAY.as_actual();
+            // Countdown only after the tail key is released (and min-inject/settle done).
+            let still_firing = self.hold_tool_tail.is_some()
+                || self.tool_min_use > 0
+                || self.prosthetic_delay > 0;
+            if !still_firing {
+                self.tool_lock_left -= 1;
+                if self.tool_lock_left == 0 {
+                    let is_default =
+                        self.config.tool_on_t.is_some() && self.cur_tool == self.config.tool_on_t;
+                    if !is_default {
+                        self.return_default_left = PROSTHETIC_RETURN_DELAY.as_actual();
+                    }
                 }
             }
         } else if self.return_default_left > 0 {

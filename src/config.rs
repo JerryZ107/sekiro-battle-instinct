@@ -61,10 +61,12 @@ pub struct ToolCombo {
 pub struct Config {
     /// Combat arts keyed by r/l/f + direction pairs (or empty for ∅).
     pub arts: HashMap<ArtCombo, UID>,
-    /// Two-key prosthetic binds: (↑↓←→|r|l|f|q) then (q|t). `t` cannot be first.
+    /// Two-key prosthetic binds: (↑↓←→|r|l|f|q) then (q|t).
     pub tools: HashMap<ToolCombo, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,
+    /// Unique bare-`q` prosthetic (same fire style as bare `t`; does not become return-default).
+    pub tool_on_q: Option<UID>,
 }
 
 impl Config {
@@ -88,6 +90,7 @@ impl Default for Config {
             arts: HashMap::new(),
             tools: HashMap::new(),
             tool_on_t: None,
+            tool_on_q: None,
         }
     }
 }
@@ -122,6 +125,13 @@ impl<S: AsRef<str>> From<S> for Config {
                             config.tool_on_t = Some(id);
                         }
                     }
+                    Some(ToolMotion::QAlone) => {
+                        if config.tool_on_q.is_some() {
+                            log::warn!("Multiple bare-q tools; keeping first, ignoring {id}");
+                        } else {
+                            config.tool_on_q = Some(id);
+                        }
+                    }
                     Some(ToolMotion::Combo(combo)) => {
                         if let Some(prev) = config.tools.get(&combo) {
                             log::warn!(
@@ -149,14 +159,19 @@ impl<S: AsRef<str>> From<S> for Config {
 
 enum ToolMotion {
     TAlone,
+    QAlone,
     Combo(ToolCombo),
 }
 
-/// `t` alone, or first∈{↑↓←→,r,l,f,q} then tail∈{q,t}. `t` cannot be the first key.
+/// `t` / `q` alone, or first∈{↑↓←→,r,l,f,q} then tail∈{q,t}.
+/// Bare `q` is exclusive with using `q` as a two-key first (e.g. `qt`).
 fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     let motion = motion.trim();
     if motion == "t" || motion == "T" {
         return Some(ToolMotion::TAlone);
+    }
+    if motion == "q" || motion == "Q" {
+        return Some(ToolMotion::QAlone);
     }
 
     let mut chars = motion.chars();
@@ -170,7 +185,7 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         'l' | 'L' => ToolFirst::Attack,
         'f' | 'F' => ToolFirst::Interact,
         'q' | 'Q' => ToolFirst::Switch,
-        't' | 'T' => return None, // t cannot be first
+        't' | 'T' => return None, // t cannot be first of a two-key bind
         _ => return None,
     };
     let tail_ch = chars.next()?;
@@ -241,10 +256,10 @@ mod test {
             5400  Dragon Flash                rf
             6100  One Mind                    fr
             70500 Lazulite Shuriken           t
-            74100 Aged Feather Mist Raven     ↑q
+            74100 Aged Feather Mist Raven     q
             75300 Lazulite Sabimaru           ↑t
             72200 Long Spark                  ↓q
-            73200 Sparking Axe                qt
+            79200 Mountain Echo               →t
             ";
         let config = Config::from(raw);
         assert_eq!(
@@ -252,13 +267,7 @@ mod test {
             Some(7100)
         );
         assert_eq!(config.tool_on_t, Some(70500));
-        assert_eq!(
-            config.tool(ToolCombo {
-                first: ToolFirst::Up,
-                tail: ToolTail::Switch
-            }),
-            Some(74100)
-        );
+        assert_eq!(config.tool_on_q, Some(74100));
         assert_eq!(
             config.tool(ToolCombo {
                 first: ToolFirst::Up,
@@ -275,10 +284,10 @@ mod test {
         );
         assert_eq!(
             config.tool(ToolCombo {
-                first: ToolFirst::Switch,
+                first: ToolFirst::Right,
                 tail: ToolTail::Use
             }),
-            Some(73200)
+            Some(79200)
         );
     }
 }
