@@ -731,8 +731,7 @@ impl Mod {
 
         // Sustained art fire:
         // 1) first N frames: BLOCK only + suppress ATTACK (prevents a stray R1/whirlwind)
-        // 2) then: ATTACK while last combo token is held; include BLOCK on the first attack
-        //    frame so the game sees Block+Attack to start the art.
+        // 2) then: BLOCK+ATTACK while last combo token is held (charge / multi-hit)
         if self.attack_delay == 0 {
             if let Some(token) = self.hold_for_attack {
                 let held = self.art_combo.token_held(token);
@@ -745,10 +744,9 @@ impl Mod {
                         self.art_block_inject_left -= 1;
                         self.art_diag_set_phase("prime_block");
                     } else {
+                        *action |= BLOCK;
                         *action |= ATTACK;
-                        // First attack frame after priming still needs BLOCK to open the art.
                         if !self.art_attack_latched {
-                            *action |= BLOCK;
                             self.art_attack_latched = true;
                             self.art_diag_set_phase("open_rl");
                             log::info!(
@@ -761,10 +759,9 @@ impl Mod {
                             );
                         } else {
                             self.art_diag_set_phase("hold_attack");
-                            // Sample while sustaining ATTACK (every 15f) to compare A vs B.
                             if self.art_diag_n % 15 == 0 {
                                 log::info!(
-                                    "ART_HOLD n={} hold={:?} held={} tap={} out=A cur={:?}",
+                                    "ART_HOLD n={} hold={:?} held={} tap={} out=B+A cur={:?}",
                                     self.art_diag_n,
                                     token,
                                     held,

@@ -50,7 +50,7 @@ impl ToolFirst {
     }
 }
 
-/// First key (dir / r / l / f / q) + tail (`q` / `t`).
+    /// First key (dir / r / l / e / q) + tail (`q` / `t`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ToolCombo {
     pub first: ToolFirst,
@@ -59,9 +59,9 @@ pub struct ToolCombo {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Combat arts keyed by r/l/f + direction pairs (or empty for ∅).
+    /// Combat arts keyed by r/l/e + direction pairs (or empty for ∅).
     pub arts: HashMap<ArtCombo, UID>,
-    /// Two-key prosthetic binds: (↑↓←→|r|l|f|q) then (q|t).
+    /// Two-key prosthetic binds: (↑↓←→|r|l|e|q) then (q|t).
     pub tools: HashMap<ToolCombo, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,
@@ -71,7 +71,7 @@ pub struct Config {
 
 impl Config {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Config> {
-        // Do not uppercase the whole file: art tokens use lowercase r/l/f/q/t.
+        // Do not uppercase the whole file: art tokens use lowercase r/l/e/q/t.
         Ok(fs::read_to_string(path)?.into())
     }
 
@@ -163,7 +163,7 @@ enum ToolMotion {
     Combo(ToolCombo),
 }
 
-/// `t` / `q` alone, or first∈{↑↓←→,r,l,f,q} then tail∈{q,t}.
+/// `t` / `q` alone, or first∈{↑↓←→,r,l,e,q} then tail∈{q,t}. `f` still parses as interact (legacy).
 /// Bare `q` is exclusive with using `q` as a two-key first (e.g. `qt`).
 fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     let motion = motion.trim();
@@ -183,7 +183,7 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         '←' => ToolFirst::Left,
         'r' | 'R' => ToolFirst::Block,
         'l' | 'L' => ToolFirst::Attack,
-        'f' | 'F' => ToolFirst::Interact,
+        'f' | 'F' | 'e' | 'E' => ToolFirst::Interact,
         'q' | 'Q' => ToolFirst::Switch,
         't' | 'T' => return None, // t cannot be first of a two-key bind
         _ => return None,
@@ -200,7 +200,7 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     Some(ToolMotion::Combo(ToolCombo { first, tail }))
 }
 
-/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, f} (e.g. `r↑`, `ff`, `rl`).
+/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, e} (e.g. `r↑`, `ee`, `rl`). `f` still parses as interact (legacy).
 fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
     let motion = motion.trim();
     if matches!(motion, "∅" | "NONE" | "none") {
@@ -216,7 +216,7 @@ fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
             '←' => ArtToken::Left,
             'r' | 'R' => ArtToken::Block,
             'l' | 'L' => ArtToken::Attack,
-            'f' | 'F' => ArtToken::Interact,
+            'f' | 'F' | 'e' | 'E' => ArtToken::Interact,
             _ => return None,
         };
         tokens.push(token);
@@ -249,12 +249,12 @@ mod test {
     #[test]
     fn test_load_tools_and_arts() {
         let raw = "
-            7100  Ichimonji: Double           rl
+            7100  Ichimonji: Double           ee
             5500  Ashina Cross                r↓
-            7400  High Monk                   fl
-            7700  Sakura Dance                ff
-            5400  Dragon Flash                rf
-            6100  One Mind                    fr
+            7400  High Monk                   el
+            7700  Sakura Dance                rl
+            5400  Dragon Flash                re
+            6100  One Mind                    er
             70500 Lazulite Shuriken           t
             74100 Aged Feather Mist Raven     q
             75300 Lazulite Sabimaru           ↑t
@@ -263,7 +263,7 @@ mod test {
             ";
         let config = Config::from(raw);
         assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Attack)),
+            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Interact)),
             Some(7100)
         );
         assert_eq!(config.tool_on_t, Some(70500));

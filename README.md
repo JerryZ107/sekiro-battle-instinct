@@ -29,7 +29,7 @@ If you prefer the original feel, use the upstream release instead.
 
 ## 武技搓招（两个键） / Combat arts (two keys)
 
-键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，松手后放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码侧中文表见 [res/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg)，发行包见 [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)，英文表见 [res/battle_instinct.cfg](res/battle_instinct.cfg)。
+键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入防御+攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，松手后放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码侧中文表见 [res/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg)，发行包见 [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)，英文表见 [res/battle_instinct.cfg](res/battle_instinct.cfg)。
 
 Keys follow in-game actions (remaps still work). On a two-key match: swap art slot → briefly suppress attack → inject block+attack; hold the second key to keep injecting attack (charge), release to stop. Combos input while an art is still injecting are queued and fire after release. Default detect window is about **0.3s**; about **0.7s** when the first key is `l` (e.g. `l↑`). Avoid `r`/`l` as the first key: block has high priority; attack easily thrusts. Configs: [res/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg), [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg), [res/battle_instinct.cfg](res/battle_instinct.cfg).
 
@@ -37,36 +37,36 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | --- | --- |
 | 右键(Right mouse) `r` | 防御 / 格挡 (Block) |
 | 左键(Left mouse) `l` | 攻击 (Attack) |
-| 动作(Interact) `f` | 动作、(长按)吸引 (Interact / hold to beckon) |
+| 动作(Interact) `e` | 动作、(长按)吸引 (Interact / hold to beckon) |
 | 方向箭头(Arrows) | 移动（WASD / 摇杆）(Move: WASD / stick) |
-| `ff` | 连按两次动作键 (Double-tap interact) |
-| `rl` / `rf` / `fr` / `fl` 等 | 两个键的顺序组合 (Ordered two-key pairs) |
+| `ee` | 连按两次动作键 (Double-tap interact) |
+| `rl` / `re` / `er` / `el` 等 | 两个键的顺序组合 (Ordered two-key pairs) |
 
 当前发行包默认键位（可改 cfg）/ Default release binds (editable in cfg):
 
 | 武技(Combat Art) | 键位(Bind) |
 | --- | --- |
-| 一字斩·二连 (Ichimonji: Double) | `ff` |
-| 巨型忍者落杀 (Shadowfall) | `fl` |
+| 一字斩·二连 (Ichimonji: Double) | `ee` |
+| 巨型忍者落杀 (Shadowfall) | `re` |
 | 寄鹰斩 (Nightjar Slash) | `↑l` |
-| 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓l` |
-| 苇名十字斩 (Ashina Cross) | `↓r` |
-| 仙峰寺菩萨脚 (High Monk) | `f↑` |
+| 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓r` |
+| 苇名十字斩 (Ashina Cross) | `↓l` |
+| 仙峰寺菩萨脚 (High Monk) | `er` |
 | 连击叩拜拳·破魔 (Praying Strikes - Exorcism) | `r↑` |
 | 旋风斩 (Whirlwind Slash) | `↑r` |
 | 樱舞 (Sakura Dance) | `rl` |
 | 飞渡浮舟 (Floating Passage) | `l↑` |
-| 飞渡漩涡云 (Spiral Cloud Passage) | `↑f` |
-| 龙闪 (Dragon Flash) | `rf` |
-| 一心 (One Mind) | `fr` |
-| 不死斩 (Empowered Mortal Draw) | `lf` |
+| 飞渡漩涡云 (Spiral Cloud Passage) | `↑e` |
+| 龙闪 (Dragon Flash) | `e↑` |
+| 一心 (One Mind) | `el` |
+| 不死斩 (Empowered Mortal Draw) | `e↓` |
 
 ## 忍具（q / t） / Prosthetics (q / t)
 
 - `q` = 游戏内「切换忍具」；`t` =「使用忍具」
 - 配置里写 `t`：全场唯一**默认**忍具，按/按住即装备并注入使用；其它忍具结束后会回到它
 - 配置里写 `q`：可另绑一个单键忍具，**触发方式与 `t` 相同**（不会成为回默认目标）
-- 双键：首键为方向、r/l/f，**尾键只能是 q 或 t**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入
+- 双键：首键为方向、r/l/e，**尾键只能是 q 或 t**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入
 - 若已配置裸 `q`，不宜再写 `qt`（单键 `q` 会先触发）
 - 未写键位的忍具行忽略
 
@@ -75,7 +75,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 - `q` = in-game “Switch Prosthetic”; `t` = “Use Prosthetic”
 - Bare `t`: unique **default** tool — press/hold to equip and inject use; other tools return to it afterward
 - Bare `q`: optional second one-key tool with the **same fire style as `t`** (not the return-default target)
-- Two-key: first is move/r/l/f; **tail must be q or t** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain
+- Two-key: first is move/r/l/e; **tail must be q or t** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain
 - If bare `q` is set, avoid `qt` (bare `q` fires first)
 - Prosthetic lines without a bind token are ignored
 
@@ -91,12 +91,12 @@ Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first
 | 凤凰紫青伞 (Phoenix's Lilac Umbrella) | `↓t` |
 | 爱哭鬼 (Mountain Echo) | `→t` |
 | 火舌 (Leaping Flame) | `↑q` |
-| 螺旋号 (Spiral Spear) | `ft` |
+| 螺旋号 (Spiral Spear) | `et` |
 | 火镰式机关斧 (Sparking Axe) | `←q` |
 | 琉璃锈丸 (Lazulite Sabimaru) | `↑t` |
 | 气吹长火筒 (Okinaga's Flame Vent) | `←t` |
 | 长效火花 (Long Spark) | `→q` |
-| 捐赠簿 (Finger Whistle / Divine Abduction bind) | `fq` |
+| 捐赠簿 (Finger Whistle / Divine Abduction bind) | `eq` |
 
 ## 自行编译（可选） / Build yourself (optional)
 

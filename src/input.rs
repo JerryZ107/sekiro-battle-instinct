@@ -389,12 +389,12 @@ where
 
 //----------------------------------------------------------------------------
 //
-//  Combat-art tokens: directions + mouse r/l + interact f
+//  Combat-art tokens: directions + mouse r/l + interact e
 //  (Separate from Input/Inputs so prosthetic tools stay unchanged.)
 //
 //----------------------------------------------------------------------------
 
-/// `r` = mouse right = block, `l` = mouse left = attack, `f` = interact.
+/// `r` = mouse right = block, `l` = mouse left = attack, `e` = interact (`f` legacy in cfg).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ArtToken {
     Up,
@@ -451,7 +451,7 @@ pub struct ArtComboWindow {
 impl ArtComboWindow {
     /// ~300ms at 60fps for most two-token arts (~0.3s).
     const MAX_AGE: u16 = 18;
-    /// Same window for `ff` / f-then-X (~0.3s).
+    /// Same window for `ee` / e-then-X (~0.3s); legacy cfg `ff` also works.
     const MAX_AGE_FF: u16 = 18;
     /// Longer window when first key is `l` (attack), ~0.7s @60fps.
     const MAX_AGE_L: u16 = 42;
