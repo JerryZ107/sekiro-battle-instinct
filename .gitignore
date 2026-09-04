@@ -5,3 +5,5 @@
 /dist/*
 !/dist/zh/
 !/dist/zh/**
+!/dist/en/
+!/dist/en/**

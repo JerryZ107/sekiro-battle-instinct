@@ -24,7 +24,7 @@ use windows::{
 };
 
 static OPEN: AtomicBool = AtomicBool::new(false);
-static ENABLED: AtomicBool = AtomicBool::new(true);
+static ENABLED: AtomicBool = AtomicBool::new(false);
 /// Console screen buffer — kept before stdout/stderr are redirected to NUL.
 static CONSOLE_OUT: OnceLock<isize> = OnceLock::new();
 static PRINT_LOCK: Mutex<()> = Mutex::new(());
@@ -33,6 +33,18 @@ static PRINT_LOCK: Mutex<()> = Mutex::new(());
 pub fn apply_cfg(game_dir: &Path) {
     let enabled = cfg_meta::boot_console_from_file(game_dir.join("battle_instinct.cfg"));
     ENABLED.store(enabled, Ordering::SeqCst);
+    if !enabled {
+        close_if_open();
+    }
+}
+
+fn close_if_open() {
+    if !OPEN.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    unsafe {
+        let _ = FreeConsole();
+    }
 }
 
 pub fn set_enabled(enabled: bool) {

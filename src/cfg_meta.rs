@@ -19,10 +19,7 @@ fn parse_on_off_token(val: &str) -> bool {
     match val {
         "开" | "on" | "1" | "true" | "yes" | "是" => true,
         "关" | "off" | "0" | "false" | "no" | "否" => false,
-        other => {
-            log::warn!("Unknown boot-console value `{other}`; defaulting to off");
-            false
-        }
+        _ => false,
     }
 }
 

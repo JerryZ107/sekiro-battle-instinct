@@ -8,12 +8,26 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 
 ## 直接使用（推荐） / Quick start (recommended)
 
-仓库已包含编译好的中文发行包，**无需自己编译**。把下面两个文件复制到 `sekiro.exe` 同目录即可。若已有其它 `dinput8.dll`（如 MOD Engine），把**其它** DLL 改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。
+**只需两个文件**复制到 `sekiro.exe` 同目录：`dinput8.dll` + `battle_instinct.cfg`。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
+
+Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.cfg`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
+
+### 中文发行包 / Chinese release
 
 - [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
-- [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)（中文搓招表 / Chinese bind table）
+- [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
 
-The repo ships a ready Chinese release — **no compile needed**. Copy the two files above next to `sekiro.exe`. If another `dinput8.dll` already exists (e.g. MOD Engine), rename **that** DLL to `dinput8_xxx.dll`; this MOD chain-loads them.
+### 英文发行包 / English release
+
+- [dist/en/dinput8.dll](dist/en/dinput8.dll)
+- [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
+
+### cfg 可调项 / Config toggles (comments at top of cfg)
+
+| 中文 | English | 说明 |
+| --- | --- | --- |
+| `# 启动信息print窗口: 关` | `# boot console: off` | 启动时是否弹出加载信息窗口（默认关） |
+| `# rl触发时限: 0.1s` | `# rl window: 0.1s` | 仅 `rl` 搓招：`r` 后须在此时间内按 `l` |
 
 ## 与原版的关系 / Relation to upstream
 
@@ -29,9 +43,9 @@ If you prefer the original feel, use the upstream release instead.
 
 ## 武技搓招（两个键） / Combat arts (two keys)
 
-键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入防御+攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，松手后放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码侧中文表见 [res/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg)，发行包见 [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)，英文表见 [res/battle_instinct.cfg](res/battle_instinct.cfg)。
+键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入防御+攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，松手后放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**；**`rl` 樱舞** 默认约 **0.1s**（可在 cfg 调整）。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码：`res/battle_instinct_zh.cfg`（中文）、`res/battle_instinct.cfg`（英文）；发行包：`dist/zh/`、`dist/en/`。
 
-Keys follow in-game actions (remaps still work). On a two-key match: swap art slot → briefly suppress attack → inject block+attack; hold the second key to keep injecting attack (charge), release to stop. Combos input while an art is still injecting are queued and fire after release. Default detect window is about **0.3s**; about **0.7s** when the first key is `l` (e.g. `l↑`). Avoid `r`/`l` as the first key: block has high priority; attack easily thrusts. Configs: [res/battle_instinct_zh.cfg](res/battle_instinct_zh.cfg), [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg), [res/battle_instinct.cfg](res/battle_instinct.cfg).
+Keys follow in-game actions (remaps still work). On a two-key match: swap art slot → briefly suppress attack → inject block+attack; hold the second key to keep injecting attack (charge), release to stop. Combos input while an art is still injecting are queued and fire after release. Default detect window is about **0.3s**; about **0.7s** when the first key is `l` (e.g. `l↑`); **`rl` (Sakura Dance)** defaults to about **0.1s** (cfg-tunable). Avoid `r`/`l` as the first key: block has high priority; attack easily thrusts. Sources: `res/battle_instinct_zh.cfg` (ZH), `res/battle_instinct.cfg` (EN); releases: `dist/zh/`, `dist/en/`.
 
 | 符号(Symbol) | 含义(Meaning) |
 | --- | --- |
@@ -51,15 +65,15 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | 寄鹰斩 (Nightjar Slash) | `↑l` |
 | 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓r` |
 | 苇名十字斩 (Ashina Cross) | `↓l` |
-| 仙峰寺菩萨脚 (High Monk) | `er` |
+| 仙峰寺菩萨脚 (High Monk) | `↑r` |
 | 连击叩拜拳·破魔 (Praying Strikes - Exorcism) | `r↑` |
-| 旋风斩 (Whirlwind Slash) | `↑r` |
+| 旋风斩 (Whirlwind Slash) | `e↑` |
 | 樱舞 (Sakura Dance) | `rl` |
 | 飞渡浮舟 (Floating Passage) | `l↑` |
 | 飞渡漩涡云 (Spiral Cloud Passage) | `↑e` |
-| 龙闪 (Dragon Flash) | `e↑` |
+| 龙闪 (Dragon Flash) | `er` |
 | 一心 (One Mind) | `el` |
-| 不死斩 (Empowered Mortal Draw) | `e↓` |
+| 不死斩 (Empowered Mortal Draw) | `r↓` |
 
 ## 忍具（q / t） / Prosthetics (q / t)
 
@@ -102,11 +116,17 @@ Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first
 
 ```bash
 cargo build --release
+just dist   # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg）
 ```
 
-产物一般在 `target/release/`，也可更新到 `dist/zh/`。
+产物在 `target/release/`；发行目录为 `dist/zh/`（中文 cfg）与 `dist/en/`（英文 cfg）。
 
-Output is usually under `target/release/`; you can also refresh `dist/zh/`.
+```bash
+cargo build --release
+just dist   # refresh dist/zh and dist/en (dinput8.dll + battle_instinct.cfg each)
+```
+
+Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
 
 ## 感谢 / Credits
 
