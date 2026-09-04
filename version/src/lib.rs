@@ -2,6 +2,8 @@
 
 #![allow(non_snake_case)]
 
+#[path = "../../src/cfg_meta.rs"]
+mod cfg_meta;
 #[path = "../../src/boot.rs"]
 mod boot;
 #[path = "../../src/load_console.rs"]

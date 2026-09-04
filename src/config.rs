@@ -78,6 +78,8 @@ pub struct Config {
     pub tool_on_q: Option<UID>,
     /// `rl` only: max frames between `r` and `l` (@60fps).
     pub rl_combo_max_age: u16,
+    /// Startup progress console (`# 启动信息print窗口`).
+    pub boot_console: bool,
 }
 
 impl Config {
@@ -103,6 +105,7 @@ impl Default for Config {
             tool_on_t: None,
             tool_on_q: None,
             rl_combo_max_age: rl_window_secs_to_frames(DEFAULT_RL_WINDOW_SECS),
+            boot_console: false,
         }
     }
 }
@@ -113,6 +116,10 @@ impl<S: AsRef<str>> From<S> for Config {
         for line in value.as_ref().lines() {
             if let Some(secs) = parse_rl_window_comment(line) {
                 config.rl_combo_max_age = rl_window_secs_to_frames(secs);
+                continue;
+            }
+            if let Some(v) = crate::cfg_meta::parse_boot_console_comment(line) {
+                config.boot_console = v;
                 continue;
             }
 
@@ -282,6 +289,21 @@ mod test {
         config::{rl_window_secs_to_frames, Config, ToolCombo, ToolFirst, ToolTail},
         input::{ArtCombo, ArtToken},
     };
+
+    #[test]
+    fn test_boot_console_comment() {
+        use crate::cfg_meta::parse_boot_console_comment;
+
+        assert_eq!(
+            parse_boot_console_comment("# 启动信息print窗口: 关"),
+            Some(false)
+        );
+        assert_eq!(parse_boot_console_comment("# 启动窗口: 关"), Some(false));
+        assert_eq!(parse_boot_console_comment("# boot console: on"), Some(true));
+        let config = Config::from("# 启动信息print窗口: 开\n7100 x ee");
+        assert!(config.boot_console);
+        assert!(!Config::default().boot_console);
+    }
 
     #[test]
     fn test_rl_window_comment() {

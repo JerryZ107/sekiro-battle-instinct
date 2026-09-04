@@ -9,6 +9,7 @@ static EARLY_SCAN_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Called from `version.dll` as early as the game process starts.
 pub fn on_early_attach(dir: PathBuf) {
+    load_console::apply_cfg(&dir);
     load_console::open();
     if EARLY_SCAN_DONE.swap(true, Ordering::SeqCst) {
         return;
@@ -22,6 +23,7 @@ pub fn on_early_attach(dir: PathBuf) {
 
 /// Called from `dinput8.dll` when DirectInput is first loaded.
 pub fn on_dinput_attach(dir: &Path) {
+    load_console::apply_cfg(dir);
     load_console::open();
     if !EARLY_SCAN_DONE.swap(true, Ordering::SeqCst) {
         load_console::print_line("Sekiro 进程已启动");

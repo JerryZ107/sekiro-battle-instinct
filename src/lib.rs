@@ -1,4 +1,5 @@
 mod boot;
+mod cfg_meta;
 mod config;
 mod core;
 mod device;

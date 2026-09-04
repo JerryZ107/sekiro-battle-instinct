@@ -1,9 +1,12 @@
 use std::{
+    path::Path,
     sync::{Mutex, OnceLock},
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
 };
+
+use crate::cfg_meta;
 
 use windows::{
     Win32::{
@@ -21,12 +24,26 @@ use windows::{
 };
 
 static OPEN: AtomicBool = AtomicBool::new(false);
+static ENABLED: AtomicBool = AtomicBool::new(true);
 /// Console screen buffer — kept before stdout/stderr are redirected to NUL.
 static CONSOLE_OUT: OnceLock<isize> = OnceLock::new();
 static PRINT_LOCK: Mutex<()> = Mutex::new(());
 
-/// Pop up a console for startup progress (no-op if allocation fails).
+/// Apply `# 启动信息print窗口: 开/关` from `battle_instinct.cfg` before `open()`.
+pub fn apply_cfg(game_dir: &Path) {
+    let enabled = cfg_meta::boot_console_from_file(game_dir.join("battle_instinct.cfg"));
+    ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+/// Pop up a console for startup progress (no-op if disabled or allocation fails).
 pub fn open() {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     if OPEN.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -66,7 +83,7 @@ pub fn open() {
 }
 
 pub fn print_line(msg: &str) {
-    if !OPEN.load(Ordering::Relaxed) {
+    if !ENABLED.load(Ordering::Relaxed) || !OPEN.load(Ordering::Relaxed) {
         return;
     }
     let _guard = PRINT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -84,7 +101,7 @@ pub fn print_line(msg: &str) {
 
 /// Print a final message; auto-close only on success.
 pub fn finish(success: bool, detail: Option<&str>) {
-    if !OPEN.load(Ordering::Relaxed) {
+    if !ENABLED.load(Ordering::Relaxed) || !OPEN.load(Ordering::Relaxed) {
         return;
     }
     if success {
