@@ -442,10 +442,14 @@ pub struct ArtComboWindow {
     second: Option<ArtToken>,
     age: u16,
     completed_this_frame: Option<ArtCombo>,
+    /// Set when Block→Attack arrives after the tight `rl` window (consumed by core).
+    late_rl_rejected: bool,
     keys_down: [bool; 4],
     block_down: bool,
     attack_down: bool,
     interact_down: bool,
+    /// Tight window for `rl` only: Block then Attack (frames @60fps, from cfg).
+    max_age_rl: u16,
 }
 
 impl ArtComboWindow {
@@ -456,16 +460,18 @@ impl ArtComboWindow {
     /// Longer window when first key is `l` (attack), ~0.7s @60fps.
     const MAX_AGE_L: u16 = 42;
 
-    pub const fn new() -> ArtComboWindow {
+    pub fn new(max_age_rl: u16) -> ArtComboWindow {
         ArtComboWindow {
             first: None,
             second: None,
             age: 0,
             completed_this_frame: None,
+            late_rl_rejected: false,
             keys_down: [false; 4],
             block_down: false,
             attack_down: false,
             interact_down: false,
+            max_age_rl,
         }
     }
 
@@ -492,8 +498,7 @@ impl ArtComboWindow {
         .enumerate()
         {
             if held && !self.keys_down[i] {
-                self.push(token);
-                updated = true;
+                updated |= self.push(token);
             }
             self.keys_down[i] = held;
         }
@@ -501,20 +506,17 @@ impl ArtComboWindow {
         // Button edges: block → interact → attack so same-frame rf/fl resolve correctly;
         // order-sensitive pairs (fr, lf) still need sequential presses.
         if block && !self.block_down {
-            self.push(ArtToken::Block);
-            updated = true;
+            updated |= self.push(ArtToken::Block);
         }
         self.block_down = block;
 
         if interact && !self.interact_down {
-            self.push(ArtToken::Interact);
-            updated = true;
+            updated |= self.push(ArtToken::Interact);
         }
         self.interact_down = interact;
 
         if attack && !self.attack_down {
-            self.push(ArtToken::Attack);
-            updated = true;
+            updated |= self.push(ArtToken::Attack);
         }
         self.attack_down = attack;
 
@@ -533,19 +535,32 @@ impl ArtComboWindow {
         }
     }
 
-    fn push(&mut self, token: ArtToken) {
+    /// Returns whether the token advanced the combo buffer (false when a late `rl` is rejected).
+    fn push(&mut self, token: ArtToken) -> bool {
         match (self.first, self.second) {
             (None, _) => {
                 self.first = Some(token);
                 self.second = None;
+                true
             }
             (Some(a), None) => {
+                // `rl` only: Block→Attack must land within ~0.1s; other r+X keep the default window.
+                if a == ArtToken::Block
+                    && token == ArtToken::Attack
+                    && self.age > self.max_age_rl
+                {
+                    self.late_rl_rejected = true;
+                    self.clear();
+                    return false;
+                }
                 self.second = Some(token);
                 self.completed_this_frame = Some(ArtCombo::pair(a, token));
+                true
             }
             (Some(_), Some(_)) => {
                 self.first = Some(token);
                 self.second = None;
+                true
             }
         }
     }
@@ -553,6 +568,13 @@ impl ArtComboWindow {
     /// Two-token combo completed on this frame, if any.
     pub fn take_completed(&mut self) -> Option<ArtCombo> {
         self.completed_this_frame.take()
+    }
+
+    /// True once when a late `l` after `r` was dropped (prevents vanilla B+A skill fire).
+    pub fn take_late_rl_rejected(&mut self) -> bool {
+        let v = self.late_rl_rejected;
+        self.late_rl_rejected = false;
+        v
     }
 
     /// True when the first token is held and we are waiting for the second.
@@ -673,7 +695,7 @@ mod test {
         use super::{ArtCombo, ArtComboWindow, ArtToken};
 
         // same-frame rl
-        let mut w = ArtComboWindow::new();
+        let mut w = ArtComboWindow::new(6);
         w.tick(false, false, false, false, true, true, false);
         assert_eq!(
             w.take_completed(),
@@ -681,7 +703,7 @@ mod test {
         );
 
         // same-frame rf
-        let mut w = ArtComboWindow::new();
+        let mut w = ArtComboWindow::new(6);
         w.tick(false, false, false, false, true, false, true);
         assert_eq!(
             w.take_completed(),
@@ -689,7 +711,7 @@ mod test {
         );
 
         // same-frame fl
-        let mut w = ArtComboWindow::new();
+        let mut w = ArtComboWindow::new(6);
         w.tick(false, false, false, false, false, true, true);
         assert_eq!(
             w.take_completed(),
@@ -697,7 +719,7 @@ mod test {
         );
 
         // sequential fr
-        let mut w = ArtComboWindow::new();
+        let mut w = ArtComboWindow::new(6);
         w.tick(false, false, false, false, false, false, true);
         assert!(w.take_completed().is_none());
         w.tick(false, false, false, false, true, false, true);
@@ -705,5 +727,28 @@ mod test {
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Interact, ArtToken::Block))
         );
+
+        // rl within ~0.1s (6 frames @60fps)
+        let mut w = ArtComboWindow::new(6);
+        w.tick(false, false, false, false, true, false, false);
+        for _ in 0..6 {
+            w.tick(false, false, false, false, false, false, false);
+        }
+        w.tick(false, false, false, false, false, true, false);
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
+        );
+
+        // rl after ~0.1s: no combo; suppress flag set
+        let mut w = ArtComboWindow::new(6);
+        w.tick(false, false, false, false, true, false, false);
+        for _ in 0..7 {
+            w.tick(false, false, false, false, false, false, false);
+        }
+        w.tick(false, false, false, false, false, true, false);
+        assert!(w.take_completed().is_none());
+        assert!(w.take_late_rl_rejected());
+        assert!(!w.awaiting_second());
     }
 }

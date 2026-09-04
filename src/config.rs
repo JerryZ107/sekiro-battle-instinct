@@ -57,6 +57,15 @@ pub struct ToolCombo {
     pub tail: ToolTail,
 }
 
+/// Default `rl` (Block→Attack) combo window in seconds @60fps.
+pub const DEFAULT_RL_WINDOW_SECS: f32 = 0.1;
+const RL_WINDOW_FPS: f32 = 60.0;
+
+/// Convert cfg seconds to frame budget (same 60fps basis as other combo windows).
+pub fn rl_window_secs_to_frames(secs: f32) -> u16 {
+    (secs * RL_WINDOW_FPS).round().clamp(1.0, 120.0) as u16
+}
+
 #[derive(Debug)]
 pub struct Config {
     /// Combat arts keyed by r/l/e + direction pairs (or empty for ∅).
@@ -67,6 +76,8 @@ pub struct Config {
     pub tool_on_t: Option<UID>,
     /// Unique bare-`q` prosthetic (same fire style as bare `t`; does not become return-default).
     pub tool_on_q: Option<UID>,
+    /// `rl` only: max frames between `r` and `l` (@60fps).
+    pub rl_combo_max_age: u16,
 }
 
 impl Config {
@@ -91,6 +102,7 @@ impl Default for Config {
             tools: HashMap::new(),
             tool_on_t: None,
             tool_on_q: None,
+            rl_combo_max_age: rl_window_secs_to_frames(DEFAULT_RL_WINDOW_SECS),
         }
     }
 }
@@ -99,6 +111,11 @@ impl<S: AsRef<str>> From<S> for Config {
     fn from(value: S) -> Config {
         let mut config = Config::default();
         for line in value.as_ref().lines() {
+            if let Some(secs) = parse_rl_window_comment(line) {
+                config.rl_combo_max_age = rl_window_secs_to_frames(secs);
+                continue;
+            }
+
             let mut items = line.split_whitespace().take_while(|item| !item.starts_with("#"));
             let Some(id) = items.next().and_then(|id| id.parse::<UID>().ok()) else {
                 continue;
@@ -155,6 +172,26 @@ impl<S: AsRef<str>> From<S> for Config {
         }
         config
     }
+}
+
+/// `# rl触发时限: 0.1s` or `# rl window: 0.1s` (optional trailing `s`).
+fn parse_rl_window_comment(line: &str) -> Option<f32> {
+    let text = line.trim();
+    if !text.starts_with('#') {
+        return None;
+    }
+    let body = text.trim_start_matches('#').trim();
+    let key = body.split([':', '：']).next()?.trim().to_ascii_lowercase();
+    if key != "rl触发时限" && key != "rl window" {
+        return None;
+    }
+    let rest = body.split([':', '：']).nth(1)?.trim();
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let secs = num.parse::<f32>().ok()?;
+    (secs > 0.0).then_some(secs)
 }
 
 enum ToolMotion {
@@ -242,9 +279,21 @@ fn get_item_name(uid: UID) -> Option<String> {
 #[cfg(test)]
 mod test {
     use crate::{
-        config::{Config, ToolCombo, ToolFirst, ToolTail},
+        config::{rl_window_secs_to_frames, Config, ToolCombo, ToolFirst, ToolTail},
         input::{ArtCombo, ArtToken},
     };
+
+    #[test]
+    fn test_rl_window_comment() {
+        let config = Config::from(
+            "# rl触发时限: 0.2s\n7100  x  ee",
+        );
+        assert_eq!(config.rl_combo_max_age, 12);
+
+        let config = Config::from("# rl window: 0.15\n7700 Sakura rl");
+        assert_eq!(config.rl_combo_max_age, 9);
+        assert_eq!(config.rl_combo_max_age, rl_window_secs_to_frames(0.15));
+    }
 
     #[test]
     fn test_load_tools_and_arts() {

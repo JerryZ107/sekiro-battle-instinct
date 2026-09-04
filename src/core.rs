@@ -81,6 +81,8 @@ pub struct Mod {
     disable_block: bool,
     /// After a fresh art swap, start rl fire once attack_delay ends.
     pending_rl_attack: bool,
+    /// While set, strip ATTACK while BLOCK held so late `rl` does not fire the current art.
+    suppress_late_rl_skill: bool,
     /// Keep injecting ATTACK while this combo's last token stays held.
     hold_for_attack: Option<ArtToken>,
     /// Remaining BLOCK-only prime frames (ATTACK suppressed) at art start.
@@ -122,10 +124,12 @@ pub struct Mod {
 
 impl Mod {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Mod> {
+        let config = Config::open(path)?;
+        let art_combo = ArtComboWindow::new(config.rl_combo_max_age);
         let modification = Mod {
-            config: Config::open(path)?,
+            config,
             gamepad: Gamepad::new()?,
-            art_combo: ArtComboWindow::new(),
+            art_combo,
             cur_art: None,
             blocking_last_frame: false,
             attacking_last_frame: false,
@@ -137,6 +141,7 @@ impl Mod {
             injected_blocks: 0,
             disable_block: false,
             pending_rl_attack: false,
+            suppress_late_rl_skill: false,
             hold_for_attack: None,
             art_block_inject_left: 0,
             art_attack_latched: false,
@@ -539,6 +544,11 @@ impl Mod {
             attacking,
             interacting,
         );
+        let late_rl_rejected = self.art_combo.take_late_rl_rejected();
+        if late_rl_rejected {
+            self.suppress_late_rl_skill = true;
+            log::info!("ART_RL_LATE reject — suppress B+A until block released");
+        }
 
         /***** end sustained fire early when jump/dodge or last token released *****/
         if jumping || dodging {
@@ -556,7 +566,7 @@ impl Mod {
 
         /***** query the desired combat art *****/
         let mut performed_block_free_art_just_now = false;
-        let performed_art_just_now = blocking && attacked_just_now;
+        let performed_art_just_now = blocking && attacked_just_now && !late_rl_rejected;
         let mut pending_rl = false;
         if !self.swapout_countdown.is_done() {
             // fix buggy behavior of sakura dance, ashina cross and one mind
@@ -708,6 +718,16 @@ impl Mod {
         }
         if self.disable_block {
             *action &= !BLOCK;
+        }
+
+        // Late `rl`: user still holds r; vanilla B+A would release whatever art is equipped.
+        if self.suppress_late_rl_skill {
+            if blocking && attacking {
+                *action &= !ATTACK;
+            }
+            if !blocking {
+                self.suppress_late_rl_skill = false;
+            }
         }
 
         // if ATTACK|BLOCK happens way too quick after combat art switching

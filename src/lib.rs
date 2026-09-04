@@ -1,9 +1,11 @@
+mod boot;
 mod config;
 mod core;
 mod device;
 mod frame;
 mod game;
 mod input;
+mod load_console;
 mod logger;
 
 use core::Mod;
@@ -55,6 +57,7 @@ extern "system" fn DllMain(hmodule: HMODULE, call_reason: u32, _reserved: *mut c
         };
 
         logger::init(&dir_path);
+        boot::on_dinput_attach(&dir_path);
 
         // Never call LoadLibrary from DllMain: it can deadlock the Windows loader and
         // leave Steam stuck on "正在启动". Defer chainload + hook setup to a worker thread.
@@ -136,20 +139,37 @@ fn chainload(path: &Path) {
             names.push(name);
         }
         names.sort();
+        if names.is_empty() {
+            load_console::print_line("  （未发现 dinput8_*.dll，跳过链式加载）");
+        }
         for name in names {
+            let lossy = name.to_string_lossy();
+            let label = if lossy.to_ascii_lowercase().contains("modengine") {
+                "正在启动 Mod Engine"
+            } else {
+                "正在加载"
+            };
+            load_console::print_line(&format!("  {label}: {lossy}"));
             let path = path.join(&name);
             let path = path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
             let loaded = unsafe { LoadLibraryW(PCWSTR::from_raw(path.as_ptr())) };
             match loaded {
-                Ok(_) => log::debug!("Chainloaded dll: {name:?}"),
-                Err(e) => log::error!("Failed to chainload {name:?}: {e:?}"),
+                Ok(_) => {
+                    log::debug!("Chainloaded dll: {name:?}");
+                    load_console::print_line(&format!("  ✓ {lossy} 已加载"));
+                }
+                Err(e) => {
+                    log::error!("Failed to chainload {name:?}: {e:?}");
+                    load_console::print_line(&format!("  ✗ {lossy} 加载失败: {e}"));
+                }
             }
         }
         Ok(())
     })();
 
     if let Err(e) = res {
-        log::error!("Error occured when chainloading. {e:?}")
+        log::error!("Error occured when chainloading. {e:?}");
+        load_console::print_line(&format!("链式加载出错: {e}"));
     }
 }
 
@@ -159,7 +179,7 @@ fn chainload(path: &Path) {
 //
 //----------------------------------------------------------------------------
 
-const HOOK_DELAY: Duration = Duration::from_secs(10);
+const HOOK_DELAY_SECS: u64 = 10;
 
 static PROCESS_INPUT_ORIG: OnceLock<fn(*mut game::InputHandler, usize) -> usize> = OnceLock::new();
 
@@ -171,10 +191,19 @@ struct State {
 
 fn modify(path: &Path) {
     let path = path.join("battle_instinct.cfg");
-    thread::sleep(HOOK_DELAY);
+    load_console::print_line("等待游戏初始化…");
+    for remaining in (0..HOOK_DELAY_SECS).rev() {
+        if remaining > 0 {
+            load_console::print_line(&format!("  约 {remaining} 秒后开始安装钩子"));
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    load_console::print_line("读取配置 battle_instinct.cfg …");
     let result = (|| unsafe {
         let modification = Mod::new(path)?;
 
+        load_console::print_line("安装输入钩子…");
         let target = game::PROCESS_INPUT as *mut c_void;
         let detour = process_input as *mut c_void;
         let process_input_orig = MinHook::create_hook(target, detour)?;
@@ -193,8 +222,12 @@ fn modify(path: &Path) {
         Ok::<_, anyhow::Error>(())
     })();
 
-    if let Err(e) = result {
-        log::error!("Errored occured when modifying the game. {e:?}")
+    match result {
+        Ok(()) => load_console::finish(true, None),
+        Err(e) => {
+            log::error!("Errored occured when modifying the game. {e:?}");
+            load_console::finish(false, Some(&format!("{e:#}")));
+        }
     }
 }
 
