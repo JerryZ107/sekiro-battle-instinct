@@ -69,27 +69,6 @@ pub fn rl_window_secs_to_frames(secs: f32) -> u16 {
 /// Default prosthetic multi-hit lock after releasing the tail key (@60fps basis for secs).
 pub const DEFAULT_TOOL_MULTI_LOCK_SECS: f32 = 1.0;
 
-/// Prosthetic families for `# 多段触发时限` (UID decade ranges).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum ToolMultiLockCategory {
-    Shuriken,
-    Umbrella,
-    MistRaven,
-    Firecracker,
-    Sabimaru,
-}
-
-pub fn tool_uid_multi_lock_category(uid: UID) -> Option<ToolMultiLockCategory> {
-    match uid {
-        70000..=70999 => Some(ToolMultiLockCategory::Shuriken),
-        71000..=71999 => Some(ToolMultiLockCategory::Firecracker),
-        74000..=74999 => Some(ToolMultiLockCategory::MistRaven),
-        75000..=75999 => Some(ToolMultiLockCategory::Sabimaru),
-        76000..=76999 => Some(ToolMultiLockCategory::Umbrella),
-        _ => None,
-    }
-}
-
 pub fn tool_multi_lock_secs_to_frames(secs: f32) -> u16 {
     if secs <= 0.0 {
         0
@@ -112,8 +91,8 @@ pub struct Config {
     pub rl_combo_max_age: u16,
     /// Startup progress console (`# 启动信息print窗口`).
     pub boot_console: bool,
-    /// Per-family multi-hit lock after tail release (`# 多段触发时限`).
-    pub tool_multi_lock_secs: HashMap<ToolMultiLockCategory, f32>,
+    /// Per-UID multi-hit lock after tail release (inline `↑q-0.5s` / `↑q-多段触发时限0.5s`).
+    pub tool_multi_lock_secs: HashMap<UID, f32>,
 }
 
 impl Config {
@@ -133,8 +112,7 @@ impl Config {
     /// Lock frames for re-triggering the same prosthetic after releasing the tail key.
     pub fn tool_lock_frames(&self, uid: Option<UID>) -> u16 {
         let secs = uid
-            .and_then(tool_uid_multi_lock_category)
-            .and_then(|cat| self.tool_multi_lock_secs.get(&cat).copied())
+            .and_then(|id| self.tool_multi_lock_secs.get(&id).copied())
             .unwrap_or(DEFAULT_TOOL_MULTI_LOCK_SECS);
         tool_multi_lock_secs_to_frames(secs)
     }
@@ -166,16 +144,6 @@ impl<S: AsRef<str>> From<S> for Config {
                 config.boot_console = v;
                 continue;
             }
-            if let Some((cat, secs)) = parse_tool_multi_lock_entry(line) {
-                config.tool_multi_lock_secs.insert(cat, secs);
-                continue;
-            }
-            if let Some(entries) = parse_tool_multi_lock_bulk(line) {
-                for (cat, secs) in entries {
-                    config.tool_multi_lock_secs.insert(cat, secs);
-                }
-                continue;
-            }
 
             let mut items = line.split_whitespace().take_while(|item| !item.starts_with("#"));
             let Some(id) = items.next().and_then(|id| id.parse::<UID>().ok()) else {
@@ -196,25 +164,30 @@ impl<S: AsRef<str>> From<S> for Config {
 
             if tool {
                 for alt in split_motion_alternates(motion) {
-                    match parse_tool_motion(alt) {
-                        Some(ToolMotion::TAlone) => {
+                    let Some((motion, lock_secs)) = parse_tool_motion_with_lock(alt) else {
+                        continue;
+                    };
+                    if let Some(secs) = lock_secs {
+                        insert_tool_multi_lock(&mut config, id, secs);
+                    }
+                    match motion {
+                        ToolMotion::TAlone => {
                             if config.tool_on_t.is_some() {
                                 log::warn!("Multiple bare-t tools; keeping first, ignoring {id}");
                             } else {
                                 config.tool_on_t = Some(id);
                             }
                         }
-                        Some(ToolMotion::QAlone) => {
+                        ToolMotion::QAlone => {
                             if config.tool_on_q.is_some() {
                                 log::warn!("Multiple bare-q tools; keeping first, ignoring {id}");
                             } else {
                                 config.tool_on_q = Some(id);
                             }
                         }
-                        Some(ToolMotion::Combo(combo)) => {
+                        ToolMotion::Combo(combo) => {
                             insert_tool_bind(&mut config, combo, id);
                         }
-                        None => {}
                     }
                 }
                 continue;
@@ -260,6 +233,18 @@ fn insert_tool_bind(config: &mut Config, combo: ToolCombo, id: UID) {
     config.tools.insert(combo, id);
 }
 
+fn insert_tool_multi_lock(config: &mut Config, id: UID, secs: f32) {
+    if let Some(prev) = config.tool_multi_lock_secs.get(&id) {
+        if (*prev - secs).abs() > f32::EPSILON {
+            log::warn!(
+                "Duplicate multi-hit lock for UID {id}: keeping {prev}s, ignoring {secs}s"
+            );
+        }
+        return;
+    }
+    config.tool_multi_lock_secs.insert(id, secs);
+}
+
 /// `# rl触发时限: 0.1s` or `# rl window: 0.1s` (optional trailing `s`).
 fn parse_rl_window_comment(line: &str) -> Option<f32> {
     let text = line.trim();
@@ -280,64 +265,6 @@ fn parse_rl_window_comment(line: &str) -> Option<f32> {
     (secs > 0.0).then_some(secs)
 }
 
-/// `# 多段触发时限: 手里剑 0s, 锈丸 0.5s` or `# multi-hit window: shuriken 0s, sabimaru 0.5s`
-fn parse_tool_multi_lock_bulk(line: &str) -> Option<Vec<(ToolMultiLockCategory, f32)>> {
-    let text = line.trim();
-    if !text.starts_with('#') {
-        return None;
-    }
-    let body = text.trim_start_matches('#').trim();
-    let key = body.split([':', '：']).next()?.trim().to_ascii_lowercase();
-    if key != "多段触发时限" && key != "multi-hit window" {
-        return None;
-    }
-    let rest = body.split([':', '：']).nth(1)?.trim();
-    let mut out = Vec::new();
-    for part in rest.split(['，', ',']) {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let (name, secs) = part.rsplit_once(' ').or_else(|| part.rsplit_once('\t'))?;
-        let cat = parse_tool_multi_lock_category(name.trim())?;
-        out.push((cat, parse_secs_value(secs.trim())?));
-    }
-    (!out.is_empty()).then_some(out)
-}
-
-/// `# 多段触发时限·锈丸: 0.5s`
-fn parse_tool_multi_lock_entry(line: &str) -> Option<(ToolMultiLockCategory, f32)> {
-    let text = line.trim();
-    if !text.starts_with('#') {
-        return None;
-    }
-    let body = text.trim_start_matches('#').trim();
-    let (key, rest) = body.split_once([':', '：'])?;
-    let key = key.trim();
-    let prefix = if key.starts_with("多段触发时限·") {
-        "多段触发时限·"
-    } else if key.to_ascii_lowercase().starts_with("multi-hit window·") {
-        "multi-hit window·"
-    } else if key.to_ascii_lowercase().starts_with("multi-hit window.") {
-        "multi-hit window."
-    } else {
-        return None;
-    };
-    let cat = parse_tool_multi_lock_category(key.trim_start_matches(prefix).trim())?;
-    Some((cat, parse_secs_value(rest.trim())?))
-}
-
-fn parse_tool_multi_lock_category(name: &str) -> Option<ToolMultiLockCategory> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "手里剑" | "shuriken" => Some(ToolMultiLockCategory::Shuriken),
-        "伞" | "umbrella" => Some(ToolMultiLockCategory::Umbrella),
-        "雾鸦" | "mist raven" | "mistraven" | "mist" => Some(ToolMultiLockCategory::MistRaven),
-        "爆竹" | "firecracker" => Some(ToolMultiLockCategory::Firecracker),
-        "锈丸" | "sabimaru" => Some(ToolMultiLockCategory::Sabimaru),
-        _ => None,
-    }
-}
-
 fn parse_secs_value(raw: &str) -> Option<f32> {
     let num: String = raw
         .chars()
@@ -350,6 +277,28 @@ enum ToolMotion {
     TAlone,
     QAlone,
     Combo(ToolCombo),
+}
+
+/// `↑q-0.5s`, `↑q-多段触发时限0.5s`, or `↑q-multi-hit0.5s` after the bind token.
+fn parse_tool_motion_with_lock(raw: &str) -> Option<(ToolMotion, Option<f32>)> {
+    let raw = raw.trim();
+    for sep in ["-多段触发时限", "-multi-hit window", "-multi-hit"] {
+        if let Some((motion_part, rest)) = raw.split_once(sep) {
+            let secs = parse_secs_value(rest.trim())?;
+            let motion = parse_tool_motion(motion_part.trim())?;
+            return Some((motion, Some(secs)));
+        }
+    }
+    if let Some(dash_pos) = raw.rfind('-') {
+        let motion_part = raw[..dash_pos].trim();
+        let rest = raw[dash_pos + 1..].trim();
+        if let Some(secs) = parse_secs_value(rest) {
+            if let Some(motion) = parse_tool_motion(motion_part) {
+                return Some((motion, Some(secs)));
+            }
+        }
+    }
+    parse_tool_motion(raw).map(|motion| (motion, None))
 }
 
 /// `t` / `q` alone, or first∈{↑↓←→,r,l,e,q} then tail∈{q,t}. `f` still parses as interact (legacy).
@@ -463,14 +412,12 @@ mod test {
     }
 
     #[test]
-    fn test_tool_multi_lock_comment() {
+    fn test_tool_multi_lock_inline() {
         use crate::config::{
-            tool_multi_lock_secs_to_frames, ToolMultiLockCategory, DEFAULT_TOOL_MULTI_LOCK_SECS,
+            tool_multi_lock_secs_to_frames, DEFAULT_TOOL_MULTI_LOCK_SECS,
         };
 
-        let config = Config::from(
-            "# 多段触发时限: 手里剑 0s, 锈丸 0.5s\n70500 x t",
-        );
+        let config = Config::from("70500 x t-0s\n75300 x ↑q-0.5s");
         assert_eq!(config.tool_lock_frames(Some(70500)), 0);
         assert_eq!(config.tool_lock_frames(Some(75300)), 30);
         assert_eq!(
@@ -478,11 +425,12 @@ mod test {
             tool_multi_lock_secs_to_frames(DEFAULT_TOOL_MULTI_LOCK_SECS),
         );
 
-        let config = Config::from("# 多段触发时限·雾鸦: 0s\n74100 x q");
+        let config = Config::from("74100 x q-多段触发时限0s");
         assert_eq!(config.tool_lock_frames(Some(74100)), 0);
-        assert!(config
-            .tool_multi_lock_secs
-            .contains_key(&ToolMultiLockCategory::MistRaven));
+        assert_eq!(config.tool_multi_lock_secs.get(&74100), Some(&0.0));
+
+        let config = Config::from("71200 x →q-multi-hit0s");
+        assert_eq!(config.tool_lock_frames(Some(71200)), 0);
     }
 
     #[test]

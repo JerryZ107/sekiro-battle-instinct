@@ -28,7 +28,8 @@ Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.c
 | --- | --- | --- |
 | `# 启动信息print窗口: 关` | `# boot console: off` | 启动时是否弹出加载信息窗口（默认关） |
 | `# rl触发时限: 0.1s` | `# rl window: 0.1s` | 仅 `rl` 搓招：`r` 后须在此时间内按 `l` |
-| `# 多段触发时限: …` | `# multi-hit window: …` | 忍具族多段：松开后可再按 `t`/`q` 的时限（如手里剑 `0s`，锈丸 `0.5s`） |
+
+忍具多段触发时限写在**键位后**加 `-时间`，如 `↑q-0.5s` 或 `↑q-多段触发时限0.5s`；未写则默认 1s。Each prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
 
 ## 与原版的关系 / Relation to upstream
 
@@ -85,7 +86,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 - 若已配置裸 `q`，不宜再写 `qt`（单键 `q` 会先触发）
 - 未写键位的忍具行忽略
 
-因忍具键与忍具切换键皆有默认忍具，故其不能作为首键，只能作为尾键。且由于防御优先级较高、攻击键容易按出突刺，不建议使用 `r`/`l` 为首键。请写 `↑q` / `→t`，不要写 `q↑`。松开末键后约 **1 秒**锁定：不能换其他忍具；再按 `t`/`q` 刷新锁定并继续注入（多段），不回默认；按住期间不倒数。锁定结束后约 **1.4 秒**回到唯一的 `t` 默认忍具。
+因忍具键与忍具切换键皆有默认忍具，故其不能作为首键，只能作为尾键。且由于防御优先级较高、攻击键容易按出突刺，不建议使用 `r`/`l` 为首键。请写 `↑q` / `→t`，不要写 `q↑`。松开末键后约 **1 秒**锁定（可在键位后加 `-时间` 单独配置，如 `↑q-0.5s`）：不能换其他忍具；再按 `t`/`q` 刷新锁定并继续注入（多段），不回默认；按住期间不倒数。锁定结束后约 **1.4 秒**回到唯一的 `t` 默认忍具。
 
 - `q` = in-game “Switch Prosthetic”; `t` = “Use Prosthetic”
 - Bare `t`: unique **default** tool — press/hold to equip and inject use; other tools return to it afterward
@@ -94,24 +95,24 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 - If bare `q` is set, avoid `qt` (bare `q` fires first)
 - Prosthetic lines without a bind token are ignored
 
-Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first keys — only tails. Also avoid `r`/`l` as first keys: block has high priority; attack easily thrusts. Prefer `↑q` / `→t`; never write `q↑`. After releasing the tail key, about **1s** of lock (no countdown while held): cannot switch tools; pressing `t`/`q` again refreshes the lock and keeps injecting (multi-hit). After lock ends, about **1.4s** later it returns to the bare-`t` default.
+Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first keys — only tails. Also avoid `r`/`l` as first keys: block has high priority; attack easily thrusts. Prefer `↑q` / `→t`; never write `q↑`. After releasing the tail key, about **1s** of lock by default (override per bind with `-time`, e.g. `↑q-0.5s`): cannot switch tools; pressing `t`/`q` again refreshes the lock and keeps injecting (multi-hit). After lock ends, about **1.4s** later it returns to the bare-`t` default.
 
 当前发行包默认忍具键位 / Default release prosthetic binds:
 
 | 忍具(Prosthetic) | 键位(Bind) |
 | --- | --- |
-| 琉璃手里剑 (Lazulite Shuriken) | `t` |
-| 老羽雾鸦 (Aged Feather Mist Raven) | `q` |
-| 朱雀红莲伞 (Suzaku's Lotus Umbrella) | `↓q` |
-| 凤凰紫青伞 (Phoenix's Lilac Umbrella) | `↓t` |
-| 爱哭鬼 (Mountain Echo) | `et` |
-| 火舌 (Leaping Flame) | `↑t` |
-| 螺旋号 (Spiral Spear) | `et` |
-| 火镰式机关斧 (Sparking Axe) | `←q` |
-| 琉璃锈丸 (Lazulite Sabimaru) | `↑q` |
-| 气吹长火筒 (Okinaga's Flame Vent) | `←t` |
-| 长效火花 (Long Spark) | `→q` |
-| 捐赠簿 (Finger Whistle / Divine Abduction bind) | `eq` |
+| 琉璃手里剑 (Lazulite Shuriken) | `t-0s` |
+| 老羽雾鸦 (Aged Feather Mist Raven) | `q-0s` |
+| 朱雀红莲伞 (Suzaku's Lotus Umbrella) | `↓q-0s` |
+| 凤凰紫青伞 (Phoenix's Lilac Umbrella) | `↓t-0s` |
+| 爱哭鬼 (Mountain Echo) | `et-0s` |
+| 火舌 (Leaping Flame) | `↑t-0.67s` |
+| 螺旋号 (Spiral Spear) | `et-0.67s` |
+| 火镰式机关斧 (Sparking Axe) | `←q-0.5s` |
+| 琉璃锈丸 (Lazulite Sabimaru) | `↑q-0.5s` |
+| 气吹长火筒 (Okinaga's Flame Vent) | `←t-0.5s` |
+| 长效火花 (Long Spark) | `→q-0s` |
+| 捐赠簿 (Finger Whistle / Divine Abduction bind) | `eq-0s` |
 
 ## 自行编译（可选） / Build yourself (optional)
 
