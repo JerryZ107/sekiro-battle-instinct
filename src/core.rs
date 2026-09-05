@@ -23,8 +23,6 @@ const ATTACK_SUPRESSION_DURATION: u8 = 4;
 const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
 /// After tool lock expires, wait ~1.4s before returning to bare-`t` default.
 const PROSTHETIC_RETURN_DELAY: Frames = Frames::standard(84);
-/// After releasing the tool key, block switching ~1s; pressing `t`/`q` refreshes (multi-hit).
-const PROSTHETIC_TOOL_LOCK: Frames = Frames::standard(60);
 /// Window for first key → q/t (~0.3s @60fps).
 const TOOL_FIRST_MAX_AGE: u16 = 18;
 
@@ -300,7 +298,7 @@ impl Mod {
     }
 
     fn refresh_tool_lock(&mut self) {
-        self.tool_lock_left = PROSTHETIC_TOOL_LOCK.as_actual();
+        self.tool_lock_left = self.config.tool_lock_frames(self.cur_tool);
         self.return_default_left = 0;
     }
 

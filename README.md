@@ -28,6 +28,7 @@ Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.c
 | --- | --- | --- |
 | `# 启动信息print窗口: 关` | `# boot console: off` | 启动时是否弹出加载信息窗口（默认关） |
 | `# rl触发时限: 0.1s` | `# rl window: 0.1s` | 仅 `rl` 搓招：`r` 后须在此时间内按 `l` |
+| `# 多段触发时限: …` | `# multi-hit window: …` | 忍具族多段：松开后可再按 `t`/`q` 的时限（如手里剑 `0s`，锈丸 `0.5s`） |
 
 ## 与原版的关系 / Relation to upstream
 
@@ -54,7 +55,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | 动作(Interact) `e` | 动作、(长按)吸引 (Interact / hold to beckon) |
 | 方向箭头(Arrows) | 移动（WASD / 摇杆）(Move: WASD / stick) |
 | `ee` | 连按两次动作键 (Double-tap interact) |
-| `rl` / `re` / `er` / `el` 等 | 两个键的顺序组合 (Ordered two-key pairs) |
+| `rl` / `re` / `er` / `el` 等 | 两个键的顺序组合 (Ordered two-key pairs)；同一行可用 `/` 写多种搓法，如 `↓l/l↓` |
 
 当前发行包默认键位（可改 cfg）/ Default release binds (editable in cfg):
 
@@ -63,8 +64,8 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | 一字斩·二连 (Ichimonji: Double) | `ee` |
 | 巨型忍者落杀 (Shadowfall) | `re` |
 | 寄鹰斩 (Nightjar Slash) | `↑l` |
-| 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓r` |
-| 苇名十字斩 (Ashina Cross) | `↓l` |
+| 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓l` / `l↓` |
+| 苇名十字斩 (Ashina Cross) | `↓r` |
 | 仙峰寺菩萨脚 (High Monk) | `↑r` |
 | 连击叩拜拳·破魔 (Praying Strikes - Exorcism) | `r↑` |
 | 旋风斩 (Whirlwind Slash) | `e↑` |
@@ -103,11 +104,11 @@ Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first
 | 老羽雾鸦 (Aged Feather Mist Raven) | `q` |
 | 朱雀红莲伞 (Suzaku's Lotus Umbrella) | `↓q` |
 | 凤凰紫青伞 (Phoenix's Lilac Umbrella) | `↓t` |
-| 爱哭鬼 (Mountain Echo) | `→t` |
-| 火舌 (Leaping Flame) | `↑q` |
+| 爱哭鬼 (Mountain Echo) | `et` |
+| 火舌 (Leaping Flame) | `↑t` |
 | 螺旋号 (Spiral Spear) | `et` |
 | 火镰式机关斧 (Sparking Axe) | `←q` |
-| 琉璃锈丸 (Lazulite Sabimaru) | `↑t` |
+| 琉璃锈丸 (Lazulite Sabimaru) | `↑q` |
 | 气吹长火筒 (Okinaga's Flame Vent) | `←t` |
 | 长效火花 (Long Spark) | `→q` |
 | 捐赠簿 (Finger Whistle / Divine Abduction bind) | `eq` |
