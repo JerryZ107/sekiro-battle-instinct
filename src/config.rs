@@ -61,11 +61,18 @@ pub struct ToolCombo {
 pub const DEFAULT_RL_WINDOW_SECS: f32 = 0.1;
 /// Default two-key prosthetic window (first → q/t) in seconds @60fps (~18 frames).
 pub const DEFAULT_TOOL_TRIGGER_WINDOW_SECS: f32 = 0.3;
+/// After releasing the last art key, wait this long before flushing a queued art (@60fps).
+pub const DEFAULT_ART_QUEUE_DELAY_SECS: f32 = 0.3;
 const RL_WINDOW_FPS: f32 = 60.0;
 
 /// Convert cfg seconds to frame budget (same 60fps basis as other combo windows).
 pub fn rl_window_secs_to_frames(secs: f32) -> u16 {
     (secs * RL_WINDOW_FPS).round().clamp(1.0, 120.0) as u16
+}
+
+/// Queue flush delay frames; `0s` = flush on the same frame busy ends.
+pub fn art_queue_delay_secs_to_frames(secs: f32) -> u16 {
+    (secs * RL_WINDOW_FPS).round().clamp(0.0, 300.0) as u16
 }
 
 /// Default prosthetic multi-hit lock after releasing the tail key (@60fps basis for secs).
@@ -93,6 +100,8 @@ pub struct Config {
     pub rl_combo_max_age: u16,
     /// Two-key prosthetic: max frames between first key and q/t (@60fps).
     pub tool_combo_max_age: u16,
+    /// After last-key release, frames before flushing a queued combat art (@60fps).
+    pub art_queue_delay_frames: u16,
     /// Startup progress console (`# 启动信息print窗口`).
     pub boot_console: bool,
     /// Per-UID multi-hit lock after tail release (inline `↑q-0.5s` / `↑q-多段触发时限0.5s`).
@@ -131,6 +140,7 @@ impl Default for Config {
             tool_on_q: None,
             rl_combo_max_age: rl_window_secs_to_frames(DEFAULT_RL_WINDOW_SECS),
             tool_combo_max_age: rl_window_secs_to_frames(DEFAULT_TOOL_TRIGGER_WINDOW_SECS),
+            art_queue_delay_frames: art_queue_delay_secs_to_frames(DEFAULT_ART_QUEUE_DELAY_SECS),
             boot_console: false,
             tool_multi_lock_secs: HashMap::new(),
         }
@@ -147,6 +157,10 @@ impl<S: AsRef<str>> From<S> for Config {
             }
             if let Some(secs) = parse_tool_trigger_window_comment(line) {
                 config.tool_combo_max_age = rl_window_secs_to_frames(secs);
+                continue;
+            }
+            if let Some(secs) = parse_art_queue_delay_comment(line) {
+                config.art_queue_delay_frames = art_queue_delay_secs_to_frames(secs);
                 continue;
             }
             if let Some(v) = crate::cfg_meta::parse_boot_console_comment(line) {
@@ -256,15 +270,20 @@ fn insert_tool_multi_lock(config: &mut Config, id: UID, secs: f32) {
 
 /// `# rl触发时限: 0.1s` or `# rl window: 0.1s` (optional trailing `s`).
 fn parse_rl_window_comment(line: &str) -> Option<f32> {
-    parse_window_secs_comment(line, &["rl触发时限", "rl window"])
+    parse_window_secs_comment(line, &["rl触发时限", "rl window"], false)
 }
 
 /// `# 忍具触发时限: 0.3s` or `# tool trigger window: 0.3s` (optional trailing `s`).
 fn parse_tool_trigger_window_comment(line: &str) -> Option<f32> {
-    parse_window_secs_comment(line, &["忍具触发时限", "tool trigger window"])
+    parse_window_secs_comment(line, &["忍具触发时限", "tool trigger window"], false)
 }
 
-fn parse_window_secs_comment(line: &str, keys: &[&str]) -> Option<f32> {
+/// `# 武技排队等待: 0.3s` or `# art queue delay: 0.3s` (`0s` = flush immediately).
+fn parse_art_queue_delay_comment(line: &str) -> Option<f32> {
+    parse_window_secs_comment(line, &["武技排队等待", "art queue delay"], true)
+}
+
+fn parse_window_secs_comment(line: &str, keys: &[&str], allow_zero: bool) -> Option<f32> {
     let text = line.trim();
     if !text.starts_with('#') {
         return None;
@@ -280,7 +299,11 @@ fn parse_window_secs_comment(line: &str, keys: &[&str]) -> Option<f32> {
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     let secs = num.parse::<f32>().ok()?;
-    (secs > 0.0).then_some(secs)
+    if allow_zero {
+        (secs >= 0.0).then_some(secs)
+    } else {
+        (secs > 0.0).then_some(secs)
+    }
 }
 
 fn parse_secs_value(raw: &str) -> Option<f32> {
@@ -427,6 +450,22 @@ mod test {
         let config = Config::from("# rl window: 0.15\n7700 Sakura rl");
         assert_eq!(config.rl_combo_max_age, 9);
         assert_eq!(config.rl_combo_max_age, rl_window_secs_to_frames(0.15));
+    }
+
+    #[test]
+    fn test_art_queue_delay_comment() {
+        use crate::config::art_queue_delay_secs_to_frames;
+
+        let config = Config::from("# 武技排队等待: 0.5s\n7100 x ee");
+        assert_eq!(config.art_queue_delay_frames, 30);
+
+        let config = Config::from("# art queue delay: 0s\n7100 x ee");
+        assert_eq!(config.art_queue_delay_frames, 0);
+
+        assert_eq!(
+            Config::default().art_queue_delay_frames,
+            art_queue_delay_secs_to_frames(0.3),
+        );
     }
 
     #[test]

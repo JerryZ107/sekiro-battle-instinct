@@ -87,6 +87,10 @@ pub struct Mod {
     art_attack_latched: bool,
     /// Latest combo art waiting until sustained fire ends (size 1, newest wins).
     queued_art: Option<(UID, ArtToken)>,
+    /// Frames left after last-key release before flushing `queued_art` (from cfg).
+    queue_flush_left: u16,
+    /// Skip one flush tick so delay starts counting from the frame after release.
+    queue_flush_skip_tick: bool,
     /// When hold key is already up (typical after queue flush), keep firing this many frames.
     art_tap_frames: u8,
     /// Diagnostic: frames since current art fire armed (0 = idle).
@@ -142,6 +146,8 @@ impl Mod {
             art_block_inject_left: 0,
             art_attack_latched: false,
             queued_art: None,
+            queue_flush_left: 0,
+            queue_flush_skip_tick: false,
             art_tap_frames: 0,
             art_diag_n: 0,
             art_diag_phase: "idle",
@@ -194,6 +200,47 @@ impl Mod {
         self.art_tap_frames = 0;
         self.art_diag_n = 0;
         self.art_diag_phase = "idle";
+    }
+
+    /// End sustained fire; if a queued art is waiting, start the cfg flush delay.
+    fn end_art_fire_for_queue(&mut self) {
+        self.clear_art_fire();
+        if self.queued_art.is_some() {
+            self.queue_flush_left = self.config.art_queue_delay_frames;
+            self.queue_flush_skip_tick = true;
+            log::info!(
+                "ART_QUEUE_WAIT delay={} uid={:?}",
+                self.queue_flush_left,
+                self.queued_art.as_ref().map(|(uid, _)| *uid),
+            );
+        }
+    }
+
+    fn clear_queued_art(&mut self) {
+        self.queued_art = None;
+        self.queue_flush_left = 0;
+        self.queue_flush_skip_tick = false;
+    }
+
+    fn try_flush_queued_art(&mut self) -> Option<(UID, ArtToken)> {
+        if self.queued_art.is_none() {
+            return None;
+        }
+        if self.queue_flush_skip_tick {
+            self.queue_flush_skip_tick = false;
+            if self.queue_flush_left == 0 {
+                return self.queued_art.take();
+            }
+            return None;
+        }
+        if self.queue_flush_left > 0 {
+            self.queue_flush_left -= 1;
+            if self.queue_flush_left == 0 {
+                return self.queued_art.take();
+            }
+            return None;
+        }
+        self.queued_art.take()
     }
 
     fn arm_combo_fire(&mut self, hold: ArtToken) {
@@ -552,11 +599,11 @@ impl Mod {
                 log::info!("ART_ABORT jump={} dodge={}", jumping, dodging);
             }
             self.clear_art_fire();
-            self.queued_art = None;
+            self.clear_queued_art();
         } else if let Some(token) = self.hold_for_attack {
             if !self.art_combo.token_held(token) && self.art_tap_frames == 0 {
                 log::info!("ART_RELEASE hold={:?} (key up)", token);
-                self.clear_art_fire();
+                self.end_art_fire_for_queue();
             }
         }
 
@@ -578,7 +625,7 @@ impl Mod {
             if let (Some(uid), Some(hold)) = (self.config.art(combo), combo.second()) {
                 self.art_combo.clear();
                 if self.art_fire_busy() {
-                    // Sustained fire still running: queue and flush when it ends.
+                    // Sustained fire still running: queue and flush after release + delay.
                     log::info!(
                         "ART_QUEUE uid={} hold={:?} busy cur={:?}",
                         uid,
@@ -586,6 +633,9 @@ impl Mod {
                         self.cur_art
                     );
                     self.queued_art = Some((uid, hold));
+                    // Delay starts when current fire ends, not when queued.
+                    self.queue_flush_left = 0;
+                    self.queue_flush_skip_tick = false;
                     None
                 } else {
                     log::info!(
@@ -599,15 +649,14 @@ impl Mod {
                     performed_block_free_art_just_now = true;
                     pending_rl = true;
                     self.arm_combo_fire(hold);
-                    self.queued_art = None;
+                    self.clear_queued_art();
                     Some(uid)
                 }
             } else {
                 None
             }
         } else if !self.art_fire_busy() {
-            if let Some((uid, hold)) = self.queued_art.take() {
-                // Previous sustained fire just ended — start the queued art.
+            if let Some((uid, hold)) = self.try_flush_queued_art() {
                 log::info!("ART_FLUSH_QUEUE uid={} hold={:?}", uid, hold);
                 performed_block_free_art_just_now = true;
                 pending_rl = true;
@@ -791,7 +840,7 @@ impl Mod {
                         self.art_tap_frames -= 1;
                         if self.art_tap_frames == 0 {
                             log::info!("ART_TAP_END");
-                            self.clear_art_fire();
+                            self.end_art_fire_for_queue();
                         }
                     }
                 } else if self.art_diag_n % 15 == 0 {

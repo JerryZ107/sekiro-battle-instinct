@@ -29,6 +29,7 @@ Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.c
 | `# 启动信息print窗口: 关` | `# boot console: off` | 启动时是否弹出加载信息窗口（默认关） |
 | `# rl触发时限: 0.1s` | `# rl window: 0.1s` | 仅 `rl` 搓招：`r` 后须在此时间内按 `l` |
 | `# 忍具触发时限: 0.3s` | `# tool trigger window: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
+| `# 武技排队等待: 0.3s` | `# art queue delay: 0.3s` | 上一招末键松手后，再等此时长才放出排队武技；`0s` = 松手后立刻放 |
 
 忍具多段触发时限写在**键位后**加 `-时间`，如 `↑q-0.5s` 或 `↑q-多段触发时限0.5s`；未写则默认 1s。Each prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
 
@@ -46,9 +47,9 @@ If you prefer the original feel, use the upstream release instead.
 
 ## 武技搓招（两个键） / Combat arts (two keys)
 
-键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入防御+攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，松手后放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**；**`rl` 樱舞** 默认约 **0.1s**（可在 cfg 调整）。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码：`res/battle_instinct_zh.cfg`（中文）、`res/battle_instinct.cfg`（英文）；发行包：`dist/zh/`、`dist/en/`。
+键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入防御+攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，**末键松手后再等一段 cfg 可调时间**（`# 武技排队等待`，默认约 0.3s；`0s` 则立刻放）才放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**；**`rl` 樱舞** 默认约 **0.1s**（可在 cfg 调整）。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码：`res/battle_instinct_zh.cfg`（中文）、`res/battle_instinct.cfg`（英文）；发行包：`dist/zh/`、`dist/en/`。
 
-Keys follow in-game actions (remaps still work). On a two-key match: swap art slot → briefly suppress attack → inject block+attack; hold the second key to keep injecting attack (charge), release to stop. Combos input while an art is still injecting are queued and fire after release. Default detect window is about **0.3s**; about **0.7s** when the first key is `l` (e.g. `l↑`); **`rl` (Sakura Dance)** defaults to about **0.1s** (cfg-tunable). Avoid `r`/`l` as the first key: block has high priority; attack easily thrusts. Sources: `res/battle_instinct_zh.cfg` (ZH), `res/battle_instinct.cfg` (EN); releases: `dist/zh/`, `dist/en/`.
+Keys follow in-game actions (remaps still work). On a two-key match: swap art slot → briefly suppress attack → inject block+attack; hold the second key to keep injecting attack (charge), release to stop. Combos input while an art is still injecting are queued and fire after release **plus** a cfg delay (`# art queue delay`, default ~0.3s; `0s` = flush immediately). Default detect window is about **0.3s**; about **0.7s** when the first key is `l` (e.g. `l↑`); **`rl` (Sakura Dance)** defaults to about **0.1s** (cfg-tunable). Avoid `r`/`l` as the first key: block has high priority; attack easily thrusts. Sources: `res/battle_instinct_zh.cfg` (ZH), `res/battle_instinct.cfg` (EN); releases: `dist/zh/`, `dist/en/`.
 
 | 符号(Symbol) | 含义(Meaning) |
 | --- | --- |
