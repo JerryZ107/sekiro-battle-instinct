@@ -23,9 +23,7 @@ const ATTACK_SUPRESSION_DURATION: u8 = 4;
 const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
 /// After tool lock expires, wait ~1.4s before returning to bare-`t` default.
 const PROSTHETIC_RETURN_DELAY: Frames = Frames::standard(84);
-/// Window for first key → q/t (~0.3s @60fps).
-const TOOL_FIRST_MAX_AGE: u16 = 18;
-
+/// Window for first key → q/t; default ~0.3s @60fps, overridable via cfg.
 // UIDs
 const ASHINA_CROSS: UID = 5500;
 const ONE_MIND: UID = 6100;
@@ -368,7 +366,7 @@ impl Mod {
 
         if self.tool_first.is_some() {
             self.tool_first_age = self.tool_first_age.saturating_add(1);
-            if self.tool_first_age >= TOOL_FIRST_MAX_AGE {
+            if self.tool_first_age >= self.config.tool_combo_max_age {
                 self.tool_first = None;
                 self.tool_first_age = 0;
             }

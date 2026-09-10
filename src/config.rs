@@ -59,6 +59,8 @@ pub struct ToolCombo {
 
 /// Default `rl` (Block→Attack) combo window in seconds @60fps.
 pub const DEFAULT_RL_WINDOW_SECS: f32 = 0.1;
+/// Default two-key prosthetic window (first → q/t) in seconds @60fps (~18 frames).
+pub const DEFAULT_TOOL_TRIGGER_WINDOW_SECS: f32 = 0.3;
 const RL_WINDOW_FPS: f32 = 60.0;
 
 /// Convert cfg seconds to frame budget (same 60fps basis as other combo windows).
@@ -89,6 +91,8 @@ pub struct Config {
     pub tool_on_q: Option<UID>,
     /// `rl` only: max frames between `r` and `l` (@60fps).
     pub rl_combo_max_age: u16,
+    /// Two-key prosthetic: max frames between first key and q/t (@60fps).
+    pub tool_combo_max_age: u16,
     /// Startup progress console (`# 启动信息print窗口`).
     pub boot_console: bool,
     /// Per-UID multi-hit lock after tail release (inline `↑q-0.5s` / `↑q-多段触发时限0.5s`).
@@ -126,6 +130,7 @@ impl Default for Config {
             tool_on_t: None,
             tool_on_q: None,
             rl_combo_max_age: rl_window_secs_to_frames(DEFAULT_RL_WINDOW_SECS),
+            tool_combo_max_age: rl_window_secs_to_frames(DEFAULT_TOOL_TRIGGER_WINDOW_SECS),
             boot_console: false,
             tool_multi_lock_secs: HashMap::new(),
         }
@@ -138,6 +143,10 @@ impl<S: AsRef<str>> From<S> for Config {
         for line in value.as_ref().lines() {
             if let Some(secs) = parse_rl_window_comment(line) {
                 config.rl_combo_max_age = rl_window_secs_to_frames(secs);
+                continue;
+            }
+            if let Some(secs) = parse_tool_trigger_window_comment(line) {
+                config.tool_combo_max_age = rl_window_secs_to_frames(secs);
                 continue;
             }
             if let Some(v) = crate::cfg_meta::parse_boot_console_comment(line) {
@@ -247,13 +256,22 @@ fn insert_tool_multi_lock(config: &mut Config, id: UID, secs: f32) {
 
 /// `# rl触发时限: 0.1s` or `# rl window: 0.1s` (optional trailing `s`).
 fn parse_rl_window_comment(line: &str) -> Option<f32> {
+    parse_window_secs_comment(line, &["rl触发时限", "rl window"])
+}
+
+/// `# 忍具触发时限: 0.3s` or `# tool trigger window: 0.3s` (optional trailing `s`).
+fn parse_tool_trigger_window_comment(line: &str) -> Option<f32> {
+    parse_window_secs_comment(line, &["忍具触发时限", "tool trigger window"])
+}
+
+fn parse_window_secs_comment(line: &str, keys: &[&str]) -> Option<f32> {
     let text = line.trim();
     if !text.starts_with('#') {
         return None;
     }
     let body = text.trim_start_matches('#').trim();
     let key = body.split([':', '：']).next()?.trim().to_ascii_lowercase();
-    if key != "rl触发时限" && key != "rl window" {
+    if !keys.iter().any(|k| key == k.to_ascii_lowercase()) {
         return None;
     }
     let rest = body.split([':', '：']).nth(1)?.trim();
@@ -409,6 +427,16 @@ mod test {
         let config = Config::from("# rl window: 0.15\n7700 Sakura rl");
         assert_eq!(config.rl_combo_max_age, 9);
         assert_eq!(config.rl_combo_max_age, rl_window_secs_to_frames(0.15));
+    }
+
+    #[test]
+    fn test_tool_trigger_window_comment() {
+        let config = Config::from("# 忍具触发时限: 0.5s\n70500 x t");
+        assert_eq!(config.tool_combo_max_age, 30);
+
+        let config = Config::from("# tool trigger window: 0.25\n70500 x t");
+        assert_eq!(config.tool_combo_max_age, 15);
+        assert_eq!(Config::default().tool_combo_max_age, 18);
     }
 
     #[test]

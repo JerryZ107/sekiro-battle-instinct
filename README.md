@@ -28,6 +28,7 @@ Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.c
 | --- | --- | --- |
 | `# 启动信息print窗口: 关` | `# boot console: off` | 启动时是否弹出加载信息窗口（默认关） |
 | `# rl触发时限: 0.1s` | `# rl window: 0.1s` | 仅 `rl` 搓招：`r` 后须在此时间内按 `l` |
+| `# 忍具触发时限: 0.3s` | `# tool trigger window: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
 
 忍具多段触发时限写在**键位后**加 `-时间`，如 `↑q-0.5s` 或 `↑q-多段触发时限0.5s`；未写则默认 1s。Each prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
 
@@ -82,7 +83,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 - `q` = 游戏内「切换忍具」；`t` =「使用忍具」
 - 配置里写 `t`：全场唯一**默认**忍具，按/按住即装备并注入使用；其它忍具结束后会回到它
 - 配置里写 `q`：可另绑一个单键忍具，**触发方式与 `t` 相同**（不会成为回默认目标）
-- 双键：首键为方向、r/l/e，**尾键只能是 q 或 t**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入
+- 双键：首键为方向、r/l/e，**尾键只能是 q 或 t**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入（窗口可在 cfg 用 `# 忍具触发时限` 调整，默认约 0.3s）
 - 若已配置裸 `q`，不宜再写 `qt`（单键 `q` 会先触发）
 - 未写键位的忍具行忽略
 
@@ -91,7 +92,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 - `q` = in-game “Switch Prosthetic”; `t` = “Use Prosthetic”
 - Bare `t`: unique **default** tool — press/hold to equip and inject use; other tools return to it afterward
 - Bare `q`: optional second one-key tool with the **same fire style as `t`** (not the return-default target)
-- Two-key: first is move/r/l/e; **tail must be q or t** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain
+- Two-key: first is move/r/l/e; **tail must be q or t** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain (window tunable via `# tool trigger window`, default ~0.3s)
 - If bare `q` is set, avoid `qt` (bare `q` fires first)
 - Prosthetic lines without a bind token are ignored
 
