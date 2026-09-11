@@ -65,26 +65,26 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | 武技(Combat Art) | 键位(Bind) |
 | --- | --- |
 | 一字斩·二连 (Ichimonji: Double) | `ee` |
-| 巨型忍者落杀 (Shadowfall) | `re` |
+| 巨型忍者落杀 (Shadowfall) | `r↑` |
 | 寄鹰斩 (Nightjar Slash) | `↑l` |
 | 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓l` / `l↓` |
-| 苇名十字斩 (Ashina Cross) | `↓r` |
+| 苇名十字斩 (Ashina Cross) | `r↓` |
 | 仙峰寺菩萨脚 (High Monk) | `↑r` |
-| 连击叩拜拳·破魔 (Praying Strikes - Exorcism) | `r↑` |
+| 连击叩拜拳·破魔 (Praying Strikes - Exorcism) | `↓r` |
 | 旋风斩 (Whirlwind Slash) | `e↑` |
 | 樱舞 (Sakura Dance) | `rl` |
 | 飞渡浮舟 (Floating Passage) | `l↑` |
 | 飞渡漩涡云 (Spiral Cloud Passage) | `↑e` |
 | 龙闪 (Dragon Flash) | `er` |
 | 一心 (One Mind) | `el` |
-| 不死斩 (Empowered Mortal Draw) | `r↓` |
+| 不死斩 (Empowered Mortal Draw) | `re` |
 
 ## 忍具（q / t） / Prosthetics (q / t)
 
 - `q` = 游戏内「切换忍具」；`t` =「使用忍具」
 - 配置里写 `t`：全场唯一**默认**忍具，按/按住即装备并注入使用；其它忍具结束后会回到它
 - 配置里写 `q`：可另绑一个单键忍具，**触发方式与 `t` 相同**（不会成为回默认目标）
-- 双键：首键为方向、r/l/e，**尾键只能是 q 或 t**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入（窗口可在 cfg 用 `# 忍具触发时限` 调整，默认约 0.3s）
+- 双键：首键为方向、r/l/e，**尾键为 q/t，或 r/l/e**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入（窗口可在 cfg 用 `# 忍具触发时限` 调整，默认约 0.3s）。例：`↑q`、`↑r`、`→l`、`↓e`。尾键为 r/l/e 时，同帧不会再出同键武技（请避免与武技键位冲突）
 - 若已配置裸 `q`，不宜再写 `qt`（单键 `q` 会先触发）
 - 未写键位的忍具行忽略
 
@@ -93,7 +93,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 - `q` = in-game “Switch Prosthetic”; `t` = “Use Prosthetic”
 - Bare `t`: unique **default** tool — press/hold to equip and inject use; other tools return to it afterward
 - Bare `q`: optional second one-key tool with the **same fire style as `t`** (not the return-default target)
-- Two-key: first is move/r/l/e; **tail must be q or t** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain (window tunable via `# tool trigger window`, default ~0.3s)
+- Two-key: first is move/r/l/e; **tail is q/t, or r/l/e** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain (window tunable via `# tool trigger window`, default ~0.3s). Examples: `↑q`, `↑r`, `→l`, `↓e`. When the tail is r/l/e, the same-frame combat-art combo is suppressed (avoid overlapping art binds)
 - If bare `q` is set, avoid `qt` (bare `q` fires first)
 - Prosthetic lines without a bind token are ignored
 
@@ -108,10 +108,10 @@ Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first
 | 朱雀红莲伞 (Suzaku's Lotus Umbrella) | `↓q-0s` |
 | 凤凰紫青伞 (Phoenix's Lilac Umbrella) | `↓t-0s` |
 | 爱哭鬼 (Mountain Echo) | `et-0s` |
-| 火舌 (Leaping Flame) | `↑t-0.67s` |
+| 火舌 (Leaping Flame) | `↑q-0.67s` |
 | 螺旋号 (Spiral Spear) | `et-0.67s` |
 | 火镰式机关斧 (Sparking Axe) | `←q-0.5s` |
-| 琉璃锈丸 (Lazulite Sabimaru) | `↑q-0.5s` |
+| 琉璃锈丸 (Lazulite Sabimaru) | `↑t-0.5s` |
 | 气吹长火筒 (Okinaga's Flame Vent) | `←t-0.5s` |
 | 长效火花 (Long Spark) | `→q-0s` |
 | 捐赠簿 (Finger Whistle / Divine Abduction bind) | `eq-0s` |

@@ -347,10 +347,10 @@ impl Mod {
         self.return_default_left = 0;
     }
 
-    fn arm_tool(&mut self, uid: UID, tail: ToolTail) {
+    fn arm_tool(&mut self, uid: UID, tail: ToolTail) -> bool {
         // During lock, only allow re-arming the same tool (multi-hit via t).
         if self.tool_lock_left > 0 && self.cur_tool.is_some_and(|cur| cur != uid) {
-            return;
+            return false;
         }
         if self.equip_tool_uid(uid) {
             self.cur_tool = Some(uid);
@@ -360,7 +360,40 @@ impl Mod {
             self.refresh_tool_lock();
             self.tool_first = None;
             self.tool_first_age = 0;
+            true
+        } else {
+            false
         }
+    }
+
+    fn refresh_tool_hold(&mut self, tail: ToolTail) {
+        self.refresh_tool_lock();
+        self.tool_min_use = self.tool_min_use.max(3);
+        self.hold_tool_tail = Some(tail);
+        self.prosthetic_delay = 0;
+        self.tool_first = None;
+    }
+
+    /// Try to complete a pending first-key with `tail`. Returns true if a tool was armed.
+    fn try_complete_tool_tail(&mut self, tail: ToolTail) -> bool {
+        if self.tool_lock_left > 0 {
+            // Multi-hit: refresh when the arming tail (or use/switch) is pressed again.
+            let same_tail = self.hold_tool_tail == Some(tail);
+            let use_or_switch = matches!(tail, ToolTail::Use | ToolTail::Switch);
+            if same_tail || use_or_switch {
+                self.refresh_tool_hold(tail);
+                return true;
+            }
+        }
+        if let Some(first) = self.tool_first {
+            if let Some(uid) = self.config.tool(ToolCombo { first, tail }) {
+                return self.arm_tool(uid, tail);
+            }
+            // Pending first did not match this tail — clear so it does not stale.
+            self.tool_first = None;
+            self.tool_first_age = 0;
+        }
+        false
     }
 
     fn push_tool_first(&mut self, token: ToolFirst) {
@@ -368,8 +401,9 @@ impl Mod {
         self.tool_first_age = 0;
     }
 
-    /// Track ↑↓←→/r/l/f as first key; on q/t complete combo → equip + hold-inject USE.
+    /// Track ↑↓←→/r/l/f as first key; on q/t/r/l/e complete combo → equip + hold-inject USE.
     /// Bare `t` arms `tool_on_t`. Bare `q` arms `tool_on_q` (same fire style; return-default stays `t`).
+    /// Returns true when a tool was armed via `r`/`l`/`e` tail (caller should clear art combo).
     fn handle_prosthetic_input(
         &mut self,
         input_handler: &mut game::InputHandler,
@@ -382,8 +416,10 @@ impl Mod {
         interacting: bool,
         using_tool: bool,
         used_tool_just_now: bool,
-    ) {
-        // First-key edges for directions / r / l / f (`t` is never first; bare `q` is handled below).
+    ) -> bool {
+        let mut armed_via_art_tail = false;
+
+        // First-key edges for directions only (r/l/e may complete a combo as tail first).
         for (i, (held, token)) in [
             (up, ArtToken::Up),
             (right, ArtToken::Right),
@@ -398,16 +434,31 @@ impl Mod {
             }
             self.tool_keys_down[i] = held;
         }
+
         if blocking && !self.tool_block_down {
-            self.push_tool_first(ToolFirst::Block);
+            if self.try_complete_tool_tail(ToolTail::Block) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Block);
+            }
         }
         self.tool_block_down = blocking;
+
         if attacking && !self.tool_attack_down {
-            self.push_tool_first(ToolFirst::Attack);
+            if self.try_complete_tool_tail(ToolTail::Attack) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Attack);
+            }
         }
         self.tool_attack_down = attacking;
+
         if interacting && !self.tool_interact_down {
-            self.push_tool_first(ToolFirst::Interact);
+            if self.try_complete_tool_tail(ToolTail::Interact) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Interact);
+            }
         }
         self.tool_interact_down = interacting;
 
@@ -431,49 +482,37 @@ impl Mod {
 
         if switch_rising {
             if self.tool_lock_left > 0 {
-                // Same multi-hit refresh as bare/held `t` during lock.
-                self.refresh_tool_lock();
-                self.tool_min_use = self.tool_min_use.max(3);
-                self.hold_tool_tail = Some(ToolTail::Switch);
-                self.prosthetic_delay = 0;
-                self.tool_first = None;
+                self.refresh_tool_hold(ToolTail::Switch);
             } else if let Some(first) = self.tool_first {
-                // Pending first + q → try (first, Switch); else clear (mirror bare-t mismatch).
                 if let Some(uid) = self.config.tool(ToolCombo {
                     first,
                     tail: ToolTail::Switch,
                 }) {
-                    self.arm_tool(uid, ToolTail::Switch);
+                    let _ = self.arm_tool(uid, ToolTail::Switch);
                 } else {
                     self.tool_first = None;
                 }
             } else if let Some(uid) = self.config.tool_on_q {
-                self.arm_tool(uid, ToolTail::Switch);
+                let _ = self.arm_tool(uid, ToolTail::Switch);
             } else {
-                // No bare-q: keep q as a possible first key (e.g. `qt`).
                 self.push_tool_first(ToolFirst::Switch);
             }
         }
 
         if used_tool_just_now {
             if self.tool_lock_left > 0 {
-                // Multi-hit window: refresh lock, keep current tool, inject more USE.
-                self.refresh_tool_lock();
-                self.tool_min_use = self.tool_min_use.max(3);
-                self.hold_tool_tail = Some(ToolTail::Use);
-                self.prosthetic_delay = 0;
-                self.tool_first = None;
+                self.refresh_tool_hold(ToolTail::Use);
             } else if let Some(first) = self.tool_first {
                 if let Some(uid) = self.config.tool(ToolCombo {
                     first,
                     tail: ToolTail::Use,
                 }) {
-                    self.arm_tool(uid, ToolTail::Use);
+                    let _ = self.arm_tool(uid, ToolTail::Use);
                 } else {
                     self.tool_first = None;
                 }
             } else if let Some(uid) = self.config.tool_on_t {
-                self.arm_tool(uid, ToolTail::Use);
+                let _ = self.arm_tool(uid, ToolTail::Use);
             }
         }
 
@@ -482,19 +521,20 @@ impl Mod {
             let held = match self.hold_tool_tail {
                 Some(ToolTail::Switch) => switch_down,
                 Some(ToolTail::Use) => using_tool || used_tool_just_now,
+                Some(ToolTail::Block) => blocking,
+                Some(ToolTail::Attack) => attacking,
+                Some(ToolTail::Interact) => interacting,
                 None => false,
             };
             if self.prosthetic_delay > 0 || held || self.tool_min_use > 0 {
                 self.return_default_left = 0;
             } else {
                 self.hold_tool_tail = None;
-                // Do not return to default while tool lock is active.
             }
         }
 
         if self.tool_lock_left > 0 {
             self.return_default_left = 0;
-            // Countdown only after the tail key is released (and min-inject/settle done).
             let still_firing = self.hold_tool_tail.is_some()
                 || self.tool_min_use > 0
                 || self.prosthetic_delay > 0;
@@ -514,6 +554,8 @@ impl Mod {
                 self.return_to_default_tool();
             }
         }
+
+        armed_via_art_tail
     }
 
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
@@ -562,7 +604,7 @@ impl Mod {
                 self.return_to_default_tool();
             }
         }
-        self.handle_prosthetic_input(
+        let tool_armed_via_art_tail = self.handle_prosthetic_input(
             input_handler,
             combo_up,
             combo_right,
@@ -587,6 +629,10 @@ impl Mod {
             attacking,
             interacting,
         );
+        // Tool took this r/l/e completion — do not also fire a combat art on the same keys.
+        if tool_armed_via_art_tail {
+            self.art_combo.clear();
+        }
         let late_rl_rejected = self.art_combo.take_late_rl_rejected();
         if late_rl_rejected {
             self.suppress_late_rl_skill = true;
@@ -602,8 +648,15 @@ impl Mod {
             self.clear_queued_art();
         } else if let Some(token) = self.hold_for_attack {
             if !self.art_combo.token_held(token) && self.art_tap_frames == 0 {
-                log::info!("ART_RELEASE hold={:?} (key up)", token);
-                self.end_art_fire_for_queue();
+                if !self.art_attack_latched {
+                    // Released during settle / prime (common for quick `ee`): still fire a short
+                    // B+A inject instead of cancelling into a bare block.
+                    self.art_tap_frames = ART_BLOCK_INJECTION_DURATION.saturating_add(3);
+                    log::info!("ART_RELEASE→TAP hold={:?} tap={}", token, self.art_tap_frames);
+                } else {
+                    log::info!("ART_RELEASE hold={:?} (key up)", token);
+                    self.end_art_fire_for_queue();
+                }
             }
         }
 
@@ -727,6 +780,16 @@ impl Mod {
         // Auto rl: after settle (attack_delay), fire with short BLOCK + hold-tied ATTACK.
         if pending_rl {
             self.pending_rl_attack = true;
+            // Same-slot hit (e.g. Sakura already equipped): still force settle so the player's
+            // own B+A cannot vanilla-activate the art and skip the inject path.
+            if self.attack_delay == 0 {
+                self.attack_delay = ATTACK_SUPRESSION_DURATION;
+                log::info!(
+                    "ART_SETTLE same_slot delay={} hold={:?}",
+                    self.attack_delay,
+                    self.hold_for_attack
+                );
+            }
         }
 
         /***** action injection *****/
@@ -775,6 +838,13 @@ impl Mod {
             }
         }
 
+        // Successful `rl` (and any combo whose last key is Attack): strip player ATTACK
+        // until mod inject latches B+A. Prevents vanilla combat-art fire on the hit frame
+        // when the art is already equipped (no slot swap).
+        if matches!(self.hold_for_attack, Some(ArtToken::Attack)) && !self.art_attack_latched {
+            *action &= !ATTACK;
+        }
+
         // if ATTACK|BLOCK happens way too quick after combat art switching
         // Wirdwind Slash will be performed instead of the just equipped combat art
         // supressing the few ATTACK frames that happens right after combat art switching solves the bug
@@ -797,6 +867,7 @@ impl Mod {
         // Sustained art fire:
         // 1) first N frames: BLOCK only + suppress ATTACK (prevents a stray R1/whirlwind)
         // 2) then: BLOCK+ATTACK while last combo token is held (charge / multi-hit)
+        //    For `ee`, the last token is Interact — hold e to keep injecting B+A (charge).
         if self.attack_delay == 0 {
             if let Some(token) = self.hold_for_attack {
                 let held = self.art_combo.token_held(token);
@@ -853,6 +924,8 @@ impl Mod {
             }
         }
         // Prosthetic: settle a few frames after equip, then inject USE while tail held (or min tap).
+        // When the combo tail is r/l/e, strip that vanilla action so ↑r fires the tool directly
+        // (like swallowing SWITCH for q), not "block first, then use".
         if self.prosthetic_delay != 0 {
             *action &= !USE_PROSTHETIC;
             self.prosthetic_delay -= 1;
@@ -861,6 +934,12 @@ impl Mod {
             if self.tool_min_use > 0 {
                 self.tool_min_use -= 1;
             }
+        }
+        match self.hold_tool_tail {
+            Some(ToolTail::Block) => *action &= !BLOCK,
+            Some(ToolTail::Attack) => *action &= !ATTACK,
+            Some(ToolTail::Interact) => *action &= !INTERACT,
+            _ => {}
         }
 
         /***** for next frame to refer to *****/

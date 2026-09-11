@@ -13,13 +13,16 @@ const COMBART_ART_UID_MAX: UID = 10000;
 const PROSTHETIC_TOOL_UID_MIN: UID = 70000;
 const PROSTHETIC_TOOL_UID_MAX: UID = 100000;
 
-/// Tail key of a prosthetic combo: `q` = switch, `t` = use.
+/// Tail key of a prosthetic combo: `q`/`t`, or `r`/`l`/`e`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ToolTail {
     /// In-game「切换忍具」(action 0x400).
     Switch,
     /// In-game「使用忍具」(USE_PROSTHETIC).
     Use,
+    Block,
+    Attack,
+    Interact,
 }
 
 /// First key of a prosthetic combo. `t` cannot be first; `q` can.
@@ -342,8 +345,9 @@ fn parse_tool_motion_with_lock(raw: &str) -> Option<(ToolMotion, Option<f32>)> {
     parse_tool_motion(raw).map(|motion| (motion, None))
 }
 
-/// `t` / `q` alone, or first∈{↑↓←→,r,l,e,q} then tail∈{q,t}. `f` still parses as interact (legacy).
+/// `t` / `q` alone, or first∈{↑↓←→,r,l,e,q} then tail∈{q,t,r,l,e}. `f` still parses as interact (legacy).
 /// Bare `q` is exclusive with using `q` as a two-key first (e.g. `qt`).
+/// Tail `r`/`l`/`e` arms the tool and hold-injects USE while that key is held (same as `q`/`t`).
 fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     let motion = motion.trim();
     if motion == "t" || motion == "T" {
@@ -374,8 +378,21 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     let tail = match tail_ch {
         'q' | 'Q' => ToolTail::Switch,
         't' | 'T' => ToolTail::Use,
+        'r' | 'R' => ToolTail::Block,
+        'l' | 'L' => ToolTail::Attack,
+        'f' | 'F' | 'e' | 'E' => ToolTail::Interact,
         _ => return None,
     };
+    // Same physical key twice (e.g. `rr`) is not useful as a prosthetic bind.
+    if matches!(
+        (first, tail),
+        (ToolFirst::Block, ToolTail::Block)
+            | (ToolFirst::Attack, ToolTail::Attack)
+            | (ToolFirst::Interact, ToolTail::Interact)
+            | (ToolFirst::Switch, ToolTail::Switch)
+    ) {
+        return None;
+    }
     Some(ToolMotion::Combo(ToolCombo { first, tail }))
 }
 
@@ -556,5 +573,42 @@ mod test {
             }),
             Some(79200)
         );
+    }
+
+    #[test]
+    fn test_tool_tail_block_attack_interact() {
+        let config = Config::from(
+            "76200 umb ↑r\n75300 sabi →l\n71200 spark ↓e\n70500 shur rr",
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Block
+            }),
+            Some(76200)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Right,
+                tail: ToolTail::Attack
+            }),
+            Some(75300)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Down,
+                tail: ToolTail::Interact
+            }),
+            Some(71200)
+        );
+        // `rr` rejected
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Block,
+                tail: ToolTail::Block
+            }),
+            None
+        );
+        assert_eq!(config.tool_on_t, None);
     }
 }
