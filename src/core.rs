@@ -20,6 +20,10 @@ const BLOCK_INJECTION_DURATION: u8 = 10;
 /// Block frames to inject when starting a combo-fired combat art.
 const ART_BLOCK_INJECTION_DURATION: u8 = 2;
 const ATTACK_SUPRESSION_DURATION: u8 = 4;
+/// Extra settle frames after swapping combat-art slot before mod injects B+A.
+const SLOT_SWAP_SETTLE_DURATION: u8 = 6;
+/// Vanilla combat-art activation (skill slot reads real keyboard B+A).
+const VANILLA_ART_INPUT: u64 = BLOCK | ATTACK;
 const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
 /// After tool lock expires, wait ~1.4s before returning to bare-`t` default.
 const PROSTHETIC_RETURN_DELAY: Frames = Frames::standard(84);
@@ -616,7 +620,6 @@ impl Mod {
             using_tool,
             used_tool_just_now,
         );
-        let action = &mut input_handler.action;
 
         /***** update combat-art token buffer (r/l/f + directions) *****/
         // `f` = in-game「动作、(长按)吸引」(remap + pad), not a hardcoded VK_E.
@@ -677,7 +680,8 @@ impl Mod {
             // Two consecutive tokens matched (e.g. r↑, ↑f, ff, rl, rf, fr, fl).
             if let (Some(uid), Some(hold)) = (self.config.art(combo), combo.second()) {
                 self.art_combo.clear();
-                if self.art_fire_busy() {
+                let is_rl = combo.is_rl();
+                if self.art_fire_busy() && !is_rl {
                     // Sustained fire still running: queue and flush after release + delay.
                     log::info!(
                         "ART_QUEUE uid={} hold={:?} busy cur={:?}",
@@ -691,6 +695,15 @@ impl Mod {
                     self.queue_flush_skip_tick = false;
                     None
                 } else {
+                    if is_rl && self.art_fire_busy() {
+                        log::info!(
+                            "ART_RL_PREEMPT busy cur={:?} -> uid={}",
+                            self.cur_art,
+                            uid
+                        );
+                        self.clear_art_fire();
+                        self.clear_queued_art();
+                    }
                     log::info!(
                         "ART_HIT uid={} hold={:?} cur_before={:?} already={} swapout_done={}",
                         uid,
@@ -743,17 +756,23 @@ impl Mod {
         }
 
         /***** equip the desired combat art (or its fallback version) *****/
+        let mut art_swapped_this_hit = false;
         if let Some(desired_art) = desired_art {
             let mut desired_art = desired_art;
             let log_equip = performed_block_free_art_just_now;
             loop {
-                if self.cur_art == Some(desired_art) {
+                if combat_art_slot_matches(desired_art) {
+                    self.cur_art = Some(desired_art);
                     if log_equip {
-                        log::info!("ART_EQUIP uid={} same_slot=true (no set_combat_art)", desired_art);
+                        log::info!(
+                            "ART_EQUIP uid={} slot_match=true (no set_combat_art)",
+                            desired_art
+                        );
                     }
                     break;
                 }
                 if set_combat_art(desired_art) {
+                    art_swapped_this_hit = true;
                     if log_equip {
                         log::info!(
                             "ART_EQUIP uid={} same_slot=false delay={}",
@@ -780,12 +799,16 @@ impl Mod {
         // Auto rl: after settle (attack_delay), fire with short BLOCK + hold-tied ATTACK.
         if pending_rl {
             self.pending_rl_attack = true;
-            // Same-slot hit (e.g. Sakura already equipped): still force settle so the player's
-            // own B+A cannot vanilla-activate the art and skip the inject path.
-            if self.attack_delay == 0 {
-                self.attack_delay = ATTACK_SUPRESSION_DURATION;
+            let settle = if art_swapped_this_hit {
+                SLOT_SWAP_SETTLE_DURATION
+            } else {
+                ATTACK_SUPRESSION_DURATION
+            };
+            if self.attack_delay < settle {
+                self.attack_delay = settle;
                 log::info!(
-                    "ART_SETTLE same_slot delay={} hold={:?}",
+                    "ART_SETTLE swapped={} delay={} hold={:?}",
+                    art_swapped_this_hit,
                     self.attack_delay,
                     self.hold_for_attack
                 );
@@ -806,13 +829,13 @@ impl Mod {
                 // 1. the player decides to hold BLOCK by themself (that usually means cancelling)
                 // 2. the player released the attack
                 if attacking && !blocking {
-                    *action |= BLOCK;
+                    input_handler.action |= BLOCK;
                 } else {
                     self.injected_blocks = 0;
                 }
             } else if self.injected_blocks < BLOCK_INJECTION_DURATION {
                 // inject just a few frames for other art
-                *action |= BLOCK;
+                input_handler.action |= BLOCK;
                 self.injected_blocks += 1;
             }
         }
@@ -825,31 +848,27 @@ impl Mod {
             self.disable_block = false;
         }
         if self.disable_block {
-            *action &= !BLOCK;
+            input_handler.action &= !BLOCK;
         }
 
-        // Late `rl`: user still holds r; vanilla B+A would release whatever art is equipped.
-        if self.suppress_late_rl_skill {
-            if blocking && attacking {
-                *action &= !ATTACK;
-            }
-            if !blocking {
-                self.suppress_late_rl_skill = false;
-            }
+        // --- Combat-art input takeover ---
+        // Real keyboard B+A must never reach the skill slot; only mod-injected B+A (below) may
+        // activate arts. While waiting for the second key of block-first combos, also strip
+        // stray ATTACK so held-l + new block cannot vanilla-fire before the combo completes.
+        if self.art_combo.awaiting_block_second() && blocking {
+            strip_input(input_handler, ATTACK);
+        }
+        if blocking && attacking {
+            strip_input(input_handler, VANILLA_ART_INPUT);
         }
 
-        // Successful `rl` (and any combo whose last key is Attack): strip player ATTACK
-        // until mod inject latches B+A. Prevents vanilla combat-art fire on the hit frame
-        // when the art is already equipped (no slot swap).
-        if matches!(self.hold_for_attack, Some(ArtToken::Attack)) && !self.art_attack_latched {
-            *action &= !ATTACK;
+        if self.suppress_late_rl_skill && !blocking {
+            self.suppress_late_rl_skill = false;
         }
 
-        // if ATTACK|BLOCK happens way too quick after combat art switching
-        // Wirdwind Slash will be performed instead of the just equipped combat art
-        // supressing the few ATTACK frames that happens right after combat art switching solves the bug
+        // Post-swap: suppress stray ATTACK without B+A (whirlwind-on-switch bug).
         if self.attack_delay > 0 {
-            *action &= !ATTACK;
+            strip_input(input_handler, ATTACK);
             self.attack_delay -= 1;
             if self.hold_for_attack.is_some() {
                 self.art_diag_set_phase("delay");
@@ -875,13 +894,11 @@ impl Mod {
                 self.art_diag_n = self.art_diag_n.saturating_add(1);
                 if held || tapping {
                     if self.art_block_inject_left > 0 {
-                        *action |= BLOCK;
-                        *action &= !ATTACK;
+                        or_input(input_handler, BLOCK);
                         self.art_block_inject_left -= 1;
                         self.art_diag_set_phase("prime_block");
                     } else {
-                        *action |= BLOCK;
-                        *action |= ATTACK;
+                        or_input(input_handler, VANILLA_ART_INPUT);
                         if !self.art_attack_latched {
                             self.art_attack_latched = true;
                             self.art_diag_set_phase("open_rl");
@@ -927,18 +944,18 @@ impl Mod {
         // When the combo tail is r/l/e, strip that vanilla action so ↑r fires the tool directly
         // (like swallowing SWITCH for q), not "block first, then use".
         if self.prosthetic_delay != 0 {
-            *action &= !USE_PROSTHETIC;
+            input_handler.action &= !USE_PROSTHETIC;
             self.prosthetic_delay -= 1;
         } else if self.hold_tool_tail.is_some() || self.tool_min_use > 0 {
-            *action |= USE_PROSTHETIC;
+            input_handler.action |= USE_PROSTHETIC;
             if self.tool_min_use > 0 {
                 self.tool_min_use -= 1;
             }
         }
         match self.hold_tool_tail {
-            Some(ToolTail::Block) => *action &= !BLOCK,
-            Some(ToolTail::Attack) => *action &= !ATTACK,
-            Some(ToolTail::Interact) => *action &= !INTERACT,
+            Some(ToolTail::Block) => input_handler.action &= !BLOCK,
+            Some(ToolTail::Attack) => input_handler.action &= !ATTACK,
+            Some(ToolTail::Interact) => input_handler.action &= !INTERACT,
             _ => {}
         }
 
@@ -1090,6 +1107,33 @@ impl ProstheticSlot {
     fn as_prosthetic_index(self) -> u32 {
         self as u32 / 2
     }
+}
+
+fn get_equipped_combat_art_item_id() -> Option<ItemID> {
+    let items = &player_data().equiped_items;
+    let item_id = items[COMBAT_ART_SLOT as usize];
+    if item_id != 256 {
+        ItemID::new(item_id)
+    } else {
+        None
+    }
+}
+
+fn combat_art_slot_matches(art: UID) -> bool {
+    match (art.get_item_id(), get_equipped_combat_art_item_id()) {
+        (Some(want), Some(have)) => want == have,
+        _ => false,
+    }
+}
+
+fn strip_input(input: &mut game::InputHandler, mask: u64) {
+    input.action &= !mask;
+    input.action_b &= !mask;
+    input.action_c &= !mask;
+}
+
+fn or_input(input: &mut game::InputHandler, mask: u64) {
+    input.action |= mask;
 }
 
 fn set_combat_art(art: impl ID) -> bool {

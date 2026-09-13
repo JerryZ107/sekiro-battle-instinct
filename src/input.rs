@@ -434,6 +434,13 @@ impl ArtCombo {
     pub fn second(self) -> Option<ArtToken> {
         self.second
     }
+
+    pub fn is_rl(self) -> bool {
+        matches!(
+            (self.first, self.second),
+            (Some(ArtToken::Block), Some(ArtToken::Attack))
+        )
+    }
 }
 
 /// Last two combat-art key edges within a short window.
@@ -544,14 +551,17 @@ impl ArtComboWindow {
                 true
             }
             (Some(a), None) => {
-                // `rl` only: Block→Attack must land within ~0.1s; other r+X keep the default window.
-                if a == ArtToken::Block
-                    && token == ArtToken::Attack
-                    && self.age > self.max_age_rl
-                {
-                    self.late_rl_rejected = true;
-                    self.clear();
-                    return false;
+                // `rl` only: Block→Attack within cfg window, block still held at attack edge.
+                if a == ArtToken::Block && token == ArtToken::Attack {
+                    if self.age > self.max_age_rl {
+                        self.late_rl_rejected = true;
+                        self.clear();
+                        return false;
+                    }
+                    if !self.block_down {
+                        self.clear();
+                        return false;
+                    }
                 }
                 self.second = Some(token);
                 self.completed_this_frame = Some(ArtCombo::pair(a, token));
@@ -580,6 +590,11 @@ impl ArtComboWindow {
     /// True when the first token is held and we are waiting for the second.
     pub fn awaiting_second(&self) -> bool {
         self.first.is_some() && self.second.is_none()
+    }
+
+    /// Block first, waiting for second (e.g. `rl`, `r↑`).
+    pub fn awaiting_block_second(&self) -> bool {
+        matches!(self.first, Some(ArtToken::Block)) && self.second.is_none()
     }
 
     /// Whether the physical key/direction for `token` is currently held.
@@ -728,17 +743,26 @@ mod test {
             Some(ArtCombo::pair(ArtToken::Interact, ArtToken::Block))
         );
 
-        // rl within ~0.1s (6 frames @60fps)
+        // sequential rl with block held until attack
+        let mut w = ArtComboWindow::new(6);
+        w.tick(false, false, false, false, true, false, false);
+        for _ in 0..6 {
+            w.tick(false, false, false, false, true, false, false);
+        }
+        w.tick(false, false, false, false, true, true, false);
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
+        );
+
+        // rl within window but block released before attack: no combo
         let mut w = ArtComboWindow::new(6);
         w.tick(false, false, false, false, true, false, false);
         for _ in 0..6 {
             w.tick(false, false, false, false, false, false, false);
         }
         w.tick(false, false, false, false, false, true, false);
-        assert_eq!(
-            w.take_completed(),
-            Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
-        );
+        assert!(w.take_completed().is_none());
 
         // rl after ~0.1s: no combo; suppress flag set
         let mut w = ArtComboWindow::new(6);
