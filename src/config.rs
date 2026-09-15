@@ -519,15 +519,14 @@ mod test {
 
     #[test]
     fn test_art_multi_bind() {
-        let config = Config::from("7000  Nightjar Reversal  ↓l/l↓");
+        let config = Config::from("7000  Nightjar Reversal  ↓l");
         assert_eq!(
             config.art(ArtCombo::pair(ArtToken::Down, ArtToken::Attack)),
             Some(7000)
         );
-        assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Attack, ArtToken::Down)),
-            Some(7000)
-        );
+        assert!(config
+            .art(ArtCombo::pair(ArtToken::Attack, ArtToken::Down))
+            .is_none());
     }
 
     #[test]

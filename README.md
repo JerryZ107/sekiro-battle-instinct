@@ -67,7 +67,7 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | 一字斩·二连 (Ichimonji: Double) | `ee` |
 | 巨型忍者落杀 (Shadowfall) | `r↑` |
 | 寄鹰斩 (Nightjar Slash) | `↑l` |
-| 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓l` / `l↓` |
+| 寄鹰斩·反向回旋 (Nightjar Slash Reversal) | `↓l` |
 | 苇名十字斩 (Ashina Cross) | `r↓` |
 | 仙峰寺菩萨脚 (High Monk) | `↑r` |
 | 连击叩拜拳·破魔 (Praying Strikes - Exorcism) | `↓r` |
