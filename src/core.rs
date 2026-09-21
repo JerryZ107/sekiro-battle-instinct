@@ -81,7 +81,7 @@ pub struct Mod {
     disable_block: bool,
     /// After a fresh art swap, start rl fire once attack_delay ends.
     pending_rl_attack: bool,
-    /// While set, strip ATTACK while BLOCK held so late `rl` does not fire the current art.
+    /// Strip vanilla B+A until block released after a late `l` outside the rl window.
     suppress_late_rl_skill: bool,
     /// Keep injecting ATTACK while this combo's last token stays held.
     hold_for_attack: Option<ArtToken>,
@@ -124,6 +124,7 @@ pub struct Mod {
     tool_interact_down: bool,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
+    combo_dirs_last: [bool; 4],
 }
 
 impl Mod {
@@ -169,8 +170,121 @@ impl Mod {
             tool_attack_down: false,
             tool_interact_down: false,
             ejection: None,
+            combo_dirs_last: [false; 4],
         };
         Ok(modification)
+    }
+
+    fn instant_combo_matches(
+        &self,
+        combo: ArtCombo,
+        blocking_last_frame: bool,
+        interacting_last_frame: bool,
+        attacked_just_now: bool,
+        attacking: bool,
+        combo_up: bool,
+        combo_right: bool,
+        combo_down: bool,
+        combo_left: bool,
+        combo_dirs_last: [bool; 4],
+    ) -> bool {
+        let (Some(first), Some(second)) = (combo.first(), combo.second()) else {
+            return false;
+        };
+        let dir_held = |t: ArtToken| match t {
+            ArtToken::Up => combo_up,
+            ArtToken::Right => combo_right,
+            ArtToken::Down => combo_down,
+            ArtToken::Left => combo_left,
+            _ => false,
+        };
+        let dir_edge = |t: ArtToken| match t {
+            ArtToken::Up => combo_up && !combo_dirs_last[0],
+            ArtToken::Right => combo_right && !combo_dirs_last[1],
+            ArtToken::Down => combo_down && !combo_dirs_last[2],
+            ArtToken::Left => combo_left && !combo_dirs_last[3],
+            _ => false,
+        };
+        match (first, second) {
+            (ArtToken::Block, dir) if dir.is_direction() => {
+                blocking_last_frame && dir_edge(dir)
+            }
+            (dir, ArtToken::Attack) if dir.is_direction() => dir_held(dir) && attacked_just_now,
+            (ArtToken::Attack, dir) if dir.is_direction() => attacking && dir_edge(dir),
+            (ArtToken::Interact, ArtToken::Attack) => {
+                interacting_last_frame && attacked_just_now
+            }
+            _ => false,
+        }
+    }
+
+    /// Instant arts (cfg name contains 瞬发 / instant): fire same-frame B+A, no combo settle.
+    fn try_instant_combat_art(
+        &mut self,
+        combo_up: bool,
+        combo_right: bool,
+        combo_down: bool,
+        combo_left: bool,
+        attacked_just_now: bool,
+        attacking: bool,
+    ) -> Option<UID> {
+        if !self.swapout_countdown.is_done() || self.art_fire_busy() {
+            return None;
+        }
+        let combos: Vec<(ArtCombo, UID)> = self
+            .config
+            .instant_arts
+            .iter()
+            .map(|(c, u)| (*c, *u))
+            .collect();
+        for (combo, uid) in combos {
+            if !self.instant_combo_matches(
+                combo,
+                self.blocking_last_frame,
+                self.interacting_last_frame,
+                attacked_just_now,
+                attacking,
+                combo_up,
+                combo_right,
+                combo_down,
+                combo_left,
+                self.combo_dirs_last,
+            ) {
+                continue;
+            }
+            if self.equip_combat_art_no_delay(uid) {
+                log::info!("ART_INSTANT uid={} combo={:?}", uid, combo);
+                self.clear_art_fire();
+                self.clear_queued_art();
+                self.art_combo.clear();
+                self.injected_blocks = 1;
+                self.swapout_countdown = Countdown::new(self.cur_art.swapout_cooldown());
+                return Some(uid);
+            }
+        }
+        None
+    }
+
+    fn equip_combat_art_no_delay(&mut self, desired_art: UID) -> bool {
+        let mut desired_art = desired_art;
+        loop {
+            if combat_art_slot_matches(desired_art) {
+                self.cur_art = Some(desired_art);
+                return true;
+            }
+            if set_combat_art(desired_art) {
+                self.cur_art = Some(desired_art);
+                return true;
+            }
+            desired_art = match desired_art {
+                ICHIMONJI_DOUBLE => ICHIMONJI,
+                PRAYING_STRIKES_EXORCISM => PRAYING_STRIKES,
+                HIGH_MONK => SENPO_LEAPING_KICKS,
+                SHADOWFALL => SHADOWRUSH,
+                EMPOWERED_MORTAL_DRAW => MORTAL_DRAW,
+                _ => return false,
+            };
+        }
     }
 
     /// True while a combo-fired art is still settling or hold-injecting.
@@ -641,6 +755,16 @@ impl Mod {
             self.suppress_late_rl_skill = true;
             log::info!("ART_RL_LATE reject — suppress B+A until block released");
         }
+        let instant_art_fired = self
+            .try_instant_combat_art(
+                combo_up,
+                combo_right,
+                combo_down,
+                combo_left,
+                attacked_just_now,
+                attacking,
+            )
+            .is_some();
 
         /***** end sustained fire early when jump/dodge or last token released *****/
         if jumping || dodging {
@@ -861,6 +985,9 @@ impl Mod {
         if blocking && attacking {
             strip_input(input_handler, VANILLA_ART_INPUT);
         }
+        if instant_art_fired {
+            or_input(input_handler, VANILLA_ART_INPUT);
+        }
 
         if self.suppress_late_rl_skill && !blocking {
             self.suppress_late_rl_skill = false;
@@ -964,6 +1091,7 @@ impl Mod {
         self.blocking_last_frame = blocking;
         self.interacting_last_frame = interacting;
         self.using_tool_last_frame = using_tool;
+        self.combo_dirs_last = [combo_up, combo_right, combo_down, combo_left];
     }
 }
 

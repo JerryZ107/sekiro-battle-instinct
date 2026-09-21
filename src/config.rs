@@ -61,7 +61,7 @@ pub struct ToolCombo {
 }
 
 /// Default `rl` (Block→Attack) combo window in seconds @60fps.
-pub const DEFAULT_RL_WINDOW_SECS: f32 = 0.1;
+pub const DEFAULT_RL_WINDOW_SECS: f32 = 0.3;
 /// Default two-key prosthetic window (first → q/t) in seconds @60fps (~18 frames).
 pub const DEFAULT_TOOL_TRIGGER_WINDOW_SECS: f32 = 0.3;
 /// After releasing the last art key, wait this long before flushing a queued art (@60fps).
@@ -93,13 +93,15 @@ pub fn tool_multi_lock_secs_to_frames(secs: f32) -> u16 {
 pub struct Config {
     /// Combat arts keyed by r/l/e + direction pairs (or empty for ∅).
     pub arts: HashMap<ArtCombo, UID>,
+    /// Name contains `瞬发` / `instant`: block + direction edge fires immediately (e.g. `r↓`).
+    pub instant_arts: HashMap<ArtCombo, UID>,
     /// Two-key prosthetic binds: (↑↓←→|r|l|e|q) then (q|t).
     pub tools: HashMap<ToolCombo, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,
     /// Unique bare-`q` prosthetic (same fire style as bare `t`; does not become return-default).
     pub tool_on_q: Option<UID>,
-    /// `rl` only: max frames between `r` and `l` (@60fps).
+    /// `rl` only: max frames after `r` edge to press `l` while still holding `r` (@60fps).
     pub rl_combo_max_age: u16,
     /// Two-key prosthetic: max frames between first key and q/t (@60fps).
     pub tool_combo_max_age: u16,
@@ -121,6 +123,10 @@ impl Config {
         self.arts.get(&combo).copied()
     }
 
+    pub fn instant_art(&self, combo: ArtCombo) -> Option<UID> {
+        self.instant_arts.get(&combo).copied()
+    }
+
     pub fn tool(&self, combo: ToolCombo) -> Option<UID> {
         self.tools.get(&combo).copied()
     }
@@ -138,6 +144,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             arts: HashMap::new(),
+            instant_arts: HashMap::new(),
             tools: HashMap::new(),
             tool_on_t: None,
             tool_on_q: None,
@@ -184,9 +191,15 @@ impl<S: AsRef<str>> From<S> for Config {
                 }
             };
 
-            let Some(motion) = items.last() else {
+            let rest: Vec<&str> = items.collect();
+            if rest.is_empty() {
                 continue;
-            };
+            }
+            let motion = rest[rest.len() - 1];
+            let is_instant = rest.len() >= 2
+                && rest[..rest.len() - 1]
+                    .iter()
+                    .any(|s| s.contains("瞬发") || s.eq_ignore_ascii_case("instant"));
 
             if tool {
                 for alt in split_motion_alternates(motion) {
@@ -221,7 +234,11 @@ impl<S: AsRef<str>> From<S> for Config {
 
             for alt in split_motion_alternates(motion) {
                 if let Some(combo) = parse_art_combo(alt) {
-                    insert_art_bind(&mut config, combo, id);
+                    if is_instant {
+                        insert_instant_art_bind(&mut config, combo, id);
+                    } else {
+                        insert_art_bind(&mut config, combo, id);
+                    }
                 }
             }
         }
@@ -231,6 +248,19 @@ impl<S: AsRef<str>> From<S> for Config {
 
 fn split_motion_alternates(motion: &str) -> impl Iterator<Item = &str> {
     motion.split('/').map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn insert_instant_art_bind(config: &mut Config, combo: ArtCombo, id: UID) {
+    if let Some(prev) = config.instant_arts.get(&combo) {
+        if *prev != id {
+            log::warn!(
+                "Duplicate instant art bind {:?}: keeping UID {prev}, ignoring {id}",
+                combo
+            );
+        }
+        return;
+    }
+    config.instant_arts.insert(combo, id);
 }
 
 fn insert_art_bind(config: &mut Config, combo: ArtCombo, id: UID) {
@@ -515,6 +545,22 @@ mod test {
 
         let config = Config::from("71200 x →q-multi-hit0s");
         assert_eq!(config.tool_lock_frames(Some(71200)), 0);
+    }
+
+    #[test]
+    fn test_instant_art_bind() {
+        let config = Config::from(
+            "5500  绝技·苇名十字斩\n5500  绝技·苇名十字斩·瞬发  r↓\n7500  x  ↑r",
+        );
+        assert!(config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Down)).is_none());
+        assert_eq!(
+            config.instant_art(ArtCombo::pair(ArtToken::Block, ArtToken::Down)),
+            Some(5500)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Up, ArtToken::Block)),
+            Some(7500)
+        );
     }
 
     #[test]
