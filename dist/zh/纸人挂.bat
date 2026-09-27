@@ -4,10 +4,11 @@ chcp 936 >nul
 title 只狼 · 纸人挂
 set "HERE=%~dp0"
 set "PAPERDOLL_CFG=%HERE%battle_instinct.cfg"
+set "PAPERDOLL_LANG=zh"
 if /i "%~1"=="revert" set "PAPERDOLL_REVERT=1"
 if /i "%~1"=="rollback" set "PAPERDOLL_REVERT=1"
 echo ==========================================================
-echo   只狼 · 纸人挂   （内置逻辑，无需其它脚本）
+echo   只狼 · 纸人挂
 echo ----------------------------------------------------------
 echo   读取同目录 battle_instinct.cfg 里的这几行：
 echo     纸人上限功能: 开 / 关
@@ -21,7 +22,7 @@ if not exist "%PAPERDOLL_CFG%" (
   goto done
 )
 set "TMPPS=%TEMP%\zhiren_%RANDOM%%RANDOM%.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%~f0' -Encoding Default | Select-Object -Skip 41 | Set-Content -LiteralPath '%TMPPS%' -Encoding Default"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%~f0' -Encoding Default | Select-Object -Skip 42 | Set-Content -LiteralPath '%TMPPS%' -Encoding Default"
 if not exist "%TMPPS%" (
   echo [错误] 解出临时脚本失败。
   goto done
@@ -40,8 +41,9 @@ exit /b
 
 rem ============ 以下为内嵌 PowerShell 代码（自解执行；改 tools/patch_paper_params.ps1 后跑 tools/make_bat.ps1 重新生成）============
 <#
-  patch_paper_params.ps1 - 纸人（Spirit Emblem / 形代）相关 param 一键修改
+  patch_paper_params.ps1 - paper doll (Spirit Emblem) param one-shot patcher
   ------------------------------------------------------------------------
+  纸人（Spirit Emblem / 形代）相关 param 一键修改。
   不改 DLL、不覆盖别人的 mod：直接对 Mod Engine 加载的 regulation 参数包
   mods\param\gameparam\gameparam.parambnd.dcx 做字段级补丁（自动备份、可回滚）。
 
@@ -53,11 +55,18 @@ rem ============ 以下为内嵌 PowerShell 代码（自解执行；改 tools/patch_paper_para
     ResourceItemParam goodsId=1000 行  +0x14/+0x18/+0x1C/+0x20 (f32)
         = 基础上限/4、满上限/4、技能个数、满上限（推断，用于「每个技能 +N」）
 
+  输出语言：
+    -Lang en / -Lang zh，或环境变量 PAPERDOLL_LANG=en|zh（发布包 .bat 用它切换）
+    缺省按系统区域：中文系统 = zh，其余 = en
+
   用法：
       只看不改:  powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1
       应用:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Apply
       回滚:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Revert
       自定义:    ... -Apply -InitialPaper 30 -BaseCap 30 -PerSkillBonus 10 -TempCap 15 -DriftAmount 15
+
+  说明：输出串全为 ASCII，中文一律写成 \uXXXX 转义；正文里剩下的中文只有 cfg 键名，
+  两者都能被 GBK 编码，所以嵌进 .bat 尾部再被 `Get-Content -Encoding Default` 读出来也不会乱码。
 #>
 [CmdletBinding()]
 param(
@@ -70,6 +79,7 @@ param(
     [int]$SkillCount    = 5,
     [int]$TempCap       = 15,
     [int]$DriftAmount   = 15,
+    [string]$Lang       = $(if ($env:PAPERDOLL_LANG) { $env:PAPERDOLL_LANG } else { 'auto' }),
     [switch]$SkipGrowthFloats,
     [switch]$Apply,
     [switch]$Force,
@@ -78,11 +88,83 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 发布包 .bat 用环境变量传「回滚 / 强制」：脚本被 -File 调用时拿不到命令行开关，这里补上
+function Test-EnvFlag([string]$name) {
+    $v = [Environment]::GetEnvironmentVariable($name)
+    return ($v -and ($v.Trim() -match '^(1|true|yes|on)$'))
+}
+if (-not $Revert -and (Test-EnvFlag 'PAPERDOLL_REVERT')) { $Revert = $true }
+if (-not $Force  -and (Test-EnvFlag 'PAPERDOLL_FORCE'))  { $Force  = $true }
+
+if ($Lang -notin @('en', 'zh')) {
+    $Lang = if ((Get-Culture).TwoLetterISOLanguageName -eq 'zh') { 'zh' } else { 'en' }
+}
+
+# ---- 输出串（中文一律用 \uXXXX 转义，保证嵌进 GBK 的 .bat 也不会乱码）----
+$S = @{
+    en = @{
+        off = 'cfg has "paper cap fix: off" - skipping param writes (use -Force to override, -Revert to roll back)'
+        noGameDir = 'Sekiro folder not found; use -ParamFile to point at gameparam.parambnd.dcx'
+        doll = 'Paper doll'
+        temp = 'Temporary paper doll'
+        drift = 'Paper doll drift'
+        initial = 'Starting paper dolls'
+        growthF1 = 'Cap growth f1 (base cap / 4)'
+        growthF2 = 'Cap growth f2 (max cap / 4)'
+        growthF3 = 'Cap growth f3 (cap-skill count)'
+        growthF4 = 'Cap growth f4 (max cap)'
+        target = 'Target file'
+        plan = 'Planned changes:'
+        missing1000 = '  !! EquipParamGoods has no id=1000'
+        missing1001 = '  !! EquipParamGoods has no id=1001'
+        missing3800 = '  !! EquipParamGoods has no id=3800 (paper doll drift)'
+        missingRes = '  !! ResourceItemParam has no goodsId=1000 row'
+        floats = '  (the 4 floats below are the only param-side entry for "per skill bonus"; inferred fields, -SkipGrowthFloats disables them)'
+        dry = '(dry run: nothing written; add -Apply to actually write)'
+        ok = 'Written: {0}  (backup {1})'
+        verify = 'Verify: cap={0} temp cap={1} drift gives={2} starting dolls={3} max cap={4}'
+        noParam = 'param file not found: {0}'
+        noBackup = 'no backup found ({0}.bak-*), nothing to roll back to'
+        rolledBack = 'Rolled back: {0} -> {1}'
+        noGoods = 'EquipParamGoods.param not found in the param package'
+        noRes = 'ResourceItemParam.param not found in the param package'
+    }
+    zh = @{
+        off = '当前 cfg 里「纸人上限功能: 关」→ 跳过 param 写入（想强制加 -Force，想回滚加 -Revert）'
+        noGameDir = '找不到 Sekiro 目录，请用 -ParamFile 指定 gameparam.parambnd.dcx'
+        doll = '纸人'
+        temp = '临时纸人'
+        drift = '纸人漂流'
+        initial = '初始纸人'
+        growthF1 = '上限成长 f1（基础上限 / 4）'
+        growthF2 = '上限成长 f2（满上限 / 4）'
+        growthF3 = '上限成长 f3（上限技能个数）'
+        growthF4 = '上限成长 f4（满上限）'
+        target = '目标文件'
+        plan = '计划修改:'
+        missing1000 = '  !! EquipParamGoods 里没有 id=1000'
+        missing1001 = '  !! EquipParamGoods 里没有 id=1001'
+        missing3800 = '  !! EquipParamGoods 里没有 id=3800（纸人漂流）'
+        missingRes = '  !! ResourceItemParam 里没有 goodsId=1000 的行'
+        floats = '  （以下 4 个浮点是「每个技能 +N」的唯一 param 侧入口，属推断字段，-SkipGrowthFloats 可关）'
+        dry = '（演练模式：没有写入任何文件；加 -Apply 才真正写入）'
+        ok = '已写入: {0}  （备份 {1}）'
+        verify = '校验: 纸人上限={0} 临时上限={1} 漂流给={2} 初始纸人={3} 满上限={4}'
+        noParam = '找不到参数文件: {0}'
+        noBackup = '没有找到备份 ({0}.bak-*)，无法回滚'
+        rolledBack = '已回滚: {0} -> {1}'
+        noGoods = '参数包里没有 EquipParamGoods.param'
+        noRes = '参数包里没有 ResourceItemParam.param'
+    }
+}
+$T = $S[$Lang]
+
 # ---- 从 battle_instinct.cfg 读三个可调项（cfg 优先，缺省用上面的默认值）----
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Find-GameDir {
     $cands = @(
+        $env:PAPERDOLL_GAME_DIR,   # 显式指定游戏目录（可选，优先级最高）
         $scriptDir,
         'D:\game\steam\steamapps\common\Sekiro',
         'C:\Program Files (x86)\Steam\steamapps\common\Sekiro',
@@ -105,7 +187,7 @@ if (-not $CfgFile) {
 }
 $gameDir = Find-GameDir
 if (-not $ParamFile) {
-    if (-not $gameDir) { throw "找不到 Sekiro 目录，请用 -ParamFile 指定 gameparam.parambnd.dcx" }
+    if (-not $gameDir) { throw $T.noGameDir }
     $ParamFile = Join-Path $gameDir 'mods\param\gameparam\gameparam.parambnd.dcx'
     if (-not $CfgFile) { $CfgFile = Join-Path $gameDir 'battle_instinct.cfg' }
 }
@@ -161,7 +243,7 @@ if ($CfgFile -and (Test-Path $CfgFile)) {
     if ($swLine -and ($swLine.Line -match '[:：]\s*(关|off|false|no)')) { $capFixOn = 0 }
 }
 if (-not $Revert -and -not $Force -and $capFixOn -eq 0) {
-    Write-Host '当前 cfg 里「纸人上限功能: 关」→ 跳过 param 写入（想强制加 -Force，想回滚加 -Revert）'
+    Write-Host $T.off
     return
 }
 
@@ -301,14 +383,14 @@ public static class PaperParams
 Add-Type -TypeDefinition $cs -ErrorAction Stop
 
 # ------------------------------------------------------------------ main logic
-if (-not (Test-Path $ParamFile)) { throw "找不到参数文件: $ParamFile" }
+if (-not (Test-Path $ParamFile)) { throw ($T.noParam -f $ParamFile) }
 
 if ($Revert) {
     $baks = Get-ChildItem ($ParamFile + '.bak-*') -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-    if (-not $baks) { throw "没有找到备份 ($ParamFile.bak-*)，无法回滚" }
+    if (-not $baks) { throw ($T.noBackup -f $ParamFile) }
     $src = $baks[0].FullName
     Copy-Item $src $ParamFile -Force
-    Write-Host "已回滚: $src -> $ParamFile"
+    Write-Host ($T.rolledBack -f $src, $ParamFile)
     return
 }
 
@@ -318,8 +400,8 @@ $entries = [PaperParams]::Entries($bnd)
 
 $goods = [PaperParams]::Find($entries, 'EquipParamGoods.param')
 $res   = [PaperParams]::Find($entries, 'ResourceItemParam.param')
-if (-not $goods) { throw '参数包里没有 EquipParamGoods.param' }
-if (-not $res)   { throw '参数包里没有 ResourceItemParam.param' }
+if (-not $goods) { throw $T.noGoods }
+if (-not $res)   { throw $T.noRes }
 
 $gRows = [PaperParams]::RowOffsets($bnd, $goods.Start, $goods.Size)
 $maxCap = $BaseCap + $PerSkillBonus * $SkillCount
@@ -327,46 +409,46 @@ $maxCap = $BaseCap + $PerSkillBonus * $SkillCount
 function Set-U16([int]$row, [int]$off, [int]$val, [string]$label) {
     $old = [PaperParams]::U16($bnd, $row + $off)
     [PaperParams]::W16($bnd, $row + $off, $val)
-    Write-Host ("  {0,-34} {1} -> {2}" -f $label, $old, $val)
+    Write-Host ("  {0,-46} {1} -> {2}" -f $label, $old, $val)
 }
 function Set-U32([int]$row, [int]$off, [int]$val, [string]$label) {
     $old = [PaperParams]::U32($bnd, $row + $off)
     [PaperParams]::W32($bnd, $row + $off, [uint32]$val)
-    Write-Host ("  {0,-34} {1} -> {2}" -f $label, $old, $val)
+    Write-Host ("  {0,-46} {1} -> {2}" -f $label, $old, $val)
 }
 function Set-F32([int]$row, [int]$off, [single]$val, [string]$label) {
     $old = [PaperParams]::F32($bnd, $row + $off)
     [PaperParams]::WF32($bnd, $row + $off, $val)
-    Write-Host ("  {0,-34} {1} -> {2}" -f $label, $old, $val)
+    Write-Host ("  {0,-46} {1} -> {2}" -f $label, $old, $val)
 }
 
-Write-Host "目标文件: $ParamFile"
-Write-Host "计划修改:"
+Write-Host ("{0}: {1}" -f $T.target, $ParamFile)
+Write-Host $T.plan
 if ($gRows.ContainsKey(1000)) {
-    Set-U16 $gRows[1000] 0x36 $BaseCap 'EquipParamGoods 1000 纸人上限'
-} else { Write-Host '  !! EquipParamGoods 里没有 id=1000' }
+    Set-U16 $gRows[1000] 0x36 $BaseCap ("EquipParamGoods 1000 " + $T.doll + " cap")
+} else { Write-Host $T.missing1000 }
 if ($gRows.ContainsKey(1001)) {
-    Set-U16 $gRows[1001] 0x36 $TempCap 'EquipParamGoods 1001 临时纸人上限'
-} else { Write-Host '  !! EquipParamGoods 里没有 id=1001' }
+    Set-U16 $gRows[1001] 0x36 $TempCap ("EquipParamGoods 1001 " + $T.temp + " cap")
+} else { Write-Host $T.missing1001 }
 if ($gRows.ContainsKey(3800)) {
-    Set-U16 $gRows[3800] 0x8C $DriftAmount 'EquipParamGoods 3800 纸人漂流给的数量'
-} else { Write-Host '  !! EquipParamGoods 里没有 id=3800（纸人漂流）' }
+    Set-U16 $gRows[3800] 0x8C $DriftAmount ("EquipParamGoods 3800 " + $T.drift + " amount")
+} else { Write-Host $T.missing3800 }
 
 $resRow = [PaperParams]::FindRowByGoods($bnd, $res.Start, $res.Size, 1000)
 if ($resRow -ge 0) {
-    Set-U32 $resRow 0x10 $InitialPaper 'ResourceItemParam 1000 初始纸人'
+    Set-U32 $resRow 0x10 $InitialPaper ("ResourceItemParam 1000 " + $T.initial)
     if (-not $SkipGrowthFloats) {
-        Write-Host '  (以下 4 个浮点是「每个技能 +N」的唯一 param 侧入口，属推断字段，-SkipGrowthFloats 可关)'
-        Set-F32 $resRow 0x14 ([single]($BaseCap / 4.0))   'ResourceItemParam 1000 上限成长 f1'
-        Set-F32 $resRow 0x18 ([single]($maxCap / 4.0))    'ResourceItemParam 1000 上限成长 f2'
-        Set-F32 $resRow 0x1C ([single]$SkillCount)            'ResourceItemParam 1000 上限技能个数'
-        Set-F32 $resRow 0x20 ([single]$maxCap)            'ResourceItemParam 1000 满级上限'
+        Write-Host $T.floats
+        Set-F32 $resRow 0x14 ([single]($BaseCap / 4.0))   ("ResourceItemParam 1000 " + $T.growthF1)
+        Set-F32 $resRow 0x18 ([single]($maxCap / 4.0))    ("ResourceItemParam 1000 " + $T.growthF2)
+        Set-F32 $resRow 0x1C ([single]$SkillCount)        ("ResourceItemParam 1000 " + $T.growthF3)
+        Set-F32 $resRow 0x20 ([single]$maxCap)            ("ResourceItemParam 1000 " + $T.growthF4)
     }
-} else { Write-Host '  !! ResourceItemParam 里没有 goodsId=1000 的行' }
+} else { Write-Host $T.missingRes }
 
 if (-not $Apply) {
     Write-Host ''
-    Write-Host '（演练模式：没有写入任何文件；加 -Apply 才真正写入）'
+    Write-Host $T.dry
     return
 }
 
@@ -383,8 +465,8 @@ $cr = [PaperParams]::Find($ce, 'ResourceItemParam.param')
 $cgr = [PaperParams]::RowOffsets($check, $cg.Start, $cg.Size)
 $cres = [PaperParams]::FindRowByGoods($check, $cr.Start, $cr.Size, 1000)
 Write-Host ''
-Write-Host ("已写入: {0}  (备份 {1})" -f $ParamFile, (Split-Path $bak -Leaf))
-Write-Host ("校验: 纸人上限={0} 临时上限={1} 漂流给={2} 初始纸人={3} 满上限={4}" -f `
+Write-Host ($T.ok -f $ParamFile, (Split-Path $bak -Leaf))
+Write-Host ($T.verify -f `
     [PaperParams]::U16($check, $cgr[1000] + 0x36), `
     [PaperParams]::U16($check, $cgr[1001] + 0x36), `
     [PaperParams]::U16($check, $cgr[3800] + 0x8C), `

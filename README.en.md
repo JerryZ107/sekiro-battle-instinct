@@ -1,4 +1,4 @@
-# Battle Instinct (two-key combat arts fork)
+﻿# Battle Instinct (two-key combat arts fork)
 
 ![demo](demo.gif)
 
@@ -8,12 +8,13 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 
 ## Quick start (recommended)
 
-**Only three files needed**: put `dinput8.dll`, `battle_instinct.cfg` and `纸人挂.bat` next to `sekiro.exe`, then **double-click `纸人挂.bat` once** (it has the param writer built in, no `.ps1` required). If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
+**Only three files needed**: put `dinput8.dll`, `battle_instinct.cfg` and `paperman.bat` next to `sekiro.exe`, then **double-click `paperman.bat` once** (it has the param writer built in, no `.ps1` required). The Chinese release is identical except the cfg is Chinese and the launcher is `纸人挂.bat`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
 
 ### English release
 
 - [dist/en/dinput8.dll](dist/en/dinput8.dll)
 - [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
+- [dist/en/paperman.bat](dist/en/paperman.bat)
 
 ## Relation to upstream
 
@@ -82,31 +83,31 @@ Default release prosthetic binds:
 
 ```bash
 cargo build --release
-just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 纸人挂.bat）
-just bat    # regenerate 纸人挂.bat only (embeds tools/patch_paper_params.ps1 into the bat)
-just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip (5 files each)
+just dist     # refresh dist/zh and dist/en (dinput8.dll + battle_instinct.cfg + launcher bat)
+just bat    # regenerate both launchers only (embeds tools/patch_paper_params.ps1 into each bat)
+just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip (3 files each)
 ```
 
 Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
-Players only need `纸人挂.bat`; its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate the bat.
+Players only need the launcher bat (`dist/zh/纸人挂.bat` for Chinese, `dist/en/paperman.bat` for English); its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate both.
 
-## Paper-doll (spirit emblem cap / 纸人漂流)
+## Paper doll (spirit emblem cap / drift)
 
 Sekiro stores the **spirit-emblem cap inside the save** (it is written when a skill is learned), so param edits only affect new saves. This MOD handles it in two layers:
 
 | Item | Handled by | Note |
 | --- | --- | --- |
 | Emblem cap (incl. old saves), per-skill bonus, master switch | **DLL, live** | writes `PlayerData+0x146`, using `paper initial cap + per skill bonus x learned "form cap" skills` |
-| 纸人漂流 amount/cap, starting emblems, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by `纸人挂.bat`) |
+| Paper Doll Drift amount/cap, starting dolls, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by the launcher bat) |
 
 Usage:
 
 1. Edit the four lines at the end of `battle_instinct.cfg`
 2. Changed `paper initial cap` / `per skill bonus` → **restart the game** (live, works on old saves too)
-3. Changed `drift` (纸人漂流) → double-click **`纸人挂.bat`** in the same folder (it reads the cfg switch/values and writes the param)
-4. Roll back with `纸人挂.bat revert`; disable everything with `# paper cap fix: off`
+3. Changed `drift` (Paper Doll Drift) → double-click the launcher bat in the same folder (`paperman.bat`, or `纸人挂.bat` for the Chinese cfg); it reads the cfg switch/values and writes the param
+4. Roll back with `paperman.bat revert`; disable everything with `# paper cap fix: off`
 
-Field map and reverse-engineering notes: [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
+Field map and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md) (English) / [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
 
 
 ## Config toggles (comments at the end of cfg)
@@ -117,10 +118,10 @@ Field map and reverse-engineering notes: [docs/纸人参数.md](docs/纸人参�
 | `# rl window: 0.3s` | **`rl` (Sakura Dance)**: press `l` within this time after `r`, with both held when `l` registers; real B+A is still stripped |
 | `# tool trigger window: 0.3s` | Two-key prosthetic: first key → `q`/`t` must land within this time (~0.3s) |
 | `# art queue delay: 0.3s` | After the last key is released, wait this long before flushing a queued art; `0s` = flush immediately |
-| `# paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and `纸人挂.bat` writes no param) |
+| `# paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the launcher bat writes no param) |
 | `# paper initial cap: 25` | Cap = this value + `per skill bonus` x learned "form cap" skills |
 | `# per skill bonus: 5` | How much each "form cap" (形代所持上限) skill adds to the cap |
-| `# drift: 9` | Blood/temporary emblem cap, and the amount granted per use of 纸人漂流 |
+| `# drift: 9` | Blood/temporary emblem cap, and the amount granted per use of the Paper Doll Drift item |
 
 A prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
 
