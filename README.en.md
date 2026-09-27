@@ -8,15 +8,12 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 
 ## Quick start (recommended)
 
-**Recommended: one-click script.** Drop the 5 files from the release (`dinput8.dll`, `battle_instinct.cfg`, `纸人挂.bat`, `patch_paper_params.ps1`, `setup.ps1`) next to `sekiro.exe` and run `setup.ps1` once (or just double-click `纸人挂.bat`). You can still install manually with only `dinput8.dll` + `battle_instinct.cfg`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
+**Only three files needed**: put `dinput8.dll`, `battle_instinct.cfg` and `纸人挂.bat` next to `sekiro.exe`, then **double-click `纸人挂.bat` once** (it has the param writer built in, no `.ps1` required). If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
 
 ### English release
 
 - [dist/en/dinput8.dll](dist/en/dinput8.dll)
 - [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
-- [dist/en/纸人挂.bat](dist/en/纸人挂.bat) - paper-doll entry (double-click)
-- [dist/en/patch_paper_params.ps1](dist/en/patch_paper_params.ps1) - param writer
-- [dist/en/setup.ps1](dist/en/setup.ps1) - one-click installer (auto-detects game dir)
 
 ### Config toggles (comments at the end of cfg)
 
@@ -81,7 +78,6 @@ Default release binds (editable in cfg):
 | Nightjar Slash Reversal | `↓l` |
 | Ashina Cross (instant) | `r↓` (hold block + press direction; cfg name contains "instant") |
 | High Monk | `↑r` |
-| Praying Strikes - Exorcism | `↓r` |
 | Whirlwind Slash | `e↑` |
 | Sakura Dance | `rl` |
 | Floating Passage | `l↑` |
@@ -95,9 +91,6 @@ Default release binds (editable in cfg):
 - `q` = in-game "Switch Prosthetic"; `t` = "Use Prosthetic"
 - Bare `t`: unique **default** tool — press/hold to equip and inject use; other tools return to it afterward
 - Bare `q`: optional second one-key tool with the **same fire style as `t`** (not the return-default target)
-- Two-key: first is move/r/l/e; **tail is q/t, or r/l/e** (directions cannot be second); within a short window, first→tail equips and injects use; hold the tail to sustain (window tunable via `# tool trigger window`, default ~0.3s). Examples: `↑q`, `↑r`, `→l`, `↓e`. When the tail is r/l/e, the same-frame combat-art combo is suppressed (avoid overlapping art binds)
-- If bare `q` is set, avoid `qt` (bare `q` fires first)
-- Prosthetic lines without a bind token are ignored
 
 Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first keys — only tails. Also avoid `r`/`l` as first keys: block has high priority; attack easily thrusts. Prefer `↑q` / `→t`; never write `q↑`. After releasing the tail key, about **1s** of lock by default (override per bind with `-time`, e.g. `↑q-0.5s`): cannot switch tools; pressing `t`/`q` again refreshes the lock and keeps injecting (multi-hit). After lock ends, about **1.4s** later it returns to the bare-`t` default.
 
@@ -122,12 +115,13 @@ Default release prosthetic binds:
 
 ```bash
 cargo build --release
-just dist     # refresh dist/zh and dist/en (dinput8.dll + battle_instinct.cfg + scripts)
+just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 纸人挂.bat）
+just bat    # regenerate 纸人挂.bat only (embeds tools/patch_paper_params.ps1 into the bat)
 just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip (5 files each)
 ```
 
 Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
-Player-side scripts: `tools/setup.ps1` (one-click install) and `tools/纸人挂.bat` (double-click after editing the paper-doll values).
+Players only need `纸人挂.bat`; its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate the bat.
 
 ## Credits
 

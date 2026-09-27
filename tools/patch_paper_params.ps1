@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
     [string]$ParamFile  = '',
-    [string]$CfgFile    = 'D:\game\steam\steamapps\common\Sekiro\battle_instinct.cfg',
+    [string]$CfgFile    = $env:PAPERDOLL_CFG,
     [bool]  $UseCfg      = $true,
     [int]$InitialPaper  = 30,
     [int]$BaseCap       = 30,

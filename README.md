@@ -8,15 +8,13 @@
 
 ## 直接使用（推荐）
 
-**推荐用一键脚本**：把发行包里的 5 个文件（`dinput8.dll`、`battle_instinct.cfg`、`纸人挂.bat`、`patch_paper_params.ps1`、`setup.ps1`）放到 `sekiro.exe` 同目录，右键跑一次 `setup.ps1`（或直接双击 `纸人挂.bat`）。也能手动只放 `dinput8.dll` + `battle_instinct.cfg`。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
+**只需三个文件**：`dinput8.dll`、`battle_instinct.cfg`、`纸人挂.bat` 放到 `sekiro.exe` 同目录，然后**双击一次 `纸人挂.bat`**（它内置 param 写入逻辑，不需要任何 `.ps1`）。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
 
 ### 中文发行包
 
 - [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
 - [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
 - [dist/zh/纸人挂.bat](dist/zh/纸人挂.bat)　- 纸人挂入口（双击）
-- [dist/zh/patch_paper_params.ps1](dist/zh/patch_paper_params.ps1)　- param 写入脚本
-- [dist/zh/setup.ps1](dist/zh/setup.ps1)　- 一键安装（自动找游戏目录）
 
 ### cfg 可调项（注释在 cfg 里，`#` 开头）
 
@@ -46,7 +44,7 @@
 
 1. 改 `battle_instinct.cfg` 末尾那四行（见上表）
 2. 改「纸人初始上限 / 技能增加上限」→ **重进游戏**即生效（DLL 实时，老存档也管）
-3. 改「纸人漂流」→ 双击同目录的 **`纸人挂.bat`**（它会读 cfg 的开关和数值，再写入 param）
+3. 改「纸人漂流」→ 双击同目录的 **`纸人挂.bat`**（内置逻辑：读 cfg 开关与数值 → 写入 param；`纸人挂.bat revert` 回滚）
 4. 回滚：`纸人挂.bat revert`；想整块关掉：cfg 里写 `纸人上限功能: 关`
 
 字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。
@@ -122,12 +120,13 @@
 
 ```bash
 cargo build --release
-just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 脚本）
+just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 纸人挂.bat）
+just bat      # 只重新生成 纸人挂.bat（把 tools/patch_paper_params.ps1 嵌进 bat）
 just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 5 文件）
 ```
 
 产物在 `target/release/`；发行目录为 `dist/zh/`（中文 cfg）与 `dist/en/`（英文 cfg）。
-玩家侧安装脚本：`tools/setup.ps1`（一键）与 `tools/纸人挂.bat`（改完纸人数值后双击）。
+玩家侧只需要 `纸人挂.bat`；它的源码（PowerShell 版）在 `tools/patch_paper_params.ps1`，改完跑 `just bat` 重新生成 bat。
 
 ## 感谢
 

@@ -6,7 +6,11 @@ logs:
     tail -f "C:/Program Files (x86)/Steam/steamapps/common/Sekiro/battle_instinct.log"
 
 # Refresh dist/zh and dist/en (dinput8.dll + battle_instinct.cfg only).
-dist:
+# 重新生成 纸人挂.bat（把 tools/patch_paper_params.ps1 嵌进 bat）
+bat:
+    powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/make_bat.ps1
+
+dist: bat
     cargo build --release
     mkdir -p "./dist/zh" "./dist/en"
     cp "./target/release/sekiro_battle_instinct.dll" "./dist/zh/dinput8.dll"
@@ -19,15 +23,11 @@ pack: dist
     cp "./dist/zh/dinput8.dll" "./tmp/dinput8.dll"
     cp "./dist/zh/battle_instinct.cfg" "./tmp/battle_instinct.cfg"
     cp "./dist/zh/纸人挂.bat" "./tmp/纸人挂.bat"
-    cp "./dist/zh/patch_paper_params.ps1" "./tmp/patch_paper_params.ps1"
-    cp "./dist/zh/setup.ps1" "./tmp/setup.ps1"
-    7z a -tzip -mx9 "./battle-instinct_zh.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg" "./tmp/纸人挂.bat" "./tmp/patch_paper_params.ps1" "./tmp/setup.ps1"
+    7z a -tzip -mx9 "./battle-instinct_zh.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg" "./tmp/纸人挂.bat"
     cp "./dist/en/dinput8.dll" "./tmp/dinput8.dll"
     cp "./dist/en/battle_instinct.cfg" "./tmp/battle_instinct.cfg"
     cp "./dist/en/纸人挂.bat" "./tmp/纸人挂.bat"
-    cp "./dist/en/patch_paper_params.ps1" "./tmp/patch_paper_params.ps1"
-    cp "./dist/en/setup.ps1" "./tmp/setup.ps1"
-    7z a -tzip -mx9 "./battle-instinct_en.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg" "./tmp/纸人挂.bat" "./tmp/patch_paper_params.ps1" "./tmp/setup.ps1"
+    7z a -tzip -mx9 "./battle-instinct_en.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg" "./tmp/纸人挂.bat"
     rm -rf "./tmp"
 
 release:
