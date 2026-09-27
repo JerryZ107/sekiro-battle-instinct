@@ -15,39 +15,6 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 - [dist/en/dinput8.dll](dist/en/dinput8.dll)
 - [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
 
-### Config toggles (comments at the end of cfg)
-
-| Key | Meaning |
-| --- | --- |
-| `# boot console: off` | Show the load-info console on startup (off by default) |
-| `# rl window: 0.3s` | **`rl` (Sakura Dance)**: press `l` within this time after `r`, with both held when `l` registers; real B+A is still stripped |
-| `# tool trigger window: 0.3s` | Two-key prosthetic: first key → `q`/`t` must land within this time (~0.3s) |
-| `# art queue delay: 0.3s` | After the last key is released, wait this long before flushing a queued art; `0s` = flush immediately |
-| `# paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and `纸人挂.bat` writes no param) |
-| `# paper initial cap: 25` | Cap = this value + `per skill bonus` x learned "form cap" skills |
-| `# per skill bonus: 5` | How much each "form cap" (形代所持上限) skill adds to the cap |
-| `# drift: 9` | Blood/temporary emblem cap, and the amount granted per use of 纸人漂流 |
-
-A prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
-
-## Paper-doll (spirit emblem cap / 纸人漂流)
-
-Sekiro stores the **spirit-emblem cap inside the save** (it is written when a skill is learned), so param edits only affect new saves. This MOD handles it in two layers:
-
-| Item | Handled by | Note |
-| --- | --- | --- |
-| Emblem cap (incl. old saves), per-skill bonus, master switch | **DLL, live** | writes `PlayerData+0x146`, using `paper initial cap + per skill bonus x learned "form cap" skills` |
-| 纸人漂流 amount/cap, starting emblems, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by `纸人挂.bat`) |
-
-Usage:
-
-1. Edit the four lines at the end of `battle_instinct.cfg`
-2. Changed `paper initial cap` / `per skill bonus` → **restart the game** (live, works on old saves too)
-3. Changed `drift` (纸人漂流) → double-click **`纸人挂.bat`** in the same folder (it reads the cfg switch/values and writes the param)
-4. Roll back with `纸人挂.bat revert`; disable everything with `# paper cap fix: off`
-
-Field map and reverse-engineering notes: [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
-
 ## Relation to upstream
 
 - **Upstream**: [@dec32](https://github.com/dec32)'s [Battle Instinct](https://github.com/dec32/sekiro-battle-instinct)
@@ -122,6 +89,41 @@ just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip (5 files e
 
 Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
 Players only need `纸人挂.bat`; its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate the bat.
+
+## Paper-doll (spirit emblem cap / 纸人漂流)
+
+Sekiro stores the **spirit-emblem cap inside the save** (it is written when a skill is learned), so param edits only affect new saves. This MOD handles it in two layers:
+
+| Item | Handled by | Note |
+| --- | --- | --- |
+| Emblem cap (incl. old saves), per-skill bonus, master switch | **DLL, live** | writes `PlayerData+0x146`, using `paper initial cap + per skill bonus x learned "form cap" skills` |
+| 纸人漂流 amount/cap, starting emblems, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by `纸人挂.bat`) |
+
+Usage:
+
+1. Edit the four lines at the end of `battle_instinct.cfg`
+2. Changed `paper initial cap` / `per skill bonus` → **restart the game** (live, works on old saves too)
+3. Changed `drift` (纸人漂流) → double-click **`纸人挂.bat`** in the same folder (it reads the cfg switch/values and writes the param)
+4. Roll back with `纸人挂.bat revert`; disable everything with `# paper cap fix: off`
+
+Field map and reverse-engineering notes: [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
+
+
+## Config toggles (comments at the end of cfg)
+
+| Key | Meaning |
+| --- | --- |
+| `# boot console: off` | Show the load-info console on startup (off by default) |
+| `# rl window: 0.3s` | **`rl` (Sakura Dance)**: press `l` within this time after `r`, with both held when `l` registers; real B+A is still stripped |
+| `# tool trigger window: 0.3s` | Two-key prosthetic: first key → `q`/`t` must land within this time (~0.3s) |
+| `# art queue delay: 0.3s` | After the last key is released, wait this long before flushing a queued art; `0s` = flush immediately |
+| `# paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and `纸人挂.bat` writes no param) |
+| `# paper initial cap: 25` | Cap = this value + `per skill bonus` x learned "form cap" skills |
+| `# per skill bonus: 5` | How much each "form cap" (形代所持上限) skill adds to the cap |
+| `# drift: 9` | Blood/temporary emblem cap, and the amount granted per use of 纸人漂流 |
+
+A prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
+
 
 ## Credits
 
