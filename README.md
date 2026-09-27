@@ -8,19 +8,25 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 
 ## 直接使用（推荐） / Quick start (recommended)
 
-**只需两个文件**复制到 `sekiro.exe` 同目录：`dinput8.dll` + `battle_instinct.cfg`。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
+**推荐用一键脚本**：把发行包里的 5 个文件（`dinput8.dll`、`battle_instinct.cfg`、`纸人挂.bat`、`patch_paper_params.ps1`、`setup.ps1`）放到 `sekiro.exe` 同目录，右键跑一次 `setup.ps1`（或直接双击 `纸人挂.bat`）。也能手动只放 `dinput8.dll` + `battle_instinct.cfg`。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
 
-Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.cfg`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
+**Recommended: one-click script.** Drop the 5 files from the release (`dinput8.dll`, `battle_instinct.cfg`, `纸人挂.bat`, `patch_paper_params.ps1`, `setup.ps1`) next to `sekiro.exe` and run `setup.ps1` once (or just double-click `纸人挂.bat`). You can still install manually with only `dinput8.dll` + `battle_instinct.cfg`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
 
 ### 中文发行包 / Chinese release
 
 - [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
 - [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
+- [dist/zh/纸人挂.bat](dist/zh/纸人挂.bat)　- 纸人挂入口（双击）
+- [dist/zh/patch_paper_params.ps1](dist/zh/patch_paper_params.ps1)　- param 写入脚本
+- [dist/zh/setup.ps1](dist/zh/setup.ps1)　- 一键安装（自动找游戏目录）
 
 ### 英文发行包 / English release
 
 - [dist/en/dinput8.dll](dist/en/dinput8.dll)
 - [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
+- [dist/en/纸人挂.bat](dist/en/纸人挂.bat) - paper-doll entry (double-click)
+- [dist/en/patch_paper_params.ps1](dist/en/patch_paper_params.ps1) - param writer
+- [dist/en/setup.ps1](dist/en/setup.ps1) - one-click installer (auto-detects game dir)
 
 ### cfg 可调项 / Config toggles (comments at top of cfg)
 
@@ -30,8 +36,39 @@ Copy **only two files** next to `sekiro.exe`: `dinput8.dll` + `battle_instinct.c
 | `# rl触发时限: 0.3s` | `# rl window: 0.3s` | **`rl` 樱舞**：按 `r` 后在此时间内按 `l`，且触发时 `r`、`l` 同时按住；真实 B+A 仍被剥离 |
 | `# 忍具触发时限: 0.3s` | `# tool trigger window: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
 | `# 武技排队等待: 0.3s` | `# art queue delay: 0.3s` | 上一招末键松手后，再等此时长才放出排队武技；`0s` = 松手后立刻放 |
+| `# 纸人上限功能: 开` | `# paper cap fix: on` | 纸人上限运行时修正总开关（关 = DLL 不写内存，`纸人挂.bat` 也不写 param） |
+| `# 纸人初始上限: 25` | `# paper initial cap: 25` | 上限 = 本值 + `技能增加上限` × 已学「形代所持上限」技能数 |
+| `# 技能增加上限: 5` | `# per skill bonus: 5` | 每个「形代所持上限」技能追加多少上限 |
+| `# 纸人漂流: 9` | `# drift: 9` | 血纸人(临时纸人)上限，也是纸人漂流一次给的数量 |
 
 忍具多段触发时限写在**键位后**加 `-时间`，如 `↑q-0.5s` 或 `↑q-多段触发时限0.5s`；未写则默认 1s。Each prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
+
+## 纸人挂（纸人上限 / 纸人漂流） / Paper-doll (spirit emblem)
+
+只狼的**纸人上限**是学技能时由游戏写进**存档**的，所以只改 param 只能影响新存档；本 MOD 分两层处理：
+
+| 项目 | 由谁负责 | 说明 |
+| --- | --- | --- |
+| 纸人上限（含老存档）、每技能加成、总开关 | **DLL 实时** | 写 `PlayerData+0x146`，按 `纸人初始上限 + 技能增加上限 × 已学「形代所持上限」技能数` 计算 |
+| 纸人漂流数量/上限、初始纸人、上限成长浮点 | **param 文件** | 由 `patch_paper_params.ps1` 一次性写入（`纸人挂.bat` 会调用） |
+
+用法：
+
+1. 改 `battle_instinct.cfg` 末尾那四行（见上表）
+2. 改「纸人初始上限 / 技能增加上限」→ **重进游戏**即生效（DLL 实时，老存档也管）
+3. 改「纸人漂流」→ 双击同目录的 **`纸人挂.bat`**（它会读 cfg 的开关和数值，再写入 param）
+4. 回滚：`纸人挂.bat revert`；想整块关掉：cfg 里写 `纸人上限功能: 关`
+
+The **spirit-emblem cap** is stored inside the *save* (written when a skill is learned), so param edits only affect new saves. This MOD handles it in two layers:
+
+| Item | Handled by | Note |
+| --- | --- | --- |
+| Emblem cap (incl. old saves), per-skill bonus, master switch | **DLL, live** | writes `PlayerData+0x146`, using `initial cap + per-skill bonus x learned "form cap" skills` |
+| 纸人漂流 amount/cap, starting emblems, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by `纸人挂.bat`) |
+
+Usage: edit the four lines at the end of `battle_instinct.cfg`; restart the game after changing the cap values; double-click `纸人挂.bat` after changing 纸人漂流; `纸人挂.bat revert` rolls the param back.
+
+字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。Field map & notes: [docs/纸人参数.md](docs/纸人参数.md).
 
 ## 与原版的关系 / Relation to upstream
 
