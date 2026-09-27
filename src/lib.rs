@@ -3,6 +3,7 @@ mod cfg_meta;
 mod config;
 mod core;
 mod device;
+mod emblem;
 mod frame;
 mod game;
 mod input;
