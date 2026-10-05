@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZero, path::Path};
+﻿use std::{fmt, num::NonZero, path::Path};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use crate::{
@@ -6,6 +6,7 @@ use crate::{
     device::{Gamepad, is_key_down},
     emblem::Emblem,
     frame::Frames,
+    health::Health,
     game::{self},
     input::{ArtCombo, ArtComboWindow, ArtToken},
 };
@@ -70,6 +71,7 @@ const PROSTHETIC_SLOT_2: u8 = 4;
 pub struct Mod {
     config: Config,
     emblem: Emblem,
+    health: Health,
     art_combo: ArtComboWindow,
     cur_art: Option<UID>,
     blocking_last_frame: bool,
@@ -134,10 +136,12 @@ impl Mod {
         let cfg_path = path.as_ref().to_path_buf();
         let config = Config::open(&cfg_path)?;
         let emblem = Emblem::new(&cfg_path);
+        let health = Health::new(&cfg_path);
         let art_combo = ArtComboWindow::new(config.rl_combo_max_age);
         let modification = Mod {
             config,
             emblem,
+            health,
             gamepad: Gamepad::new()?,
             art_combo,
             cur_art: None,
@@ -683,6 +687,7 @@ impl Mod {
 
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
         self.emblem.tick();
+        self.health.tick();
 
         /***** keystates *****/
         let w_down = is_key_down(VK_W);

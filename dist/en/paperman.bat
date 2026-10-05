@@ -13,7 +13,8 @@ echo ----------------------------------------------------------
 echo   Reads these lines from battle_instinct.cfg (same folder):
 echo     paper cap fix: on / off
 echo     paper initial cap: 25    per skill bonus: 5    drift: 9
-echo   "paper cap fix: off" = write nothing.
+echo     health fix: on         hp multiplier: 3
+echo   "paper cap fix: off" / "health fix: off" = skip that section.
 echo   Edit the cfg, then double-click this file. Roll back: paperman.bat revert
 echo ==========================================================
 echo.
@@ -22,7 +23,7 @@ if not exist "%PAPERDOLL_CFG%" (
   goto done
 )
 set "TMPPS=%TEMP%\zhiren_%RANDOM%%RANDOM%.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%~f0' -Encoding Default | Select-Object -Skip 42 | Set-Content -LiteralPath '%TMPPS%' -Encoding Default"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%~f0' -Encoding Default | Select-Object -Skip 43 | Set-Content -LiteralPath '%TMPPS%' -Encoding Default"
 if not exist "%TMPPS%" (
   echo [ERROR] could not unpack the temporary script.
   goto done
@@ -41,7 +42,7 @@ exit /b
 
 rem ==== embedded PowerShell below (self-extracting; regenerate with tools/make_bat.ps1) ====
 <#
-  patch_paper_params.ps1 - paper doll (Spirit Emblem) param one-shot patcher
+  patch_paper_params.ps1 - paper doll + player max HP param one-shot patcher
   ------------------------------------------------------------------------
   纸人（Spirit Emblem / 形代）相关 param 一键修改。
   不改 DLL、不覆盖别人的 mod：直接对 Mod Engine 加载的 regulation 参数包
@@ -55,6 +56,13 @@ rem ==== embedded PowerShell below (self-extracting; regenerate with tools/make_
     ResourceItemParam goodsId=1000 行  +0x14/+0x18/+0x1C/+0x20 (f32)
         = 基础上限/4、满上限/4、技能个数、满上限（推断，用于「每个技能 +N」）
 
+  玩家最大 HP（k=3，血条适配）：
+    CalcCorrectGraph row 500  stageMaxGrowVal0 = 320*k, stageMaxGrowVal1..4 = 1120*k
+    MenuParam row 0           PlayerMaxHpLimit = 1920*k, PlayerQuarterHp = 20*k,
+                              HealthHp* 同步 *k，PlayerMaxAddHp = 0
+    默认 k=3：开局最大 HP 960，每条念珠串 +240，10 条后 3360；满级血条长度保持原版比例
+    cfg: 血量功能: 开/关  血量倍率: 3   /   -SkipHp  -HpMultiplier 3
+
   输出语言：
     -Lang en / -Lang zh，或环境变量 PAPERDOLL_LANG=en|zh（发布包 .bat 用它切换）
     缺省按系统区域：中文系统 = zh，其余 = en
@@ -64,6 +72,7 @@ rem ==== embedded PowerShell below (self-extracting; regenerate with tools/make_
       应用:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Apply
       回滚:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Revert
       自定义:    ... -Apply -InitialPaper 30 -BaseCap 30 -PerSkillBonus 10 -TempCap 15 -DriftAmount 15
+      血量:      ... -Apply -HpMultiplier 3     （默认已开启；关：-SkipHp 或 cfg「血量功能: 关」）
 
   说明：输出串全为 ASCII，中文一律写成 \uXXXX 转义；正文里剩下的中文只有 cfg 键名，
   两者都能被 GBK 编码，所以嵌进 .bat 尾部再被 `Get-Content -Encoding Default` 读出来也不会乱码。
@@ -79,6 +88,8 @@ param(
     [int]$SkillCount    = 5,
     [int]$TempCap       = 15,
     [int]$DriftAmount   = 15,
+    [double]$HpMultiplier = 3.0,
+    [switch]$SkipHp,
     [string]$Lang       = $(if ($env:PAPERDOLL_LANG) { $env:PAPERDOLL_LANG } else { 'auto' }),
     [switch]$SkipGrowthFloats,
     [switch]$Apply,
@@ -128,6 +139,11 @@ $S = @{
         rolledBack = 'Rolled back: {0} -> {1}'
         noGoods = 'EquipParamGoods.param not found in the param package'
         noRes = 'ResourceItemParam.param not found in the param package'
+        missingCcg = 'CalcCorrectGraph.param not found in the param package'
+        missingMenu = 'MenuParam.param not found in the param package'
+        missingCcgRow = 'CalcCorrectGraph row 500 not found'
+        missingMenuRow = 'MenuParam row 0 not found'
+        verifyHp = 'Verify HP: start={0} max={1} limit={2} quarter={3}'
     }
     zh = @{
         off = '当前 cfg 里「纸人上限功能: 关」→ 跳过 param 写入（想强制加 -Force，想回滚加 -Revert）'
@@ -155,6 +171,11 @@ $S = @{
         rolledBack = '已回滚: {0} -> {1}'
         noGoods = '参数包里没有 EquipParamGoods.param'
         noRes = '参数包里没有 ResourceItemParam.param'
+        missingCcg = '参数包里没有 CalcCorrectGraph.param'
+        missingMenu = '参数包里没有 MenuParam.param'
+        missingCcgRow = 'CalcCorrectGraph 里没有 500 行'
+        missingMenuRow = 'MenuParam 里没有 0 行'
+        verifyHp = '校验 HP: 开局={0} 满级={1} 血条基准={2} 四分之一={3}'
     }
 }
 $T = $S[$Lang]
@@ -242,7 +263,23 @@ if ($CfgFile -and (Test-Path $CfgFile)) {
     $swLine = Select-String -Path $CfgFile -Pattern '(纸人上限功能|paper cap fix)\s*[:：]' -Encoding UTF8 | Select-Object -First 1
     if ($swLine -and ($swLine.Line -match '[:：]\s*(关|off|false|no)')) { $capFixOn = 0 }
 }
-if (-not $Revert -and -not $Force -and $capFixOn -eq 0) {
+# 「血量功能: 开/关」以及倍率
+$hpFixOn = 1
+if ($CfgFile -and (Test-Path $CfgFile)) {
+    foreach ($line in (Get-Content $CfgFile -Encoding UTF8)) {
+        $body = $line.TrimStart('#', ' ').Trim()
+        if ($body -match '^(血量功能|health fix)\s*[:：]\s*(.*)$') {
+            if ($Matches[2] -match '^(关|off|false|no|0)\b') { $hpFixOn = 0 } else { $hpFixOn = 1 }
+        }
+        if ($body -match '^(血量倍率|hp multiplier|health multiplier)\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)') {
+            $HpMultiplier = [double]$Matches[2]
+        }
+    }
+}
+if ($HpMultiplier -le 0) { $HpMultiplier = 3.0 }
+$doPaper = $Force -or ($capFixOn -ne 0)
+$doHp = (-not $SkipHp) -and ($Force -or ($hpFixOn -ne 0))
+if (-not $Revert -and -not $doPaper -and -not $doHp) {
     Write-Host $T.off
     return
 }
@@ -386,7 +423,7 @@ Add-Type -TypeDefinition $cs -ErrorAction Stop
 if (-not (Test-Path $ParamFile)) { throw ($T.noParam -f $ParamFile) }
 
 if ($Revert) {
-    $baks = Get-ChildItem ($ParamFile + '.bak-*') -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+    $baks = Get-ChildItem ($ParamFile + '.bak-*') -ErrorAction SilentlyContinue | Sort-Object Name -Descending
     if (-not $baks) { throw ($T.noBackup -f $ParamFile) }
     $src = $baks[0].FullName
     Copy-Item $src $ParamFile -Force
@@ -398,12 +435,10 @@ $orig = [System.IO.File]::ReadAllBytes($ParamFile)
 $bnd  = [PaperParams]::Expand($orig)
 $entries = [PaperParams]::Entries($bnd)
 
-$goods = [PaperParams]::Find($entries, 'EquipParamGoods.param')
-$res   = [PaperParams]::Find($entries, 'ResourceItemParam.param')
-if (-not $goods) { throw $T.noGoods }
-if (-not $res)   { throw $T.noRes }
-
-$gRows = [PaperParams]::RowOffsets($bnd, $goods.Start, $goods.Size)
+$gRows = @{}
+$resRow = -1
+$ccgRows = @{}
+$menuRows = @{}
 $maxCap = $BaseCap + $PerSkillBonus * $SkillCount
 
 function Set-U16([int]$row, [int]$off, [int]$val, [string]$label) {
@@ -424,27 +459,70 @@ function Set-F32([int]$row, [int]$off, [single]$val, [string]$label) {
 
 Write-Host ("{0}: {1}" -f $T.target, $ParamFile)
 Write-Host $T.plan
-if ($gRows.ContainsKey(1000)) {
-    Set-U16 $gRows[1000] 0x36 $BaseCap ("EquipParamGoods 1000 " + $T.doll + " cap")
-} else { Write-Host $T.missing1000 }
-if ($gRows.ContainsKey(1001)) {
-    Set-U16 $gRows[1001] 0x36 $TempCap ("EquipParamGoods 1001 " + $T.temp + " cap")
-} else { Write-Host $T.missing1001 }
-if ($gRows.ContainsKey(3800)) {
-    Set-U16 $gRows[3800] 0x8C $DriftAmount ("EquipParamGoods 3800 " + $T.drift + " amount")
-} else { Write-Host $T.missing3800 }
+if ($doPaper) {
+    $goods = [PaperParams]::Find($entries, 'EquipParamGoods.param')
+    $res   = [PaperParams]::Find($entries, 'ResourceItemParam.param')
+    if (-not $goods) { throw $T.noGoods }
+    if (-not $res)   { throw $T.noRes }
+    $gRows = [PaperParams]::RowOffsets($bnd, $goods.Start, $goods.Size)
 
-$resRow = [PaperParams]::FindRowByGoods($bnd, $res.Start, $res.Size, 1000)
-if ($resRow -ge 0) {
-    Set-U32 $resRow 0x10 $InitialPaper ("ResourceItemParam 1000 " + $T.initial)
-    if (-not $SkipGrowthFloats) {
-        Write-Host $T.floats
-        Set-F32 $resRow 0x14 ([single]($BaseCap / 4.0))   ("ResourceItemParam 1000 " + $T.growthF1)
-        Set-F32 $resRow 0x18 ([single]($maxCap / 4.0))    ("ResourceItemParam 1000 " + $T.growthF2)
-        Set-F32 $resRow 0x1C ([single]$SkillCount)        ("ResourceItemParam 1000 " + $T.growthF3)
-        Set-F32 $resRow 0x20 ([single]$maxCap)            ("ResourceItemParam 1000 " + $T.growthF4)
-    }
-} else { Write-Host $T.missingRes }
+    if ($gRows.ContainsKey(1000)) {
+        Set-U16 $gRows[1000] 0x36 $BaseCap ("EquipParamGoods 1000 " + $T.doll + " cap")
+    } else { Write-Host $T.missing1000 }
+    if ($gRows.ContainsKey(1001)) {
+        Set-U16 $gRows[1001] 0x36 $TempCap ("EquipParamGoods 1001 " + $T.temp + " cap")
+    } else { Write-Host $T.missing1001 }
+    if ($gRows.ContainsKey(3800)) {
+        Set-U16 $gRows[3800] 0x8C $DriftAmount ("EquipParamGoods 3800 " + $T.drift + " amount")
+    } else { Write-Host $T.missing3800 }
+
+    $resRow = [PaperParams]::FindRowByGoods($bnd, $res.Start, $res.Size, 1000)
+    if ($resRow -ge 0) {
+        Set-U32 $resRow 0x10 $InitialPaper ("ResourceItemParam 1000 " + $T.initial)
+        if (-not $SkipGrowthFloats) {
+            Write-Host $T.floats
+            Set-F32 $resRow 0x14 ([single]($BaseCap / 4.0))   ("ResourceItemParam 1000 " + $T.growthF1)
+            Set-F32 $resRow 0x18 ([single]($maxCap / 4.0))    ("ResourceItemParam 1000 " + $T.growthF2)
+            Set-F32 $resRow 0x1C ([single]$SkillCount)        ("ResourceItemParam 1000 " + $T.growthF3)
+            Set-F32 $resRow 0x20 ([single]$maxCap)            ("ResourceItemParam 1000 " + $T.growthF4)
+        }
+    } else { Write-Host $T.missingRes }
+}
+
+if ($doHp) {
+    $ccg = [PaperParams]::Find($entries, 'CalcCorrectGraph.param')
+    $menu = [PaperParams]::Find($entries, 'MenuParam.param')
+    if (-not $ccg) { throw $T.missingCcg }
+    if (-not $menu) { throw $T.missingMenu }
+    $ccgRows = [PaperParams]::RowOffsets($bnd, $ccg.Start, $ccg.Size)
+    $menuRows = [PaperParams]::RowOffsets($bnd, $menu.Start, $menu.Size)
+    if (-not $ccgRows.ContainsKey(500)) { throw $T.missingCcgRow }
+    if (-not $menuRows.ContainsKey(0)) { throw $T.missingMenuRow }
+
+    $hpStart = [single](320.0 * $HpMultiplier)
+    $hpMax = [single](1120.0 * $HpMultiplier)
+    $hpLimit = [int][math]::Round(1920.0 * $HpMultiplier)
+    $hpQuarter = [int][math]::Round(20.0 * $HpMultiplier)
+    $hpNoDamage = [int][math]::Round(300.0 * $HpMultiplier)
+    $hpLight = [int][math]::Round(250.0 * $HpMultiplier)
+    $hpHeavy = [int][math]::Round(100.0 * $HpMultiplier)
+    $hpDying = [int][math]::Round(1.0 * $HpMultiplier)
+
+    Write-Host ("  HP max x {0}" -f $HpMultiplier)
+    Set-F32 $ccgRows[500] 0x14 $hpStart "CalcCorrectGraph 500 stageMaxGrowVal0"
+    Set-F32 $ccgRows[500] 0x18 $hpMax "CalcCorrectGraph 500 stageMaxGrowVal1"
+    Set-F32 $ccgRows[500] 0x1C $hpMax "CalcCorrectGraph 500 stageMaxGrowVal2"
+    Set-F32 $ccgRows[500] 0x20 $hpMax "CalcCorrectGraph 500 stageMaxGrowVal3"
+    Set-F32 $ccgRows[500] 0x24 $hpMax "CalcCorrectGraph 500 stageMaxGrowVal4"
+    Set-U32 $menuRows[0] 0x08 $hpLimit "MenuParam 0 PlayerMaxHpLimit"
+    Set-U32 $menuRows[0] 0x1C 0 "MenuParam 0 PlayerMaxAddHp"
+    Set-U32 $menuRows[0] 0x9C $hpQuarter "MenuParam 0 PlayerQuarterHp"
+    Set-U32 $menuRows[0] 0x38 $hpNoDamage "MenuParam 0 HealthHpNoDamage"
+    Set-U32 $menuRows[0] 0x3C $hpLight "MenuParam 0 HealthHpLightDamage"
+    Set-U32 $menuRows[0] 0x40 $hpHeavy "MenuParam 0 HealthHpHeavyDamage"
+    Set-U32 $menuRows[0] 0x44 $hpDying "MenuParam 0 HealthHpDying"
+    Set-U32 $menuRows[0] 0x48 0 "MenuParam 0 HealthHpDead"
+}
 
 if (-not $Apply) {
     Write-Host ''
@@ -460,15 +538,28 @@ $packed = [PaperParams]::Pack($orig, $bnd)
 # verify round trip
 $check = [PaperParams]::Expand([System.IO.File]::ReadAllBytes($ParamFile))
 $ce = [PaperParams]::Entries($check)
-$cg = [PaperParams]::Find($ce, 'EquipParamGoods.param')
-$cr = [PaperParams]::Find($ce, 'ResourceItemParam.param')
-$cgr = [PaperParams]::RowOffsets($check, $cg.Start, $cg.Size)
-$cres = [PaperParams]::FindRowByGoods($check, $cr.Start, $cr.Size, 1000)
 Write-Host ''
 Write-Host ($T.ok -f $ParamFile, (Split-Path $bak -Leaf))
-Write-Host ($T.verify -f `
-    [PaperParams]::U16($check, $cgr[1000] + 0x36), `
-    [PaperParams]::U16($check, $cgr[1001] + 0x36), `
-    [PaperParams]::U16($check, $cgr[3800] + 0x8C), `
-    [PaperParams]::U32($check, $cres + 0x10), `
-    [PaperParams]::F32($check, $cres + 0x20))
+if ($doPaper) {
+    $cg = [PaperParams]::Find($ce, 'EquipParamGoods.param')
+    $cr = [PaperParams]::Find($ce, 'ResourceItemParam.param')
+    $cgr = [PaperParams]::RowOffsets($check, $cg.Start, $cg.Size)
+    $cres = [PaperParams]::FindRowByGoods($check, $cr.Start, $cr.Size, 1000)
+    Write-Host ($T.verify -f `
+        [PaperParams]::U16($check, $cgr[1000] + 0x36), `
+        [PaperParams]::U16($check, $cgr[1001] + 0x36), `
+        [PaperParams]::U16($check, $cgr[3800] + 0x8C), `
+        [PaperParams]::U32($check, $cres + 0x10), `
+        [PaperParams]::F32($check, $cres + 0x20))
+}
+if ($doHp) {
+    $ccg = [PaperParams]::Find($ce, 'CalcCorrectGraph.param')
+    $menu = [PaperParams]::Find($ce, 'MenuParam.param')
+    $ccgRows = [PaperParams]::RowOffsets($check, $ccg.Start, $ccg.Size)
+    $menuRows = [PaperParams]::RowOffsets($check, $menu.Start, $menu.Size)
+    Write-Host ($T.verifyHp -f `
+        [PaperParams]::F32($check, $ccgRows[500] + 0x14), `
+        [PaperParams]::F32($check, $ccgRows[500] + 0x18), `
+        [PaperParams]::U32($check, $menuRows[0] + 0x08), `
+        [PaperParams]::U32($check, $menuRows[0] + 0x9C))
+}
