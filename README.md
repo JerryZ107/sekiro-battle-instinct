@@ -8,13 +8,13 @@
 
 ## 直接使用（推荐）
 
-**只需三个文件**：`dinput8.dll`、`battle_instinct.cfg`、`纸人挂.bat` 放到 `sekiro.exe` 同目录，然后**双击一次 `纸人挂.bat`**（它内置 param 写入逻辑，不需要任何 `.ps1`）。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
+**只需三个文件**：`dinput8.dll`、`battle_instinct.cfg`、`纸血挂.bat` 放到 `sekiro.exe` 同目录，然后**双击一次 `纸血挂.bat`**（它内置 param 写入逻辑，不需要任何 `.ps1`）。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
 
 ### 中文发行包
 
 - [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
 - [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
-- [dist/zh/纸人挂.bat](dist/zh/纸人挂.bat)　- 纸人挂入口（双击）
+- [dist/zh/纸血挂.bat](dist/zh/纸血挂.bat)　- 纸血挂入口（双击）
 
 ## 与原版的关系
 
@@ -87,29 +87,29 @@
 
 ```bash
 cargo build --release
-just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 纸人挂.bat）
-just bat      # 只重新生成 纸人挂.bat（把 tools/patch_paper_params.ps1 嵌进 bat）
+just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 纸血挂.bat）
+just bat      # 只重新生成 纸血挂.bat（把 tools/patch_paper_params.ps1 嵌进 bat）
 just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 5 文件）
 ```
 
 产物在 `target/release/`；发行目录为 `dist/zh/`（中文 cfg）与 `dist/en/`（英文 cfg）。
-玩家侧只需要 `纸人挂.bat`；它的源码（PowerShell 版）在 `tools/patch_paper_params.ps1`，改完跑 `just bat` 重新生成 bat。
+玩家侧只需要 `纸血挂.bat`；它的源码（PowerShell 版）在 `tools/patch_paper_params.ps1`，改完跑 `just bat` 重新生成 bat。
 
-## 纸人挂（纸人上限 / 纸人漂流）
+## 纸血挂（纸人上限 / 纸人漂流）
 
 只狼的**纸人上限**是学技能时由游戏写进**存档**的，所以只改 param 只能影响新存档；本 MOD 分两层处理：
 
 | 项目 | 由谁负责 | 说明 |
 | --- | --- | --- |
 | 纸人上限（含老存档）、每技能加成、总开关 | **DLL 实时** | 写 `PlayerData+0x146`，按 `纸人初始上限 + 技能增加上限 × 已学「形代所持上限」技能数` 计算 |
-| 纸人漂流数量/上限、初始纸人、上限成长浮点 | **param 文件** | 由 `patch_paper_params.ps1` 一次性写入（`纸人挂.bat` 会调用） |
+| 纸人漂流数量/上限、初始纸人、上限成长浮点 | **param 文件** | 由 `patch_paper_params.ps1` 一次性写入（`纸血挂.bat` 会调用） |
 
 用法：
 
 1. 改 `battle_instinct.cfg` 末尾那四行（见上表）
 2. 改「纸人初始上限 / 技能增加上限」→ **重进游戏**即生效（DLL 实时，老存档也管）
-3. 改「纸人漂流」→ 双击同目录的 **`纸人挂.bat`**（内置逻辑：读 cfg 开关与数值 → 写入 param；`纸人挂.bat revert` 回滚）
-4. 回滚：`纸人挂.bat revert`；想整块关掉：cfg 里写 `纸人上限功能: 关`
+3. 改「纸人漂流」→ 双击同目录的 **`纸血挂.bat`**（内置逻辑：读 cfg 开关与数值 → 写入 param；`纸血挂.bat revert` 回滚）
+4. 回滚：`纸血挂.bat revert`；想整块关掉：cfg 里写 `纸人上限功能: 关`
 
 字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。
 
@@ -122,7 +122,7 @@ just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 
 | `# rl触发时限: 0.3s` | **`rl` 樱舞**：按 `r` 后在此时间内按 `l`，且触发时 `r`、`l` 同时按住；真实 B+A 仍被剥离 |
 | `# 忍具触发时限: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
 | `# 武技排队等待: 0.3s` | 上一招末键松手后，再等此时长才放出排队武技；`0s` = 松手后立刻放 |
-| `# 纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存，`纸人挂.bat` 也不写 param） |
+| `# 纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存，`纸血挂.bat` 也不写 param） |
 | `# 纸人初始上限: 25` | 上限 = 本值 + `技能增加上限` × 已学「形代所持上限」技能数 |
 | `# 技能增加上限: 5` | 每个「形代所持上限」技能追加多少上限 |
 | `# 纸人漂流: 9` | 血纸人(临时纸人)上限，也是纸人漂流一次给的数量 |

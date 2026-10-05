@@ -8,7 +8,7 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 
 ## Quick start (recommended)
 
-**Only three files needed**: put `dinput8.dll`, `battle_instinct.cfg` and `paperman.bat` next to `sekiro.exe`, then **double-click `paperman.bat` once** (it has the param writer built in, no `.ps1` required). The Chinese release is identical except the cfg is Chinese and the launcher is `纸人挂.bat`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
+**Only three files needed**: put `dinput8.dll`, `battle_instinct.cfg` and `paperman.bat` next to `sekiro.exe`, then **double-click `paperman.bat` once** (it has the param writer built in, no `.ps1` required). The Chinese release is identical except the cfg is Chinese and the launcher is `纸血挂.bat`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
 
 ### English release
 
@@ -89,7 +89,7 @@ just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip (3 files e
 ```
 
 Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
-Players only need the launcher bat (`dist/zh/纸人挂.bat` for Chinese, `dist/en/paperman.bat` for English); its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate both.
+Players only need the launcher bat (`dist/zh/纸血挂.bat` for Chinese, `dist/en/paperman.bat` for English); its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate both.
 
 ## Paper doll (spirit emblem cap / drift)
 
@@ -104,7 +104,7 @@ Usage:
 
 1. Edit the four lines at the end of `battle_instinct.cfg`
 2. Changed `paper initial cap` / `per skill bonus` → **restart the game** (live, works on old saves too)
-3. Changed `drift` (Paper Doll Drift) → double-click the launcher bat in the same folder (`paperman.bat`, or `纸人挂.bat` for the Chinese cfg); it reads the cfg switch/values and writes the param
+3. Changed `drift` (Paper Doll Drift) → double-click the launcher bat in the same folder (`paperman.bat`, or `纸血挂.bat` for the Chinese cfg); it reads the cfg switch/values and writes the param
 4. Roll back with `paperman.bat revert`; disable everything with `# paper cap fix: off`
 
 Field map and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md) (English) / [docs/纸人参数.md](docs/纸人参数.md) (Chinese).

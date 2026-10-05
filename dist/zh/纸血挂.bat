@@ -1,21 +1,21 @@
 @echo off
 setlocal
 chcp 936 >nul
-title 只狼 · 纸人挂
+title 只狼 · 纸血挂
 set "HERE=%~dp0"
 set "PAPERDOLL_CFG=%HERE%battle_instinct.cfg"
 set "PAPERDOLL_LANG=zh"
 if /i "%~1"=="revert" set "PAPERDOLL_REVERT=1"
 if /i "%~1"=="rollback" set "PAPERDOLL_REVERT=1"
 echo ==========================================================
-echo   只狼 · 纸人挂
+echo   只狼 · 纸血挂
 echo ----------------------------------------------------------
 echo   读取同目录 battle_instinct.cfg 里的这几行：
 echo     纸人上限功能: 开 / 关
 echo     纸人初始上限: 25     技能增加上限: 5     纸人漂流: 9
 echo     血量功能: 开 / 关     血量倍率: 3
 echo   「纸人上限功能: 关」/「血量功能: 关」= 跳过对应部分。
-echo   改完 cfg 双击本文件；回滚：纸人挂.bat revert
+echo   改完 cfg 双击本文件；回滚：纸血挂.bat revert
 echo ==========================================================
 echo.
 if not exist "%PAPERDOLL_CFG%" (

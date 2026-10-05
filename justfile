@@ -5,7 +5,7 @@
 logs:
     tail -f "C:/Program Files (x86)/Steam/steamapps/common/Sekiro/battle_instinct.log"
 
-# 重新生成一键脚本：dist/zh/纸人挂.bat（中文界面）+ dist/en/paperman.bat（英文界面）。
+# 重新生成一键脚本：dist/zh/纸血挂.bat（中文界面）+ dist/en/paperman.bat（英文界面）。
 # Regenerate both launch scripts (embeds tools/patch_paper_params.ps1 into each bat).
 bat:
     powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/make_bat.ps1
@@ -20,13 +20,13 @@ dist: bat
     cp -f "./res/battle_instinct_zh.cfg" "./dist/zh/battle_instinct.cfg"
     cp -f "./res/battle_instinct.cfg" "./dist/en/battle_instinct.cfg"
 
-# 打两个发布 zip：中文包用 纸人挂.bat，英文包用 paperman.bat。
+# 打两个发布 zip：中文包用 纸血挂.bat，英文包用 paperman.bat。
 pack: dist
     mkdir -p "./tmp"
     cp "./dist/zh/dinput8.dll" "./tmp/dinput8.dll"
     cp "./dist/zh/battle_instinct.cfg" "./tmp/battle_instinct.cfg"
-    cp "./dist/zh/纸人挂.bat" "./tmp/纸人挂.bat"
-    7z a -tzip -mx9 "./battle-instinct_zh.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg" "./tmp/纸人挂.bat"
+    cp "./dist/zh/纸血挂.bat" "./tmp/纸血挂.bat"
+    7z a -tzip -mx9 "./battle-instinct_zh.zip" "./tmp/dinput8.dll" "./tmp/battle_instinct.cfg" "./tmp/纸血挂.bat"
     cp "./dist/en/dinput8.dll" "./tmp/dinput8.dll"
     cp "./dist/en/battle_instinct.cfg" "./tmp/battle_instinct.cfg"
     cp "./dist/en/paperman.bat" "./tmp/paperman.bat"
