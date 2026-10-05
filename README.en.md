@@ -110,6 +110,23 @@ Usage:
 Field map and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md) (English) / [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
 
 
+## Blood-bar launcher (player max HP / HP bar)
+
+This mod also supports scaling player max HP and adapting the HP bar:
+
+- `hp multiplier: 3`: scales the max-HP curve by 3
+  - starting max HP: `320 -> 960`
+  - each Prayer Necklace: `+80 -> +240`
+  - after 10 necklaces: `1120 -> 3360`
+  - `PlayerMaxHpLimit`, `PlayerQuarterHp`, and health thresholds scale by the same factor
+- The param layer handles the HP curve and bar reference; double-click `纸血挂.bat` / `paperman.bat` to write it.
+- The DLL layer fixes old-save cached max HP: `src/health.rs` reads the HP level at `PlayerData+0x44` and syncs `0x20 / 0x1c / 0x18`.
+- After changing `hp multiplier`:
+  1. re-run `纸血挂.bat` / `paperman.bat`, or `tools\patch_paper_params.ps1 -Apply`, to update params;
+  2. restart the game so the DLL runtime fix applies.
+- Disable with `# health fix: off`; the old-save DLL fix can be disabled separately with `# health old save fix: off`.
+- Field details: [docs/血量参数.md](docs/血量参数.md).
+
 ## Config toggles (comments at the end of cfg)
 
 | Key | Meaning |
