@@ -118,11 +118,11 @@ just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 
 
 本 MOD 还支持按倍率修改玩家最大 HP，并同步适配血条：
 
-- `血量倍率: 3`：最大 HP 曲线整体 ×3
-  - 开局最大 HP：`320 -> 960`
-  - 每条念珠串：`+80 -> +240`
-  - 10 条念珠串后：`1120 -> 3360`
-  - `PlayerMaxHpLimit`、`PlayerQuarterHp`、健康阈值同步 ×3
+- `血量倍率: 2`：最大 HP 曲线整体 ×2
+  - 开局最大 HP：`320 -> 640`
+  - 每条念珠串：`+80 -> +160`
+  - 10 条念珠串后：`1120 -> 2240`
+  - `PlayerMaxHpLimit`、`PlayerQuarterHp`、健康阈值同步 ×2
 - param 层负责 HP 曲线和血条基准，双击 `纸血挂.bat` / `paperman.bat` 写入；
 - DLL 层负责旧存档缓存的最大 HP：`src/health.rs` 按 `PlayerData+0x44` 的 HP 等级同步 `0x20 / 0x1c / 0x18`；
 - 改 `血量倍率` 后：

@@ -13,11 +13,11 @@
     ResourceItemParam goodsId=1000 行  +0x14/+0x18/+0x1C/+0x20 (f32)
         = 基础上限/4、满上限/4、技能个数、满上限（推断，用于「每个技能 +N」）
 
-  玩家最大 HP（k=3，血条适配）：
+  玩家最大 HP（k=2，血条适配）：
     CalcCorrectGraph row 500  stageMaxGrowVal0 = 320*k, stageMaxGrowVal1..4 = 1120*k
     MenuParam row 0           PlayerMaxHpLimit = 1920*k, PlayerQuarterHp = 20*k,
                               HealthHp* 同步 *k，PlayerMaxAddHp = 0
-    默认 k=3：开局最大 HP 960，每条念珠串 +240，10 条后 3360；满级血条长度保持原版比例
+    默认 k=2：开局最大 HP 640，每条念珠串 +160，10 条后 2240；满级血条长度保持原版比例
     cfg: 血量功能: 开/关  血量倍率: 3   /   -SkipHp  -HpMultiplier 3
 
   输出语言：
@@ -29,7 +29,7 @@
       应用:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Apply
       回滚:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Revert
       自定义:    ... -Apply -InitialPaper 30 -BaseCap 30 -PerSkillBonus 10 -TempCap 15 -DriftAmount 15
-      血量:      ... -Apply -HpMultiplier 3     （默认已开启；关：-SkipHp 或 cfg「血量功能: 关」）
+      血量:      ... -Apply -HpMultiplier 2     （默认已开启；关：-SkipHp 或 cfg「血量功能: 关」）
 
   说明：输出串全为 ASCII，中文一律写成 \uXXXX 转义；正文里剩下的中文只有 cfg 键名，
   两者都能被 GBK 编码，所以嵌进 .bat 尾部再被 `Get-Content -Encoding Default` 读出来也不会乱码。
@@ -45,7 +45,7 @@ param(
     [int]$SkillCount    = 5,
     [int]$TempCap       = 15,
     [int]$DriftAmount   = 15,
-    [double]$HpMultiplier = 3.0,
+    [double]$HpMultiplier = 2.0,
     [switch]$SkipHp,
     [string]$Lang       = $(if ($env:PAPERDOLL_LANG) { $env:PAPERDOLL_LANG } else { 'auto' }),
     [switch]$SkipGrowthFloats,

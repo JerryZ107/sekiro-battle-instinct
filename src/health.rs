@@ -16,7 +16,7 @@ use std::{fs, path::Path};
 
 use crate::game;
 
-const DEFAULT_MULTIPLIER: f32 = 3.0;
+const DEFAULT_MULTIPLIER: f32 = 2.0;
 const BASE_HP: f32 = 320.0;
 const HP_PER_LEVEL: f32 = 80.0;
 const LEVEL_MIN: u8 = 1;

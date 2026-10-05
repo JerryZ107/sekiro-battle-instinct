@@ -114,10 +114,10 @@ Field map and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/pap
 
 This mod also supports scaling player max HP and adapting the HP bar:
 
-- `hp multiplier: 3`: scales the max-HP curve by 3
-  - starting max HP: `320 -> 960`
-  - each Prayer Necklace: `+80 -> +240`
-  - after 10 necklaces: `1120 -> 3360`
+- `hp multiplier: 2`: scales the max-HP curve by 2
+  - starting max HP: `320 -> 640`
+  - each Prayer Necklace: `+80 -> +160`
+  - after 10 necklaces: `1120 -> 2240`
   - `PlayerMaxHpLimit`, `PlayerQuarterHp`, and health thresholds scale by the same factor
 - The param layer handles the HP curve and bar reference; double-click `纸血挂.bat` / `paperman.bat` to write it.
 - The DLL layer fixes old-save cached max HP: `src/health.rs` reads the HP level at `PlayerData+0x44` and syncs `0x20 / 0x1c / 0x18`.
