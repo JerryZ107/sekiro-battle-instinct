@@ -49,8 +49,10 @@ const EMPOWERED_MORTAL_DRAW: UID = 7300;
 const ATTACK: u64 = 0x1;
 const BLOCK: u64 = 0x4;
 const JUMP: u64 = 0x10;
-/// 「动作、(长按)吸引」— verified in-game via action probe.
+/// 「动作」— verified in-game via action probe.
 const INTERACT: u64 = 0x1000;
+/// Grapple/hook action — verified in-game via action probe (E rebound to grapple reads 0x20000008).
+const GRAPPLE: u64 = 0x20000000;
 const DODGE: u64 = 0x2000;
 const USE_PROSTHETIC: u64 = 0x40040002;
 /// 「切换忍具」— verified in-game via action probe (2026-09-01).
@@ -77,6 +79,7 @@ pub struct Mod {
     blocking_last_frame: bool,
     attacking_last_frame: bool,
     interacting_last_frame: bool,
+    grappling_last_frame: bool,
     using_tool_last_frame: bool,
     swapout_countdown: Countdown,
     attack_delay: u8,
@@ -105,7 +108,7 @@ pub struct Mod {
     art_diag_n: u32,
     /// Diagnostic: last inject phase label (to log transitions only).
     art_diag_phase: &'static str,
-    /// Pending first token for prosthetic combo (↑↓←→/r/l/f/q); waiting for q/t.
+    /// Pending first token for prosthetic combo (↑↓←→/r/l/e/f/q); waiting for q/t.
     tool_first: Option<ToolFirst>,
     tool_first_age: u16,
     /// While set, keep injecting USE_PROSTHETIC until this tail key is released.
@@ -121,11 +124,12 @@ pub struct Mod {
     /// Last frame「切换忍具」held (after we observe, before swallow).
     switch_down_last: bool,
     tools_inited: bool,
-    /// Edge memory for prosthetic first-key directions / r l f.
+    /// Edge memory for prosthetic first-key directions / r l e f.
     tool_keys_down: [bool; 4],
     tool_block_down: bool,
     tool_attack_down: bool,
     tool_interact_down: bool,
+    tool_grapple_down: bool,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
     combo_dirs_last: [bool; 4],
@@ -148,6 +152,7 @@ impl Mod {
             blocking_last_frame: false,
             attacking_last_frame: false,
             interacting_last_frame: false,
+            grappling_last_frame: false,
             using_tool_last_frame: false,
             swapout_countdown: Countdown::zero(),
             attack_delay: 0,
@@ -178,6 +183,7 @@ impl Mod {
             tool_block_down: false,
             tool_attack_down: false,
             tool_interact_down: false,
+            tool_grapple_down: false,
             ejection: None,
             combo_dirs_last: [false; 4],
         };
@@ -189,6 +195,7 @@ impl Mod {
         combo: ArtCombo,
         blocking_last_frame: bool,
         interacting_last_frame: bool,
+        grappling_last_frame: bool,
         attacked_just_now: bool,
         attacking: bool,
         combo_up: bool,
@@ -223,6 +230,9 @@ impl Mod {
             (ArtToken::Interact, ArtToken::Attack) => {
                 interacting_last_frame && attacked_just_now
             }
+            (ArtToken::Grapple, ArtToken::Attack) => {
+                grappling_last_frame && attacked_just_now
+            }
             _ => false,
         }
     }
@@ -251,6 +261,7 @@ impl Mod {
                 combo,
                 self.blocking_last_frame,
                 self.interacting_last_frame,
+                self.grappling_last_frame,
                 attacked_just_now,
                 attacking,
                 combo_up,
@@ -528,9 +539,9 @@ impl Mod {
         self.tool_first_age = 0;
     }
 
-    /// Track ↑↓←→/r/l/f as first key; on q/t/r/l/e complete combo → equip + hold-inject USE.
+    /// Track ↑↓←→/r/l/e/f as first key; on q/t/r/l/e/f complete combo → equip + hold-inject USE.
     /// Bare `t` arms `tool_on_t`. Bare `q` arms `tool_on_q` (same fire style; return-default stays `t`).
-    /// Returns true when a tool was armed via `r`/`l`/`e` tail (caller should clear art combo).
+    /// Returns true when a tool was armed via `r`/`l`/`e`/`f` tail (caller should clear art combo).
     fn handle_prosthetic_input(
         &mut self,
         input_handler: &mut game::InputHandler,
@@ -541,12 +552,13 @@ impl Mod {
         blocking: bool,
         attacking: bool,
         interacting: bool,
+        grappling: bool,
         using_tool: bool,
         used_tool_just_now: bool,
     ) -> bool {
         let mut armed_via_art_tail = false;
 
-        // First-key edges for directions only (r/l/e may complete a combo as tail first).
+        // First-key edges for directions only (r/l/e/f may complete a combo as tail first).
         for (i, (held, token)) in [
             (up, ArtToken::Up),
             (right, ArtToken::Right),
@@ -588,6 +600,15 @@ impl Mod {
             }
         }
         self.tool_interact_down = interacting;
+
+        if grappling && !self.tool_grapple_down {
+            if self.try_complete_tool_tail(ToolTail::Grapple) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Grapple);
+            }
+        }
+        self.tool_grapple_down = grappling;
 
         if self.tool_first.is_some() {
             self.tool_first_age = self.tool_first_age.saturating_add(1);
@@ -651,6 +672,7 @@ impl Mod {
                 Some(ToolTail::Block) => blocking,
                 Some(ToolTail::Attack) => attacking,
                 Some(ToolTail::Interact) => interacting,
+                Some(ToolTail::Grapple) => grappling,
                 None => false,
             };
             if self.prosthetic_delay > 0 || held || self.tool_min_use > 0 {
@@ -719,7 +741,10 @@ impl Mod {
         let action_snapshot = input_handler.action;
         let attacking = action_snapshot & ATTACK != 0;
         let blocking = action_snapshot & BLOCK != 0;
+        // Both tokens follow the game's logical action bits, so in-game key remaps
+        // and gamepad bindings keep working. `e` = interact/action, `f` = grapple/hook.
         let interacting = action_snapshot & INTERACT != 0;
+        let grappling = action_snapshot & GRAPPLE != 0;
         let using_tool = action_snapshot & USE_PROSTHETIC != 0;
         let jumping = action_snapshot & JUMP != 0;
         let dodging = action_snapshot & DODGE != 0;
@@ -727,7 +752,7 @@ impl Mod {
         let blocked_just_now = !self.blocking_last_frame && blocking;
         let used_tool_just_now = !self.using_tool_last_frame && using_tool;
 
-        /***** prosthetic: (dir|r|l|f)+q/t or bare t → equip + hold-inject USE *****/
+        /***** prosthetic: (dir|r|l|e|f)+q/t or bare t → equip + hold-inject USE *****/
         if !self.tools_inited {
             self.tools_inited = true;
             if self.config.tool_on_t.is_some() {
@@ -743,12 +768,13 @@ impl Mod {
             blocking,
             attacking,
             interacting,
+            grappling,
             using_tool,
             used_tool_just_now,
         );
 
-        /***** update combat-art token buffer (r/l/f + directions) *****/
-        // `f` = in-game「动作、(长按)吸引」(remap + pad), not a hardcoded VK_E.
+        /***** update combat-art token buffer (r/l/e/f + directions) *****/
+        // `e` and `f` both follow game action bits (remap/pad compatible).
         self.art_combo.tick(
             combo_up,
             combo_right,
@@ -757,8 +783,9 @@ impl Mod {
             blocking,
             attacking,
             interacting,
+            grappling,
         );
-        // Tool took this r/l/e completion — do not also fire a combat art on the same keys.
+        // Tool took this r/l/e/f completion — do not also fire a combat art on the same keys.
         if tool_armed_via_art_tail {
             self.art_combo.clear();
         }
@@ -813,7 +840,7 @@ impl Mod {
         }
 
         let desired_art = if let Some(combo) = self.art_combo.take_completed() {
-            // Two consecutive tokens matched (e.g. r↑, ↑f, ff, rl, rf, fr, fl).
+            // Two consecutive tokens matched (e.g. r↑, ↑e, ↑f, ee, ff, rl, rf, fr, fl).
             if let (Some(uid), Some(hold)) = (self.config.art(combo), combo.second()) {
                 self.art_combo.clear();
                 let is_rl = combo.is_rl();
@@ -1080,8 +1107,8 @@ impl Mod {
             }
         }
         // Prosthetic: settle a few frames after equip, then inject USE while tail held (or min tap).
-        // When the combo tail is r/l/e, strip that vanilla action so ↑r fires the tool directly
-        // (like swallowing SWITCH for q), not "block first, then use".
+        // When the combo tail is r/l/e/f, strip that vanilla action so ↑r / ↑e / ↑f fires the
+        // tool directly (like swallowing SWITCH for q), not "block first, then use".
         if self.prosthetic_delay != 0 {
             input_handler.action &= !USE_PROSTHETIC;
             self.prosthetic_delay -= 1;
@@ -1095,6 +1122,11 @@ impl Mod {
             Some(ToolTail::Block) => input_handler.action &= !BLOCK,
             Some(ToolTail::Attack) => input_handler.action &= !ATTACK,
             Some(ToolTail::Interact) => input_handler.action &= !INTERACT,
+            Some(ToolTail::Grapple) => {
+                input_handler.action &= !GRAPPLE;
+                input_handler.action_b &= !GRAPPLE;
+                input_handler.action_c &= !GRAPPLE;
+            }
             _ => {}
         }
 
@@ -1102,6 +1134,7 @@ impl Mod {
         self.attacking_last_frame = attacking;
         self.blocking_last_frame = blocking;
         self.interacting_last_frame = interacting;
+        self.grappling_last_frame = grappling;
         self.using_tool_last_frame = using_tool;
         self.combo_dirs_last = [combo_up, combo_right, combo_down, combo_left];
     }

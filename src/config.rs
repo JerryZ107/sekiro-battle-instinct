@@ -13,7 +13,7 @@ const COMBART_ART_UID_MAX: UID = 10000;
 const PROSTHETIC_TOOL_UID_MIN: UID = 70000;
 const PROSTHETIC_TOOL_UID_MAX: UID = 100000;
 
-/// Tail key of a prosthetic combo: `q`/`t`, or `r`/`l`/`e`.
+/// Tail key of a prosthetic combo: `q`/`t`, or `r`/`l`/`e`/`f`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ToolTail {
     /// In-game「切换忍具」(action 0x400).
@@ -23,6 +23,7 @@ pub enum ToolTail {
     Block,
     Attack,
     Interact,
+    Grapple,
 }
 
 /// First key of a prosthetic combo. `t` cannot be first; `q` can.
@@ -35,6 +36,7 @@ pub enum ToolFirst {
     Block,
     Attack,
     Interact,
+    Grapple,
     /// `q` as first key (e.g. `qt`).
     Switch,
 }
@@ -49,11 +51,12 @@ impl ToolFirst {
             ArtToken::Block => ToolFirst::Block,
             ArtToken::Attack => ToolFirst::Attack,
             ArtToken::Interact => ToolFirst::Interact,
+            ArtToken::Grapple => ToolFirst::Grapple,
         }
     }
 }
 
-    /// First key (dir / r / l / e / q) + tail (`q` / `t`).
+/// First key (dir / r / l / e / f / q) + tail (`q` / `t`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ToolCombo {
     pub first: ToolFirst,
@@ -91,11 +94,11 @@ pub fn tool_multi_lock_secs_to_frames(secs: f32) -> u16 {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Combat arts keyed by r/l/e + direction pairs (or empty for ∅).
+    /// Combat arts keyed by r/l/e/f + direction pairs (or empty for ∅).
     pub arts: HashMap<ArtCombo, UID>,
     /// Name contains `瞬发` / `instant`: block + direction edge fires immediately (e.g. `r↓`).
     pub instant_arts: HashMap<ArtCombo, UID>,
-    /// Two-key prosthetic binds: (↑↓←→|r|l|e|q) then (q|t).
+    /// Two-key prosthetic binds: (↑↓←→|r|l|e|f|q) then (q|t).
     pub tools: HashMap<ToolCombo, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,
@@ -115,7 +118,7 @@ pub struct Config {
 
 impl Config {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Config> {
-        // Do not uppercase the whole file: art tokens use lowercase r/l/e/q/t.
+        // Do not uppercase the whole file: art tokens use lowercase r/l/e/f/q/t.
         Ok(fs::read_to_string(path)?.into())
     }
 
@@ -375,9 +378,9 @@ fn parse_tool_motion_with_lock(raw: &str) -> Option<(ToolMotion, Option<f32>)> {
     parse_tool_motion(raw).map(|motion| (motion, None))
 }
 
-/// `t` / `q` alone, or first∈{↑↓←→,r,l,e,q} then tail∈{q,t,r,l,e}. `f` still parses as interact (legacy).
+/// `t` / `q` alone, or first∈{↑↓←→,r,l,e,f,q} then tail∈{q,t,r,l,e,f}.
 /// Bare `q` is exclusive with using `q` as a two-key first (e.g. `qt`).
-/// Tail `r`/`l`/`e` arms the tool and hold-injects USE while that key is held (same as `q`/`t`).
+/// Tail `r`/`l`/`e`/`f` arms the tool and hold-injects USE while that key is held (same as `q`/`t`).
 fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     let motion = motion.trim();
     if motion == "t" || motion == "T" {
@@ -396,7 +399,8 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         '←' => ToolFirst::Left,
         'r' | 'R' => ToolFirst::Block,
         'l' | 'L' => ToolFirst::Attack,
-        'f' | 'F' | 'e' | 'E' => ToolFirst::Interact,
+        'e' | 'E' => ToolFirst::Interact,
+        'f' | 'F' => ToolFirst::Grapple,
         'q' | 'Q' => ToolFirst::Switch,
         't' | 'T' => return None, // t cannot be first of a two-key bind
         _ => return None,
@@ -410,7 +414,8 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         't' | 'T' => ToolTail::Use,
         'r' | 'R' => ToolTail::Block,
         'l' | 'L' => ToolTail::Attack,
-        'f' | 'F' | 'e' | 'E' => ToolTail::Interact,
+        'e' | 'E' => ToolTail::Interact,
+        'f' | 'F' => ToolTail::Grapple,
         _ => return None,
     };
     // Same physical key twice (e.g. `rr`) is not useful as a prosthetic bind.
@@ -419,6 +424,7 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         (ToolFirst::Block, ToolTail::Block)
             | (ToolFirst::Attack, ToolTail::Attack)
             | (ToolFirst::Interact, ToolTail::Interact)
+            | (ToolFirst::Grapple, ToolTail::Grapple)
             | (ToolFirst::Switch, ToolTail::Switch)
     ) {
         return None;
@@ -426,7 +432,7 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     Some(ToolMotion::Combo(ToolCombo { first, tail }))
 }
 
-/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, e} (e.g. `r↑`, `ee`, `rl`). `f` still parses as interact (legacy).
+/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, e, f} (e.g. `r↑`, `ee`, `rl`).
 fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
     let motion = motion.trim();
     if matches!(motion, "∅" | "NONE" | "none") {
@@ -442,7 +448,8 @@ fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
             '←' => ArtToken::Left,
             'r' | 'R' => ArtToken::Block,
             'l' | 'L' => ArtToken::Attack,
-            'f' | 'F' | 'e' | 'E' => ArtToken::Interact,
+            'e' | 'E' => ArtToken::Interact,
+            'f' | 'F' => ArtToken::Grapple,
             _ => return None,
         };
         tokens.push(token);
@@ -617,6 +624,35 @@ mod test {
                 tail: ToolTail::Use
             }),
             Some(79200)
+        );
+    }
+
+    #[test]
+    fn test_grapple_key_bindings() {
+        let config = Config::from(
+            "5500 art  e↑\n5501 art  f↑\n76200 umb  ↑f\n71200 spark fq",
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Up)),
+            Some(5500)
+        );
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Grapple, ArtToken::Up)),
+            Some(5501)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Grapple
+            }),
+            Some(76200)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Grapple,
+                tail: ToolTail::Switch
+            }),
+            Some(71200)
         );
     }
 

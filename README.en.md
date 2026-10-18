@@ -4,7 +4,7 @@
 
 [简体中文](README.md) ｜ **English**
 
-A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct). Upstream switches arts with **direction sequences + block/attack**. This fork keeps the original slot-swap / inject core, but **redesigns art combos and prosthetic triggers** (AI-assisted): arts use a **two-key** short window; prosthetics use **first key (move/block/attack/interact) + q/t**, or bare `t` / `q`, to equip and inject use.
+A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct). Upstream switches arts with **direction sequences + block/attack**. This fork keeps the original slot-swap / inject core, but **redesigns art combos and prosthetic triggers** (AI-assisted): arts use a **two-key** short window; prosthetics use **first key (move/block/attack/interact/grapple) + q/t**, or bare `t` / `q`, to equip and inject use.
 
 ## Quick start (recommended)
 
@@ -32,9 +32,12 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | `r` (right mouse) | Block |
 | `l` (left mouse) | Attack |
 | `e` | Interact / hold to beckon |
+| `f` | Grapple / hook |
 | `↑↓←→` | Move (WASD / stick) |
 | `ee` | Double-tap interact |
-| `rl` / `re` / `er` / `el` … | Ordered two-key pairs; one line can hold several combos separated by `/`, e.g. `↓l/l↓` |
+| `rl` / `re` / `er` / `el` / `rf` / `fr` … | Ordered two-key pairs; one line can hold several combos separated by `/`, e.g. `↓l/l↓` |
+
+`e`=interact and `f`=grapple both follow the in-game action bits, so keyboard remaps/gamepad work.
 
 Default release binds (editable in cfg):
 
@@ -53,6 +56,8 @@ Default release binds (editable in cfg):
 | Dragon Flash | `er` |
 | One Mind | `el` |
 | Empowered Mortal Draw | `re` |
+| Ichimonji | `ff` |
+| Shadowrush | `fl` |
 
 ## Prosthetics (q / t)
 
@@ -68,15 +73,14 @@ Default release prosthetic binds:
 | --- | --- |
 | Lazulite Shuriken | `t-0s` |
 | Aged Feather Mist Raven | `q-0s` |
-| Suzaku's Lotus Umbrella | `↓q-0s` |
-| Phoenix's Lilac Umbrella | `↓t-0s` |
+| Phoenix's Lilac Umbrella | `↓q-0s` |
 | Mountain Echo | `et-0s` |
 | Leaping Flame | `↑q-0.67s` |
 | Spiral Spear | `et-0.67s` |
-| Sparking Axe | `←q-0.5s` |
+| Sparking Axe | `↓t-0.5s` |
 | Lazulite Sabimaru | `↑t-0.5s` |
 | Okinaga's Flame Vent | `←t-0.5s` |
-| Long Spark | `→q-0s` |
+| Long Spark | `→t-0s` |
 | Finger Whistle / Divine Abduction bind | `eq-0s` |
 
 ## Build yourself (optional)
