@@ -82,9 +82,9 @@ is handled by `src/emblem.rs`:
   `battle_instinct.log` (prefix `emblem probe:`), along with "small integer that looks like a
   cap" candidates (`candidate` lines) and changed fields (`u32 a -> b` lines).
 - Fix (needs the cap offset filled in *and* `paper cap fix: on`): every frame it writes the cap
-  back as `base cap + per cap-skill bonus x learned skills`. The skill count can be configured
-  or inferred from the current cap (30+10k first, then the old-save 15+2k); learning a new skill
-  (a delta of 1-4 over the last written value) bumps it by 1.
+  back as `base cap + per cap-skill bonus x learned skills`. By default the learned count is
+  read directly from whether the five "form cap" skills (UIDs 75/76/175/176/603) are in the
+  inventory, so it follows the loaded save; cfg/state/current-cap inference is only a fallback.
 - Without the offset filled in it **only probes and never writes memory**.
 
 Cfg keys (end of `battle_instinct.cfg`, both the EN and ZH files): paper cap fix / paper probe /
@@ -127,9 +127,9 @@ comment still overrides them):
 | old base cap / old per-skill | 15 / 1 | used to infer old saves (vanilla 15+1xn) |
 | probe / probe window | off / 0x1000 | only enable when re-locating fields |
 
-Also: `battle_instinct_emblem.state` (auto-generated in the game folder) records the learned
-cap-skill count, so changing `paper initial cap` / `per skill bonus` will not recompute it
-wrongly; delete the file to re-infer from the current cap.
+Also: `battle_instinct_emblem.state` (auto-generated in the game folder) is only a fallback
+cache used when the skill inventory cannot be read. During normal play the five actual learned
+"form cap" skills take priority, so the file no longer needs to be deleted by hand.
 
 ## Important: in-memory param patching is experimental and off by default (2026-09-27)
 

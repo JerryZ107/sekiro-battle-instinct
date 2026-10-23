@@ -250,14 +250,9 @@ impl Mod {
         if !self.swapout_countdown.is_done() || self.art_fire_busy() {
             return None;
         }
-        let combos: Vec<(ArtCombo, UID)> = self
-            .config
-            .instant_arts
-            .iter()
-            .map(|(c, u)| (*c, *u))
-            .collect();
-        for (combo, uid) in combos {
-            if !self.instant_combo_matches(
+        // Find the match without allocating a temporary Vec on every input tick.
+        let matched = self.config.instant_arts.iter().find_map(|(&combo, &uid)| {
+            self.instant_combo_matches(
                 combo,
                 self.blocking_last_frame,
                 self.interacting_last_frame,
@@ -269,18 +264,18 @@ impl Mod {
                 combo_down,
                 combo_left,
                 self.combo_dirs_last,
-            ) {
-                continue;
-            }
-            if self.equip_combat_art_no_delay(uid) {
-                log::info!("ART_INSTANT uid={} combo={:?}", uid, combo);
-                self.clear_art_fire();
-                self.clear_queued_art();
-                self.art_combo.clear();
-                self.injected_blocks = 1;
-                self.swapout_countdown = Countdown::new(self.cur_art.swapout_cooldown());
-                return Some(uid);
-            }
+            )
+            .then_some((combo, uid))
+        });
+        let (combo, uid) = matched?;
+        if self.equip_combat_art_no_delay(uid) {
+            log::info!("ART_INSTANT uid={} combo={:?}", uid, combo);
+            self.clear_art_fire();
+            self.clear_queued_art();
+            self.art_combo.clear();
+            self.injected_blocks = 1;
+            self.swapout_countdown = Countdown::new(self.cur_art.swapout_cooldown());
+            return Some(uid);
         }
         None
     }
@@ -1079,7 +1074,7 @@ impl Mod {
                         } else {
                             self.art_diag_set_phase("hold_attack");
                             if self.art_diag_n % 15 == 0 {
-                                log::info!(
+                                log::debug!(
                                     "ART_HOLD n={} hold={:?} held={} tap={} out=B+A cur={:?}",
                                     self.art_diag_n,
                                     token,
@@ -1098,7 +1093,7 @@ impl Mod {
                         }
                     }
                 } else if self.art_diag_n % 15 == 0 {
-                    log::info!(
+                    log::debug!(
                         "ART_IDLE_HOLD n={} hold={:?} held=false (waiting key?)",
                         self.art_diag_n,
                         token

@@ -69,7 +69,7 @@ impl Health {
                 continue;
             };
             match key.trim().to_ascii_lowercase().as_str() {
-                "旧存档血量修正" | "health old save fix" => self.enabled = parse_bool(value),
+                "旧存档血量修正" | "血量功能" | "health old save fix" | "health fix" => self.enabled = parse_bool(value),
                 "血量倍率" | "血量修正倍率" | "hp multiplier" | "health multiplier" => {
                     if let Some(v) = parse_f32(value) {
                         self.multiplier = v.max(1.0);

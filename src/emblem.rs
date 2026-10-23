@@ -22,6 +22,14 @@ const DEFAULT_LEGACY_PER: u32 = 1;
 const DEFAULT_SKILL_COUNT: u32 = 5;
 const DEFAULT_WINDOW: usize = 0x1000;
 const INVENTORY_SCAN_LEN: usize = 0x2000;
+/// How often to re-read the learned-cap skill inventory while the game is running.
+/// 120 input ticks is ~2 seconds at 60 FPS; the check is also forced when the cap
+/// value no longer matches our cached target.
+const LEARNED_REFRESH_TICKS: u64 = 120;
+/// 「形代所持上限」5 个被动技能的 SkillParam UID（形代所持上限+1A…+1E）。
+/// 学到后游戏会把它们映射成背包物品；直接查这 5 个 UID 就能得到真实已学数量，
+/// 不再需要按当前上限反推（反推会在换存档/改 cfg 后把旧数量带到新存档）。
+const CAP_SKILL_UIDS: [u32; 5] = [75, 76, 175, 176, 603];
 /// 增量扫描总量上限（约 2GB；每帧 1MB，找到即停）
 const SCAN_MAX_BYTES: usize = 0x8000_0000;
 /// 关注的物品 id：1000 纸人、1001 临时纸人、1020 纸人上限(+0x1C 引用)、1021 临时上限
@@ -73,6 +81,9 @@ pub struct Emblem {
     candidates_logged: u32,
     deltas_logged: u32,
     learned_hint: Option<u32>,
+    /// Whether the cap-skill inventory has been read successfully at least once.
+    /// Avoids calling five native inventory lookups on every input tick.
+    learned_probed: bool,
     last_written: Option<u32>,
     restore_done: bool,
     /// 已学技能数的持久化（改 cfg 里的基础上限/每技能后不用重新猜）
@@ -166,6 +177,7 @@ impl Emblem {
             candidates_logged: 0,
             deltas_logged: 0,
             learned_hint: None,
+            learned_probed: false,
             last_written: None,
             restore_done: false,
             state_path: None,
@@ -689,12 +701,38 @@ impl Emblem {
             return;
         }
 
-        if let (Some(last), true) = (self.last_written, cur > 0) {
-            // 游戏在我们的写入值上又加了 1~4：说明刚学会了一个「上限技能」
-            if cur > last && cur - last <= 4 {
-                let hint = self.learned_hint.unwrap_or(0) + 1;
-                self.learned_hint = Some(hint);
-                log::warn!("emblem: skill learned (cap {last} -> {cur}), count={hint}");
+        // 优先直接读游戏里 5 个「形代所持上限」被动技能是否已学。
+        // 不能优先用 state/当前上限反推：换存档后旧存档的技能数会被带过来，
+        // 导致新存档一开局就按满级上限算。
+        //
+        // 注意：这个检测要调用 5 次游戏背包查询；放在每帧热路径里会明显增加
+        // 输入钩子的开销。首次/换存档/数值对不上时检测，其余时候低频刷新即可。
+        let cached_target = self
+            .learned_hint
+            .map(|learned| self.base_cap + self.per_skill * learned.min(self.skill_count));
+        let should_probe_learned = self.learned < 0
+            && self.learned_offset == 0
+            && (!self.learned_probed
+                || self.ticks % LEARNED_REFRESH_TICKS == 0
+                || cached_target.is_some_and(|target| target != cur));
+        let detected = if should_probe_learned {
+            let detected = detect_learned_cap_skills();
+            if detected.is_some() {
+                self.learned_probed = true;
+            }
+            detected
+        } else {
+            None
+        };
+
+        if detected.is_none() {
+            if let (Some(last), true) = (self.last_written, cur > 0) {
+                // 游戏在我们的写入值上又加了 1~4：说明刚学会了一个「上限技能」
+                if cur > last && cur - last <= 4 {
+                    let hint = self.learned_hint.unwrap_or(0) + 1;
+                    self.learned_hint = Some(hint);
+                    log::warn!("emblem: skill learned (cap {last} -> {cur}), count={hint}");
+                }
             }
         }
 
@@ -702,6 +740,8 @@ impl Emblem {
             self.learned as u32
         } else if self.learned_offset > 0 {
             (read_u(player, self.learned_offset, 4) as u32).min(self.skill_count)
+        } else if let Some(count) = detected {
+            count.min(self.skill_count)
         } else if let Some(hint) = self.learned_hint {
             hint
         } else {
@@ -714,6 +754,9 @@ impl Emblem {
                 self.skill_count,
             )
         };
+        if detected.is_some() && self.learned_hint != Some(learned) {
+            log::warn!("emblem: learned cap skills = {learned} (read from skill inventory)");
+        }
         self.learned_hint = Some(learned);
         self.save_state();
 
@@ -738,6 +781,34 @@ impl Emblem {
             self.restore_done = true;
     }
 }
+}
+
+/// 读取 5 个「形代所持上限」技能是否已学。
+/// 返回 Some(0..=5)，None 表示游戏对象/背包还没准备好，交给旧逻辑兜底。
+fn detect_learned_cap_skills() -> Option<u32> {
+    unsafe {
+        let game_data = game::game_data();
+        if game_data.is_null() {
+            return None;
+        }
+        let player = (*game_data).player_data;
+        if player.is_null() {
+            return None;
+        }
+        let inventory = (*player).inventory_data;
+        if inventory.is_null() {
+            return None;
+        }
+        let inventory_ptr = (inventory as *const u8).add(0x10) as *const core::ffi::c_void;
+        let mut learned = 0;
+        for uid in CAP_SKILL_UIDS {
+            let item_id = game::get_item_id(inventory_ptr, &uid);
+            if item_id != 0 && item_id < 0xffff {
+                learned += 1;
+            }
+        }
+        Some(learned)
+    }
 }
 
 /// 从当前上限反推已学技能数：
