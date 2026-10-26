@@ -5,6 +5,7 @@ use crate::{
     config::{Config, ToolCombo, ToolFirst, ToolTail},
     device::{Gamepad, is_key_down},
     emblem::Emblem,
+    flow::Flow,
     frame::Frames,
     health::Health,
     game::{self},
@@ -73,6 +74,7 @@ const PROSTHETIC_SLOT_2: u8 = 4;
 pub struct Mod {
     config: Config,
     emblem: Emblem,
+    flow: Flow,
     health: Health,
     art_combo: ArtComboWindow,
     cur_art: Option<UID>,
@@ -140,11 +142,13 @@ impl Mod {
         let cfg_path = path.as_ref().to_path_buf();
         let config = Config::open(&cfg_path)?;
         let emblem = Emblem::new(&cfg_path);
+        let flow = Flow::new(&cfg_path);
         let health = Health::new(&cfg_path);
         let art_combo = ArtComboWindow::new(config.rl_combo_max_age);
         let modification = Mod {
             config,
             emblem,
+            flow,
             health,
             gamepad: Gamepad::new()?,
             art_combo,
@@ -269,7 +273,7 @@ impl Mod {
         });
         let (combo, uid) = matched?;
         if self.equip_combat_art_no_delay(uid) {
-            log::info!("ART_INSTANT uid={} combo={:?}", uid, combo);
+            log::debug!("ART_INSTANT uid={} combo={:?}", uid, combo);
             self.clear_art_fire();
             self.clear_queued_art();
             self.art_combo.clear();
@@ -313,7 +317,7 @@ impl Mod {
 
     fn clear_art_fire(&mut self) {
         if self.hold_for_attack.is_some() || self.art_diag_n > 0 {
-            log::info!(
+            log::debug!(
                 "ART_CLEAR n={} hold={:?} tap={} blk={} latch={} pending_rl={} delay={} cur={:?} phase={}",
                 self.art_diag_n,
                 self.hold_for_attack,
@@ -341,7 +345,7 @@ impl Mod {
         if self.queued_art.is_some() {
             self.queue_flush_left = self.config.art_queue_delay_frames;
             self.queue_flush_skip_tick = true;
-            log::info!(
+            log::debug!(
                 "ART_QUEUE_WAIT delay={} uid={:?}",
                 self.queue_flush_left,
                 self.queued_art.as_ref().map(|(uid, _)| *uid),
@@ -389,7 +393,7 @@ impl Mod {
         };
         self.art_diag_n = 0;
         self.art_diag_phase = "armed";
-        log::info!(
+        log::debug!(
             "ART_ARM hold={:?} held={} tap={} cur={:?} delay={} swapout_done={}",
             hold,
             held,
@@ -402,7 +406,7 @@ impl Mod {
 
     fn art_diag_set_phase(&mut self, phase: &'static str) {
         if self.art_diag_phase != phase {
-            log::info!(
+            log::debug!(
                 "ART_PHASE {} -> {} n={} hold={:?} delay={} blk={} tap={}",
                 self.art_diag_phase,
                 phase,
@@ -704,6 +708,7 @@ impl Mod {
 
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
         self.emblem.tick();
+        self.flow.tick(input_handler.action & BLOCK != 0);
         self.health.tick();
 
         /***** keystates *****/
@@ -787,7 +792,7 @@ impl Mod {
         let late_rl_rejected = self.art_combo.take_late_rl_rejected();
         if late_rl_rejected {
             self.suppress_late_rl_skill = true;
-            log::info!("ART_RL_LATE reject — suppress B+A until block released");
+            log::debug!("ART_RL_LATE reject — suppress B+A until block released");
         }
         let instant_art_fired = self
             .try_instant_combat_art(
@@ -803,7 +808,7 @@ impl Mod {
         /***** end sustained fire early when jump/dodge or last token released *****/
         if jumping || dodging {
             if self.art_fire_busy() {
-                log::info!("ART_ABORT jump={} dodge={}", jumping, dodging);
+                log::debug!("ART_ABORT jump={} dodge={}", jumping, dodging);
             }
             self.clear_art_fire();
             self.clear_queued_art();
@@ -813,9 +818,9 @@ impl Mod {
                     // Released during settle / prime (common for quick `ee`): still fire a short
                     // B+A inject instead of cancelling into a bare block.
                     self.art_tap_frames = ART_BLOCK_INJECTION_DURATION.saturating_add(3);
-                    log::info!("ART_RELEASE→TAP hold={:?} tap={}", token, self.art_tap_frames);
+                    log::debug!("ART_RELEASE→TAP hold={:?} tap={}", token, self.art_tap_frames);
                 } else {
-                    log::info!("ART_RELEASE hold={:?} (key up)", token);
+                    log::debug!("ART_RELEASE hold={:?} (key up)", token);
                     self.end_art_fire_for_queue();
                 }
             }
@@ -841,7 +846,7 @@ impl Mod {
                 let is_rl = combo.is_rl();
                 if self.art_fire_busy() && !is_rl {
                     // Sustained fire still running: queue and flush after release + delay.
-                    log::info!(
+                    log::debug!(
                         "ART_QUEUE uid={} hold={:?} busy cur={:?}",
                         uid,
                         hold,
@@ -854,7 +859,7 @@ impl Mod {
                     None
                 } else {
                     if is_rl && self.art_fire_busy() {
-                        log::info!(
+                        log::debug!(
                             "ART_RL_PREEMPT busy cur={:?} -> uid={}",
                             self.cur_art,
                             uid
@@ -862,7 +867,7 @@ impl Mod {
                         self.clear_art_fire();
                         self.clear_queued_art();
                     }
-                    log::info!(
+                    log::debug!(
                         "ART_HIT uid={} hold={:?} cur_before={:?} already={} swapout_done={}",
                         uid,
                         hold,
@@ -881,7 +886,7 @@ impl Mod {
             }
         } else if !self.art_fire_busy() {
             if let Some((uid, hold)) = self.try_flush_queued_art() {
-                log::info!("ART_FLUSH_QUEUE uid={} hold={:?}", uid, hold);
+                log::debug!("ART_FLUSH_QUEUE uid={} hold={:?}", uid, hold);
                 performed_block_free_art_just_now = true;
                 pending_rl = true;
                 self.arm_combo_fire(hold);
@@ -922,7 +927,7 @@ impl Mod {
                 if combat_art_slot_matches(desired_art) {
                     self.cur_art = Some(desired_art);
                     if log_equip {
-                        log::info!(
+                        log::debug!(
                             "ART_EQUIP uid={} slot_match=true (no set_combat_art)",
                             desired_art
                         );
@@ -932,7 +937,7 @@ impl Mod {
                 if set_combat_art(desired_art) {
                     art_swapped_this_hit = true;
                     if log_equip {
-                        log::info!(
+                        log::debug!(
                             "ART_EQUIP uid={} same_slot=false delay={}",
                             desired_art,
                             ATTACK_SUPRESSION_DURATION
@@ -964,7 +969,7 @@ impl Mod {
             };
             if self.attack_delay < settle {
                 self.attack_delay = settle;
-                log::info!(
+                log::debug!(
                     "ART_SETTLE swapped={} delay={} hold={:?}",
                     art_swapped_this_hit,
                     self.attack_delay,
@@ -1063,7 +1068,7 @@ impl Mod {
                         if !self.art_attack_latched {
                             self.art_attack_latched = true;
                             self.art_diag_set_phase("open_rl");
-                            log::info!(
+                            log::debug!(
                                 "ART_OPEN n={} hold={:?} held={} tap={} out=B+A cur={:?}",
                                 self.art_diag_n,
                                 token,
@@ -1088,7 +1093,7 @@ impl Mod {
                     if tapping && !held {
                         self.art_tap_frames -= 1;
                         if self.art_tap_frames == 0 {
-                            log::info!("ART_TAP_END");
+                            log::debug!("ART_TAP_END");
                             self.end_art_fire_for_queue();
                         }
                     }

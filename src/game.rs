@@ -12,6 +12,7 @@ pub const GET_ITEM_NAME: usize = 0x1410AA340;
 pub const GET_ITEM_ID: usize = 0x140C3D680;
 pub const SET_SLOT: usize = 0x140D592F0;
 pub const SET_EQUIPED_PROTHSETIC: usize = 0x140A26150;
+pub const PLAYER_DAMAGE_REACTION: usize = 0x140B6E6A0;
 
 // objects
 pub const GAME_DATA: usize = 0x143D5AAC0;

@@ -4,6 +4,7 @@ mod config;
 mod core;
 mod device;
 mod emblem;
+mod flow;
 mod frame;
 mod health;
 mod game;
@@ -205,6 +206,14 @@ fn modify(path: &Path) {
     load_console::print_line("读取配置 battle_instinct.cfg …");
     let result = (|| unsafe {
         let modification = Mod::new(path)?;
+
+        load_console::print_line("安装伤害事件钩子…");
+        if let Err(e) = flow::install_damage_hook() {
+            log::error!("Failed to install damage reaction hook: {e:?}");
+            load_console::print_line(&format!("  ✗ 伤害事件钩子安装失败: {e}"));
+        } else {
+            load_console::print_line("  ✓ 伤害事件钩子已安装");
+        }
 
         load_console::print_line("安装输入钩子…");
         let target = game::PROCESS_INPUT as *mut c_void;
