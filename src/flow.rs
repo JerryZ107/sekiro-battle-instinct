@@ -265,13 +265,27 @@ struct FlowState {
     timeout_left: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct FlowRefund {
+    /// Portion of the incoming posture increase that is cancelled.
+    mitigated: i32,
+    /// Portion above 100% that actually restores posture.
+    restored: i32,
+}
+
+impl FlowRefund {
+    fn total(self) -> i32 {
+        self.mitigated.saturating_add(self.restored)
+    }
+}
+
 impl FlowState {
     fn reset(&mut self) {
         self.stacks = 0;
         self.timeout_left = 0;
     }
 
-    fn on_perfect_deflect(&mut self, config: &FlowConfig, posture_drop: i32) -> (u8, u8, i32) {
+    fn on_perfect_deflect(&mut self, config: &FlowConfig, posture_drop: i32) -> (u8, u8, FlowRefund) {
         let before = self.stacks;
         if self.stacks < config.max_stacks {
             self.stacks += 1;
@@ -279,12 +293,21 @@ impl FlowState {
         self.timeout_left = config.duration_frames;
 
         let percent = config.ratio_for_stack(self.stacks);
-        let refund = if posture_drop > 0 {
-            ((posture_drop as i64 * percent as i64 + 50) / 100) as i32
+        let (mitigated, restored) = if posture_drop > 0 {
+            // Up to 100%: cancel part (or all) of this deflect's posture
+            // increase. Above 100%: only the excess actually restores posture.
+            let mitigated_percent = percent.min(100);
+            let mitigated = ((posture_drop as i64 * mitigated_percent as i64 + 50) / 100) as i32;
+            let restored = if percent > 100 {
+                ((posture_drop as i64 * (percent - 100) as i64 + 50) / 100) as i32
+            } else {
+                0
+            };
+            (mitigated, restored)
         } else {
-            0
+            (0, 0)
         };
-        (before, self.stacks, refund)
+        (before, self.stacks, FlowRefund { mitigated, restored })
     }
 
     fn on_non_perfect_hit(&mut self) -> u8 {
@@ -406,20 +429,30 @@ impl Flow {
 
             if perfect {
                 let (before, after, refund) = self.state.on_perfect_deflect(&self.config, event.posture_drop);
-                if refund > 0 {
+                let total_refund = refund.total();
+                // Apply the two parts separately so <100% is only damage
+                // mitigation and only the >100% excess is a real heal.
+                if refund.mitigated > 0 {
                     unsafe {
-                        add_stamina(chr_data, refund, max_stamina);
+                        add_stamina(chr_data, refund.mitigated, max_stamina);
+                    }
+                }
+                if refund.restored > 0 {
+                    unsafe {
+                        add_stamina(chr_data, refund.restored, max_stamina);
                     }
                 }
                 if self.config.debug {
                     log::info!(
-                        "FLOW_PERFECT type={} level={} posture_drop={} stack={}->{} refund={} hp_drop={} guard_frames={} source={}",
+                        "FLOW_PERFECT type={} level={} posture_drop={} stack={}->{} mitigated={} restored={} refund={} hp_drop={} guard_frames={} source={}",
                         event.damage_type,
                         event.damage_level,
                         event.posture_drop,
                         before,
                         after,
-                        refund,
+                        refund.mitigated,
+                        refund.restored,
+                        total_refund,
                         event.hp_drop,
                         self.guard_frames,
                         "game_flags"
@@ -454,7 +487,8 @@ impl Flow {
 }
 
 fn split_kv(line: &str) -> Option<(&str, &str)> {
-    let body = line.trim().strip_prefix('#')?.trim();
+    // Keys may be commented (`# flow: on`) or written bare (`flow: on`).
+    let body = line.trim().trim_start_matches('#').trim();
     for sep in [':', '：'] {
         if let Some((key, value)) = body.split_once(sep) {
             return Some((key, value));
@@ -613,13 +647,29 @@ mod tests {
         let mut state = FlowState::default();
 
         let (before, after, refund) = state.on_perfect_deflect(&cfg, 10);
-        assert_eq!((before, after, refund), (0, 1, 2));
+        assert_eq!((before, after), (0, 1));
+        assert_eq!((refund.mitigated, refund.restored, refund.total()), (2, 0, 2));
         for expected_stack in 2..=10u8 {
             let (_, after, _) = state.on_perfect_deflect(&cfg, 10);
             assert_eq!(after, expected_stack);
         }
         let (_, after, refund) = state.on_perfect_deflect(&cfg, 10);
-        assert_eq!((after, refund), (10, 11));
+        assert_eq!(after, 10);
+        assert_eq!((refund.mitigated, refund.restored, refund.total()), (10, 1, 11));
+    }
+
+    #[test]
+    fn flow_ratio_at_or_below_100_only_mitigates() {
+        let mut cfg = config();
+        cfg.ratios = [99; 10];
+        let mut state = FlowState::default();
+        let (_, _, refund) = state.on_perfect_deflect(&cfg, 100);
+        assert_eq!((refund.mitigated, refund.restored, refund.total()), (99, 0, 99));
+
+        cfg.ratios = [100; 10];
+        let mut state = FlowState::default();
+        let (_, _, refund) = state.on_perfect_deflect(&cfg, 100);
+        assert_eq!((refund.mitigated, refund.restored, refund.total()), (100, 0, 100));
     }
 
     #[test]
@@ -643,5 +693,18 @@ mod tests {
         }
         assert_eq!(state.tick_timeout(), Some(1));
         assert_eq!(state.stacks, 0);
+    }
+
+    /// The shipped cfgs write these keys *uncommented* (`flow: on`);
+    /// they must parse exactly like the old `# flow: on` form.
+    #[test]
+    fn shipped_cfg_reads_bare_flow_keys() {
+        for path in ["res/battle_instinct.cfg", "res/battle_instinct_zh.cfg"] {
+            let cfg = FlowConfig::load(Path::new(path));
+            assert!(cfg.enabled);
+            assert_eq!(cfg.max_stacks, 10);
+            assert_eq!(cfg.duration_frames, seconds_to_frames(6.0));
+            assert_eq!(cfg.ratios, DEFAULT_RATIOS);
+        }
     }
 }
