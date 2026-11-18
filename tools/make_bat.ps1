@@ -1,6 +1,6 @@
 ﻿<#
   make_bat.ps1 —— 生成自解压一键脚本：
-    dist/zh/纸血挂.bat     ← 中文界面（GBK 编码）
+    dist/zh/纸人挂.bat     ← 中文界面（GBK 编码）
     dist/en/paperman.bat   ← English UI (GBK-encoded, ASCII-only header/echoes)
 
   做法：把 tools/patch_paper_params.ps1 原样嵌进 bat 尾部，bat 运行时用 PowerShell
@@ -27,9 +27,9 @@ $psCode = ([System.IO.File]::ReadAllText($Source)) -replace "`r`n", "`n"
 $targets = @(
     [pscustomobject]@{
         Dir   = 'zh'
-        File  = '纸血挂.bat'
+        File  = '纸人挂.bat'
         Lang  = 'zh'
-        Title = '只狼 · 纸血挂'
+        Title = '只狼 · 纸人挂'
     },
     [pscustomobject]@{
         Dir   = 'en'
@@ -48,6 +48,7 @@ function New-Header([string]$title, [string]$lang) {
         ('title ' + $title),
         'set "HERE=%~dp0"',
         'set "PAPERDOLL_CFG=%HERE%battle_instinct.cfg"',
+        'set "PAPERDOLL_GAME_DIR=%HERE%"',
         ('set "PAPERDOLL_LANG=' + $lang + '"'),
         'if /i "%~1"=="revert" set "PAPERDOLL_REVERT=1"',
         'if /i "%~1"=="rollback" set "PAPERDOLL_REVERT=1"',
@@ -60,8 +61,8 @@ function New-Header([string]$title, [string]$lang) {
             'echo   Reads these lines from battle_instinct.cfg (same folder):',
             'echo     paper cap fix: on / off',
             'echo     paper initial cap: 25    per skill bonus: 5    drift: 9',
-            'echo     health fix: on         hp multiplier: 3',
-            'echo   "paper cap fix: off" / "health fix: off" = skip that section.',
+            'echo   "paper cap fix: off" = skip the param writes.',
+            'echo   Param writes require ModEngine: dinput8_modengine.dll + modengine.ini.',
             'echo   Edit the cfg, then double-click this file. Roll back: paperman.bat revert',
             'echo ==========================================================',
             'echo.',
@@ -94,9 +95,9 @@ function New-Header([string]$title, [string]$lang) {
             'echo   读取同目录 battle_instinct.cfg 里的这几行：',
             'echo     纸人上限功能: 开 / 关',
             'echo     纸人初始上限: 25     技能增加上限: 5     纸人漂流: 9',
-            'echo     血量功能: 开 / 关     血量倍率: 3',
-            'echo   「纸人上限功能: 关」/「血量功能: 关」= 跳过对应部分。',
-            'echo   改完 cfg 双击本文件；回滚：纸血挂.bat revert',
+            'echo   「纸人上限功能: 关」= 跳过 param 写入。',
+            'echo   param 修改需要 ModEngine：游戏目录放 dinput8_modengine.dll + modengine.ini。',
+            'echo   改完 cfg 双击本文件；回滚：纸人挂.bat revert',
             'echo ==========================================================',
             'echo.',
             'if not exist "%PAPERDOLL_CFG%" (',

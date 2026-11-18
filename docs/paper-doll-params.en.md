@@ -88,7 +88,7 @@ is handled by `src/emblem.rs`:
 - If the live inventory is not ready (loading screen), it writes nothing and waits.
 - Log line on change: `emblem: skills A=1 B=1 C=0 D=1 E=0 -> i=3 cap=26`.
 
-Cfg keys that matter to the DLL: `paper cap fix` / `cap offset` / `cap width`.
+The only DLL cfg key is the `paper cap fix` master switch; the cap offset and width are fixed constants.
 The `paper initial cap` and `per skill bonus` lines are only read by the launcher bat for the
 param patch; the DLL ignores them and always uses `20 + 2*i`.
 
@@ -116,7 +116,7 @@ Technical parameters fixed in code:
 
 | Parameter | Fixed value | Note |
 | --- | --- | --- |
-| cap offset / width | `0x146` / 2 | the field actually used at runtime |
+| cap offset / width | `0x146` / 2 (fixed constants) | the field actually used at runtime |
 | cap rule | `20 + 2*i` | i from the five live inventory items |
 | cap skill items | `650000/650100/650200/650300/650400` | SkillParam 75/76/175/176/603 |
 
@@ -142,27 +142,33 @@ Final split of responsibilities:
 | Cap (incl. old-save fix), master switch | **DLL, live** (writes `PlayerData+0x146`, verified) |
 | Drift amount/cap, starting dolls, growth floats | **param file**, written once by `tools/patch_paper_params.ps1` |
 
-## Player install (3 files)
+## Player install (full bundle)
+
+The release includes ModEngine and the param file. Extract it into the Sekiro root folder with
+the directory structure preserved:
 
 ```
 dinput8.dll
 battle_instinct.cfg
-paperman.bat      <- edit the cfg, then double-click this (Chinese release: the ZH-named bat)
+paperman.bat                  <- Chinese release: 纸人挂.bat
+dinput8_modengine.dll         <- ModEngine's dinput8.dll, renamed
+modengine.ini                 <- modOverrideDirectory="\mods"
+mods\param\gameparam\gameparam.parambnd.dcx
 ```
 
-Drop the three files into the Sekiro folder (next to `sekiro.exe`) and double-click the launcher
-once.
+Double-click the launcher once after installation or after editing the cfg. It reads the cfg and
+writes the Drift values into the param package; fully exit and relaunch the game afterward.
 
-- Switch: `paper cap fix: on/off` in the cfg (off = no DLL writes)
-- Roll back: `paperman.bat revert`
+- Switch: `paper cap fix: on/off` in the cfg (off = no DLL writes and no param writes)
+- Roll back: `paperman.bat revert` (Chinese: `纸人挂.bat revert`)
 - The cap itself is fixed at `20 + 2*i`; no cfg value changes it. `paper initial cap` /
   `per skill bonus` only affect the param patcher.
-- Only changing `drift`: edit the cfg -> double-click `paperman.bat`
+- Only changing `drift`: edit the cfg -> double-click the launcher -> restart the game
 
-## Release shape (since 2026-09-27: 3 files)
+## Release shape (full bundle)
 
-Release = `dinput8.dll` + `battle_instinct.cfg` + the launcher (`paperman.bat` for the English
-cfg, the ZH-named bat for the Chinese cfg).
+Release = `dinput8.dll` + `battle_instinct.cfg` + the launcher + `dinput8_modengine.dll` +
+`modengine.ini` + `mods\param\gameparam\gameparam.parambnd.dcx`.
 
 The launcher embeds `tools/patch_paper_params.ps1` **verbatim at the end of the file**. At
 runtime it:
@@ -174,7 +180,6 @@ runtime it:
    `<launcher> revert` sets `PAPERDOLL_REVERT=1` to trigger the rollback);
 4. deletes the temporary file.
 
-Upside: players never handle a `.ps1` and the package is three files; the source stays in
-`tools/patch_paper_params.ps1` (open, readable) - run `just bat` (or `tools/make_bat.ps1`) to
-regenerate both launchers after editing it.
+Players never handle a `.ps1`; the source stays in `tools/patch_paper_params.ps1` - run
+`just bat` (or `tools/make_bat.ps1`) to regenerate both launchers after editing it.
 

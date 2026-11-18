@@ -6,15 +6,44 @@
 
 基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 修改的只狼武技 / 忍具 MOD。原版用**方向序列 + 防御/攻击**切换武技；本分支在保留原作者换槽、注入等核心机制的前提下，**重新设计了武技搓招与忍具触发逻辑**（借助 AI 辅助实现）：武技为**两个键位**短窗口连招；忍具为 **首键(方向/攻防/交互/钩锁) + q/t**，或单独 `t` / `q`，直接装备并注入使用。
 
+## 功能范围
+
+当前版本只保留以下三组功能，相关实现与配置已按功能收敛：
+
+1. **武技搓招**：双键短窗口触发武技，含排队与瞬发逻辑。
+2. **纸人 + 血纸人**：DLL 实时修正纸人上限；一键脚本写入纸人漂流（血纸人/临时纸人）等 param 数值。
+3. **心流**：完美弹反叠层，按层数减免/回复架势。
+
 ## 直接使用（推荐）
 
-**只需三个文件**：`dinput8.dll`、`battle_instinct.cfg`、`纸血挂.bat` 放到 `sekiro.exe` 同目录，然后**双击一次 `纸血挂.bat`**（它内置 param 写入逻辑，不需要任何 `.ps1`）。若已有其它 `dinput8.dll`（如 MOD Engine），把**原来的**改名为 `dinput8_xxx.dll`；本 MOD 会链式加载它们。**不需要** `version.dll`。
+发行包已包含本 MOD、ModEngine 和纸人漂流所需的 param 文件。将压缩包**保持目录结构**解压到 `sekiro.exe` 所在目录：
+
+```text
+Sekiro\
+  dinput8.dll
+  battle_instinct.cfg
+  纸人挂.bat
+  dinput8_modengine.dll
+  modengine.ini
+  mods\param\gameparam\gameparam.parambnd.dcx
+```
+
+首次安装或修改 `battle_instinct.cfg` 后：
+
+1. 双击 `纸人挂.bat`，等待脚本提示完成。
+2. 完整退出游戏，再重新启动。
+3. 游戏内纸人上限由 DLL 每帧实时修正；纸人漂流的临时纸人上限与单次数量由 `纸人挂.bat` 写入的 param 生效。
+
+> `mods\param\gameparam\gameparam.parambnd.dcx` 的目录结构不能改；这是 ModEngine 的 loose param 覆盖文件，也是纸人漂流生效的前提。没有 ModEngine 时，DLL 的纸人上限实时修正仍生效，但纸人漂流等 param 数值保持原版。
 
 ### 中文发行包
 
 - [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
 - [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
-- [dist/zh/纸血挂.bat](dist/zh/纸血挂.bat)　- 纸血挂入口（双击）
+- [dist/zh/纸人挂.bat](dist/zh/纸人挂.bat)　- 纸人挂入口（双击）
+- [dist/zh/dinput8_modengine.dll](dist/zh/dinput8_modengine.dll)
+- [dist/zh/modengine.ini](dist/zh/modengine.ini)
+- [dist/zh/mods/param/gameparam/gameparam.parambnd.dcx](dist/zh/mods/param/gameparam/gameparam.parambnd.dcx)
 
 ## 与原版的关系
 
@@ -87,54 +116,77 @@
 | 长效火花 | `→t-0s` |
 | 捐赠簿 | `eq-0s` |
 
+## 纸人挂使用说明（纸人上限 / 纸人漂流）
+
+纸人挂是一次性 param 写入器，不会常驻后台。它读取同目录 `battle_instinct.cfg` 中的以下数值：
+
+```ini
+纸人上限功能: 开
+纸人初始上限: 20
+技能增加上限: 2
+纸人漂流: 9
+```
+
+然后写入 ModEngine 加载的 `gameparam.parambnd.dcx`：
+
+| 字段 | 作用 |
+| --- | --- |
+| `EquipParamGoods 1000 +0x36` | 纸人基础上限 |
+| `EquipParamGoods 1001 +0x36` | 血纸人 / 临时纸人上限 |
+| `EquipParamGoods 3800 +0x8C` | 纸人漂流一次给多少临时纸人 |
+| `ResourceItemParam goodsId=1000` | 初始纸人、上限成长浮点 |
+
+### 首次安装 / 改数值
+
+1. 确认发行包中的 `dinput8_modengine.dll`、`modengine.ini` 和 `mods\param\gameparam\gameparam.parambnd.dcx` 都已按目录结构放进游戏根目录。
+2. 按需修改 `battle_instinct.cfg` 里的 `纸人漂流`；它同时作为临时纸人上限和单次数量。
+3. 双击 `纸人挂.bat`，等待提示「完成」。脚本会自动备份 param 文件。
+4. 完整退出游戏并重新启动；param 只在启动时读取。
+5. 进游戏使用纸人漂流，确认临时纸人上限和单次增加量符合配置。
+
+### 回滚
+
+运行：
+
+```bat
+纸人挂.bat revert
+```
+
+恢复最近一次 param 备份，然后重启游戏。想关闭整套纸人修正，把 cfg 里的 `纸人上限功能` 改为 `关`；这不会自动回滚已经写入的 param。
+
+### 常见问题
+
+- **纸人漂流没变化**：确认 `dinput8_modengine.dll` 已加载、`mods\param\gameparam\gameparam.parambnd.dcx` 路径正确，并重新运行 `纸人挂.bat` 后重启游戏。
+- **ModEngine 冲突**：本 MOD 会自动链式加载 `dinput8_modengine.dll`；不要把自己的 `dinput8.dll` 直接覆盖成 ModEngine，否则本 MOD 不会加载。
+- **纸人上限和漂流数值的区别**：纸人上限由 DLL 按 `20 + 2 × i` 实时修正；纸人漂流数量/临时上限才需要 param。
+- 字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。
+
 ## 自行编译（可选）
 
 ```bash
 cargo build --release
-just dist     # 刷新 dist/zh 与 dist/en（各含 dinput8.dll + battle_instinct.cfg + 纸血挂.bat）
-just bat      # 只重新生成 纸血挂.bat（把 tools/patch_paper_params.ps1 嵌进 bat）
-just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 5 文件）
+just dist     # 刷新 dist/zh 与 dist/en（含 DLL、cfg、纸人挂和 ModEngine/param 整包）
+just bat      # 只重新生成 纸人挂.bat / paperman.bat
+just pack     # 打包 battle-instinct_zh.zip / battle-instinct_en.zip
 ```
 
 产物在 `target/release/`；发行目录为 `dist/zh/`（中文 cfg）与 `dist/en/`（英文 cfg）。
-玩家侧只需要 `纸血挂.bat`；它的源码（PowerShell 版）在 `tools/patch_paper_params.ps1`，改完跑 `just bat` 重新生成 bat。
+玩家侧按发行包目录结构解压后，双击一次 `纸人挂.bat`（英文包为 `paperman.bat`）即可。
 
-## 纸血挂（纸人上限 / 纸人漂流）
+### ModEngine / param 文件说明
 
-只狼的**纸人上限**是学技能时由游戏写进**存档**的，所以只改 param 只能影响新存档；本 MOD 分两层处理：
+发行包已附带：
 
-| 项目 | 由谁负责 | 说明 |
-| --- | --- | --- |
-| 纸人上限（含老存档）、总开关 | **DLL 实时** | 写 `PlayerData+0x146`，严格按 `20 + 2 × i` 计算；`i` = 已学「形代所持上限+1A~+1E」数量（0~5），每帧从游戏实时背包读取持有状态 |
-| 纸人漂流数量/上限、初始纸人、上限成长浮点 | **param 文件** | 由 `patch_paper_params.ps1` 一次性写入（`纸血挂.bat` 会调用） |
+```text
+dinput8_modengine.dll    ← ModEngine 的 dinput8.dll 改名版本
+modengine.ini            ← modOverrideDirectory="\mods"
+mods\param\gameparam\gameparam.parambnd.dcx
+```
 
-用法：
-
-1. 纸人上限固定为 `20 + 2 × i`，不需要改数值；进游戏由 DLL 实时修正（老存档也生效）
-2. 想整块关掉：cfg 里写 `纸人上限功能: 关`
-3. 改「纸人漂流」→ 双击同目录的 **`纸血挂.bat`**（内置逻辑：读 cfg 开关与数值 → 写入 param；`纸血挂.bat revert` 回滚）
-
-字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。
+`modengine.ini` 保持 `modOverrideDirectory="\mods"`。param 文件来自当前游戏目录中的 Resurrection 参数包，仅用于提供纸人漂流等字段；如你使用其它大型 mod，请用对应版本的 `gameparam.parambnd.dcx` 替换并重跑 `纸人挂.bat`。
 
 
-## 血条挂（玩家最大 HP / 血条适配）
-
-本 MOD 还支持按倍率修改玩家最大 HP，并同步适配血条：
-
-- `血量倍率: 2`：最大 HP 曲线整体 ×2
-  - 开局最大 HP：`320 -> 640`
-  - 每条念珠串：`+80 -> +160`
-  - 10 条念珠串后：`1120 -> 2240`
-  - `PlayerMaxHpLimit`、`PlayerQuarterHp`、健康阈值同步 ×2
-- param 层负责 HP 曲线和血条基准，双击 `纸血挂.bat` / `paperman.bat` 写入；
-- DLL 层负责旧存档缓存的最大 HP：`src/health.rs` 按 `PlayerData+0x44` 的 HP 等级同步 `0x20 / 0x1c / 0x18`；
-- 改 `血量倍率` 后：
-  1. 重新双击 `纸血挂.bat` / `paperman.bat`，或运行 `tools\patch_paper_params.ps1 -Apply`，更新 param；
-  2. 重进游戏，让 DLL 运行时修正生效。
-- 关闭：`血量功能: 关`（总开关）；只想关 DLL 的旧存档血量同步就写 `旧存档血量修正: 关`，两者独立。
-- 字段细节见 [docs/血量参数.md](docs/血量参数.md)。
-
-## cfg 可调项（纸人 / 血量 / 心流这几组键名前的 `#` 可有可无，时序类键仍写作 `# 键: 值`）
+## cfg 可调项（纸人 / 心流这几组键名前的 `#` 可有可无，时序类键仍写作 `# 键: 值`）
 
 | 键 | 说明 |
 | --- | --- |
@@ -142,11 +194,9 @@ just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 
 | `# rl触发时限: 0.3s` | **`rl` 樱舞**：按 `r` 后在此时间内按 `l`，且触发时 `r`、`l` 同时按住；真实 B+A 仍被剥离 |
 | `# 忍具触发时限: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
 | `# 武技排队等待: 0.3s` | 上一招末键松手后，再等此时长才放出排队武技；`0s` = 松手后立刻放 |
-| `纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存；`纸血挂.bat` 也不写 param） |
-| `纸人初始上限: 20` / `技能增加上限: 2` | **只给 `纸血挂.bat` 写 param 用**；DLL 运行时固定为 `20 + 2 × i`，不受这两项影响 |
+| `纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存；`纸人挂.bat` 也不写 param） |
+| `纸人初始上限: 20` / `技能增加上限: 2` | **只给 `纸人挂.bat` 写 param 用**；DLL 运行时固定为 `20 + 2 × i`，不受这两项影响 |
 | `纸人漂流: 9` | 血纸人(临时纸人)上限，也是纸人漂流一次给的数量 |
-| `血量功能: 开` | 血量修正总开关（关 = `纸血挂.bat` 不写 HP param、DLL 也不同步）；`旧存档血量修正: 开` 单独控制 DLL 的旧存档同步 |
-| `血量倍率: 2` | 最大 HP 曲线倍率，改完重跑 `纸血挂.bat` 更新 param |
 | `心流功能: 开` | 完美弹反叠层「心流」总开关；`心流持续时间` / `心流最大层数` / `心流回复比例` 见 [docs/心流.md](docs/心流.md) |
 
 > 中英文发行包运行时都按 `20 + 2 × i`；cfg 里的 `纸人初始上限` / `技能增加上限` 只供 param 脚本使用。
@@ -157,9 +207,13 @@ just pack     # 打成 battle-instinct_zh.zip / battle-instinct_en.zip（整包 
 ## 感谢
 
 - **[dec32](https://github.com/dec32)**：[Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者——本 MOD 基于其代码与架构
+- **[Katalash](https://github.com/katalash)**：[ModEngine](https://github.com/katalash/ModEngine) 原作者——发行包内附带其 DLL 与配置
+- 参数包来自本机安装的 **Sekiro: Resurrection**，仅作为纸人漂流 param 覆盖文件随包提供
 - [Tmsrise](https://github.com/tmsrise)：[Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
 - [ReaperAnon](https://github.com/ReaperAnon)：[Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
 - [Yuzheng Wu](https://github.com/Persona-woo)：原版输入手感测试与改进
+
+第三方组件与打包文件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 声明
 

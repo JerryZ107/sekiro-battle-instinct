@@ -6,15 +6,44 @@
 
 A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct). Upstream switches arts with **direction sequences + block/attack**. This fork keeps the original slot-swap / inject core, but **redesigns art combos and prosthetic triggers** (AI-assisted): arts use a **two-key** short window; prosthetics use **first key (move/block/attack/interact/grapple) + q/t**, or bare `t` / `q`, to equip and inject use.
 
+## Features
+
+This build keeps three feature groups only:
+
+1. **Combat-art combos** — two-key short-window activation, queueing, and instant arts.
+2. **Paper doll + blood paper doll** — live emblem-cap correction in the DLL and a param writer for Paper Doll Drift (temporary/blood emblems).
+3. **Flow** — perfect-deflect stacks that mitigate or restore posture.
+
 ## Quick start (recommended)
 
-**Only three files needed**: put `dinput8.dll`, `battle_instinct.cfg` and `paperman.bat` next to `sekiro.exe`, then **double-click `paperman.bat` once** (it has the param writer built in, no `.ps1` required). The Chinese release is identical except the cfg is Chinese and the launcher is `纸血挂.bat`. If another `dinput8.dll` exists (e.g. MOD Engine), rename **that** one to `dinput8_xxx.dll`; this MOD chain-loads it. **`version.dll` is not required.**
+The release bundle already includes this MOD, ModEngine, and the param file required by Paper Doll Drift. Extract it **with the directory structure preserved** into the folder containing `sekiro.exe`:
+
+```text
+Sekiro\
+  dinput8.dll
+  battle_instinct.cfg
+  paperman.bat            (Chinese release: 纸人挂.bat)
+  dinput8_modengine.dll
+  modengine.ini
+  mods\param\gameparam\gameparam.parambnd.dcx
+```
+
+For a fresh install, or after editing `battle_instinct.cfg`:
+
+1. Double-click `paperman.bat` (Chinese release: `纸人挂.bat`) and wait for it to finish.
+2. Fully exit the game, then launch it again.
+3. The DLL fixes the spirit-emblem cap live; the temporary-emblem cap and Paper Doll Drift amount come from the param file written by the launcher.
+
+> Do not change the `mods\param\gameparam\gameparam.parambnd.dcx` path. It is the loose param override loaded by ModEngine and is required for Drift changes. Without ModEngine, the DLL's live emblem-cap fix still works, but param values such as the Drift amount remain vanilla.
 
 ### English release
 
 - [dist/en/dinput8.dll](dist/en/dinput8.dll)
 - [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
 - [dist/en/paperman.bat](dist/en/paperman.bat)
+- [dist/en/dinput8_modengine.dll](dist/en/dinput8_modengine.dll)
+- [dist/en/modengine.ini](dist/en/modengine.ini)
+- [dist/en/mods/param/gameparam/gameparam.parambnd.dcx](dist/en/mods/param/gameparam/gameparam.parambnd.dcx)
 
 ## Relation to upstream
 
@@ -83,54 +112,77 @@ Default release prosthetic binds:
 | Long Spark | `→t-0s` |
 | Finger Whistle / Divine Abduction bind | `eq-0s` |
 
+## Paper Doll launcher (纸人挂.bat / paperman.bat)
+
+The launcher is a one-shot param writer; it does not stay running. It reads these values from `battle_instinct.cfg`:
+
+```ini
+paper cap fix: on
+paper initial cap: 20
+per skill bonus: 2
+drift: 9
+```
+
+It then writes the ModEngine-loaded `gameparam.parambnd.dcx`:
+
+| Field | Purpose |
+| --- | --- |
+| `EquipParamGoods 1000 +0x36` | Base paper-doll cap |
+| `EquipParamGoods 1001 +0x36` | Blood / temporary paper-doll cap |
+| `EquipParamGoods 3800 +0x8C` | Amount granted per Paper Doll Drift use |
+| `ResourceItemParam goodsId=1000` | Starting dolls and cap-growth floats |
+
+### First install / changing values
+
+1. Confirm `dinput8_modengine.dll`, `modengine.ini`, and `mods\param\gameparam\gameparam.parambnd.dcx` from the bundle are in the correct game-root locations.
+2. Edit `drift` in `battle_instinct.cfg` if needed. It controls both the temporary-emblem cap and the amount granted per use.
+3. Double-click `paperman.bat` (Chinese: `纸人挂.bat`) and wait for it to finish. It creates a timestamped param backup automatically.
+4. Fully exit and relaunch the game; params are only read at startup.
+5. Use Paper Doll Drift in game and verify the temporary-emblem cap / gain.
+
+### Rollback
+
+Run:
+
+```bat
+paperman.bat revert
+```
+
+This restores the latest param backup; restart the game afterward. To disable all paper-doll correction, set `paper cap fix: off`; this does not automatically roll back an already-written param file.
+
+### Troubleshooting
+
+- **Drift has no effect**: verify `dinput8_modengine.dll` is loaded and the `mods\param\gameparam\gameparam.parambnd.dcx` path is correct, then rerun the launcher and restart the game.
+- **ModEngine conflict**: this MOD chain-loads `dinput8_modengine.dll`; keep this MOD as `dinput8.dll` and do not overwrite it with ModEngine's DLL.
+- **Cap vs. Drift**: the spirit-emblem cap is fixed live by the DLL as `20 + 2 * i`; only the Drift amount and temporary-emblem cap come from the param file.
+- Field and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md).
+
 ## Build yourself (optional)
 
 ```bash
 cargo build --release
-just dist     # refresh dist/zh and dist/en (dinput8.dll + battle_instinct.cfg + launcher bat)
-just bat    # regenerate both launchers only (embeds tools/patch_paper_params.ps1 into each bat)
-just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip (3 files each)
+just dist     # refresh dist/zh and dist/en (DLL, cfg, launcher, ModEngine and param bundle)
+just bat      # regenerate 纸人挂.bat / paperman.bat only
+just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip
 ```
 
 Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
-Players only need the launcher bat (`dist/zh/纸血挂.bat` for Chinese, `dist/en/paperman.bat` for English); its source (PowerShell) lives in `tools/patch_paper_params.ps1` — run `just bat` to regenerate both.
+After extracting a release, double-click the launcher once (`纸人挂.bat` for Chinese, `paperman.bat` for English).
 
-## Paper doll (spirit emblem cap / drift)
+### ModEngine / param bundle
 
-Sekiro stores the **spirit-emblem cap inside the save** (it is written when a skill is learned), so param edits only affect new saves. This MOD handles it in two layers:
+The release includes:
 
-| Item | Handled by | Note |
-| --- | --- | --- |
-| Emblem cap (incl. old saves), master switch | **DLL, live** | writes `PlayerData+0x146` as exactly `20 + 2 * i`; `i` = learned "form cap" skills A–E (0–5), read from the live inventory every frame |
-| Paper Doll Drift amount/cap, starting dolls, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by the launcher bat) |
+```text
+dinput8_modengine.dll    <- ModEngine's dinput8.dll, renamed
+modengine.ini            <- modOverrideDirectory="\mods"
+mods\param\gameparam\gameparam.parambnd.dcx
+```
 
-Usage:
-
-1. The cap is fixed at `20 + 2 * i`; just enter the game and the DLL applies it live (old saves included)
-2. Disable everything with `paper cap fix: off`
-3. Changed `drift` (Paper Doll Drift) → double-click the launcher bat in the same folder (`paperman.bat`, or `纸血挂.bat` for the Chinese cfg); it reads the cfg switch/values and writes the param
-
-Field map and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md) (English) / [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
+`modengine.ini` keeps `modOverrideDirectory="\mods"`. The param file is taken from the local Sekiro: Resurrection package and is included only to provide the Drift fields. If you use another major mod, replace it with that mod's `gameparam.parambnd.dcx` and rerun the launcher.
 
 
-## Blood-bar launcher (player max HP / HP bar)
-
-This mod also supports scaling player max HP and adapting the HP bar:
-
-- `hp multiplier: 2`: scales the max-HP curve by 2
-  - starting max HP: `320 -> 640`
-  - each Prayer Necklace: `+80 -> +160`
-  - after 10 necklaces: `1120 -> 2240`
-  - `PlayerMaxHpLimit`, `PlayerQuarterHp`, and health thresholds scale by the same factor
-- The param layer handles the HP curve and bar reference; double-click `纸血挂.bat` / `paperman.bat` to write it.
-- The DLL layer fixes old-save cached max HP: `src/health.rs` reads the HP level at `PlayerData+0x44` and syncs `0x20 / 0x1c / 0x18`.
-- After changing `hp multiplier`:
-  1. re-run `纸血挂.bat` / `paperman.bat`, or `tools\patch_paper_params.ps1 -Apply`, to update params;
-  2. restart the game so the DLL runtime fix applies.
-- Disable with `health fix: off` (master switch: the launcher bat writes no HP param and the DLL syncs nothing); the DLL old-save sync has its own switch, `health old save fix: off`.
-- Field details: [docs/血量参数.md](docs/血量参数.md).
-
-## Config toggles (for the paper / HP / flow keys the leading `#` is optional; timing keys are still written as `# key: value`)
+## Config toggles (for the paper / flow keys the leading `#` is optional; timing keys are still written as `# key: value`)
 
 | Key | Meaning |
 | --- | --- |
@@ -141,8 +193,6 @@ This mod also supports scaling player max HP and adapting the HP bar:
 | `paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the launcher bat writes no param) |
 | `paper initial cap: 20` / `per skill bonus: 2` | **Only used by the launcher bat for the param file**; the DLL runtime cap is always `20 + 2 * i` and ignores these two values |
 | `drift: 9` | Blood/temporary emblem cap, and the amount granted per use of the Paper Doll Drift item |
-| `health fix: on` | Master HP switch (off = the launcher bat writes no HP param and the DLL syncs nothing); `health old save fix: on` gates the DLL old-save sync alone |
-| `hp multiplier: 2` | Max-HP curve multiplier; re-run `paperman.bat` after changing it |
 | `flow: on` | Perfect-deflect stack flow master switch; `flow duration` / `flow max stacks` / `flow refund ratios` are documented in [docs/心流.md](docs/心流.md) |
 
 > Both releases use `20 + 2 * i` at runtime; `paper initial cap` / `per skill bonus` only affect the param patcher.
@@ -153,9 +203,13 @@ A prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `�
 ## Credits
 
 - **[dec32](https://github.com/dec32)**: [Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) original author — this MOD is based on their code and architecture
+- **[Katalash](https://github.com/katalash)**: [ModEngine](https://github.com/katalash/ModEngine) original author — DLL and config are bundled in the release
+- Param package taken from the local **Sekiro: Resurrection** installation, bundled only as the Paper Doll Drift param override
 - [Tmsrise](https://github.com/tmsrise): [Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
 - [ReaperAnon](https://github.com/ReaperAnon): [Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
 - [Yuzheng Wu](https://github.com/Persona-woo): input-feel testing and improvements on the original
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components.
 
 ## Disclaimer
 

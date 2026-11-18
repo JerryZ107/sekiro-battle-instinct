@@ -16,11 +16,6 @@ impl Frames {
     pub fn as_actual(self) -> u16 {
         self.0 * FRAMERATE.cur() / DEFAULT_FRAMERATE
     }
-    #[allow(unused)]
-    #[inline(always)]
-    pub fn as_standard(self) -> u16 {
-        self.0
-    }
 }
 
 /// A tracker that tracks the in-game framerate.

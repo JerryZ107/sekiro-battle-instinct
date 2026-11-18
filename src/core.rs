@@ -1,4 +1,4 @@
-﻿use std::{fmt, num::NonZero, path::Path};
+use std::{fmt, num::NonZero, path::Path};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use crate::{
@@ -7,7 +7,6 @@ use crate::{
     emblem::Emblem,
     flow::Flow,
     frame::Frames,
-    health::Health,
     game::{self},
     input::{ArtCombo, ArtComboWindow, ArtToken},
 };
@@ -75,7 +74,6 @@ pub struct Mod {
     config: Config,
     emblem: Emblem,
     flow: Flow,
-    health: Health,
     art_combo: ArtComboWindow,
     cur_art: Option<UID>,
     blocking_last_frame: bool,
@@ -106,10 +104,6 @@ pub struct Mod {
     queue_flush_skip_tick: bool,
     /// When hold key is already up (typical after queue flush), keep firing this many frames.
     art_tap_frames: u8,
-    /// Diagnostic: frames since current art fire armed (0 = idle).
-    art_diag_n: u32,
-    /// Diagnostic: last inject phase label (to log transitions only).
-    art_diag_phase: &'static str,
     /// Pending first token for prosthetic combo (↑↓←→/r/l/e/f/q); waiting for q/t.
     tool_first: Option<ToolFirst>,
     tool_first_age: u16,
@@ -143,13 +137,11 @@ impl Mod {
         let config = Config::open(&cfg_path)?;
         let emblem = Emblem::new(&cfg_path);
         let flow = Flow::new(&cfg_path);
-        let health = Health::new(&cfg_path);
         let art_combo = ArtComboWindow::new(config.rl_combo_max_age);
         let modification = Mod {
             config,
             emblem,
             flow,
-            health,
             gamepad: Gamepad::new()?,
             art_combo,
             cur_art: None,
@@ -172,8 +164,6 @@ impl Mod {
             queue_flush_left: 0,
             queue_flush_skip_tick: false,
             art_tap_frames: 0,
-            art_diag_n: 0,
-            art_diag_phase: "idle",
             tool_first: None,
             tool_first_age: 0,
             hold_tool_tail: None,
@@ -226,17 +216,11 @@ impl Mod {
             _ => false,
         };
         match (first, second) {
-            (ArtToken::Block, dir) if dir.is_direction() => {
-                blocking_last_frame && dir_edge(dir)
-            }
+            (ArtToken::Block, dir) if dir.is_direction() => blocking_last_frame && dir_edge(dir),
             (dir, ArtToken::Attack) if dir.is_direction() => dir_held(dir) && attacked_just_now,
             (ArtToken::Attack, dir) if dir.is_direction() => attacking && dir_edge(dir),
-            (ArtToken::Interact, ArtToken::Attack) => {
-                interacting_last_frame && attacked_just_now
-            }
-            (ArtToken::Grapple, ArtToken::Attack) => {
-                grappling_last_frame && attacked_just_now
-            }
+            (ArtToken::Interact, ArtToken::Attack) => interacting_last_frame && attacked_just_now,
+            (ArtToken::Grapple, ArtToken::Attack) => grappling_last_frame && attacked_just_now,
             _ => false,
         }
     }
@@ -316,27 +300,11 @@ impl Mod {
     }
 
     fn clear_art_fire(&mut self) {
-        if self.hold_for_attack.is_some() || self.art_diag_n > 0 {
-            log::debug!(
-                "ART_CLEAR n={} hold={:?} tap={} blk={} latch={} pending_rl={} delay={} cur={:?} phase={}",
-                self.art_diag_n,
-                self.hold_for_attack,
-                self.art_tap_frames,
-                self.art_block_inject_left,
-                self.art_attack_latched,
-                self.pending_rl_attack,
-                self.attack_delay,
-                self.cur_art,
-                self.art_diag_phase,
-            );
-        }
         self.hold_for_attack = None;
         self.art_block_inject_left = 0;
         self.art_attack_latched = false;
         self.pending_rl_attack = false;
         self.art_tap_frames = 0;
-        self.art_diag_n = 0;
-        self.art_diag_phase = "idle";
     }
 
     /// End sustained fire; if a queued art is waiting, start the cfg flush delay.
@@ -391,33 +359,6 @@ impl Mod {
         } else {
             ART_BLOCK_INJECTION_DURATION.saturating_add(3)
         };
-        self.art_diag_n = 0;
-        self.art_diag_phase = "armed";
-        log::debug!(
-            "ART_ARM hold={:?} held={} tap={} cur={:?} delay={} swapout_done={}",
-            hold,
-            held,
-            self.art_tap_frames,
-            self.cur_art,
-            self.attack_delay,
-            self.swapout_countdown.is_done(),
-        );
-    }
-
-    fn art_diag_set_phase(&mut self, phase: &'static str) {
-        if self.art_diag_phase != phase {
-            log::debug!(
-                "ART_PHASE {} -> {} n={} hold={:?} delay={} blk={} tap={}",
-                self.art_diag_phase,
-                phase,
-                self.art_diag_n,
-                self.hold_for_attack,
-                self.attack_delay,
-                self.art_block_inject_left,
-                self.art_tap_frames,
-            );
-            self.art_diag_phase = phase;
-        }
     }
 
     fn revert_ejection_if_left_slot(&mut self) {
@@ -683,14 +624,11 @@ impl Mod {
 
         if self.tool_lock_left > 0 {
             self.return_default_left = 0;
-            let still_firing = self.hold_tool_tail.is_some()
-                || self.tool_min_use > 0
-                || self.prosthetic_delay > 0;
+            let still_firing = self.hold_tool_tail.is_some() || self.tool_min_use > 0 || self.prosthetic_delay > 0;
             if !still_firing {
                 self.tool_lock_left -= 1;
                 if self.tool_lock_left == 0 {
-                    let is_default =
-                        self.config.tool_on_t.is_some() && self.cur_tool == self.config.tool_on_t;
+                    let is_default = self.config.tool_on_t.is_some() && self.cur_tool == self.config.tool_on_t;
                     if !is_default {
                         self.return_default_left = PROSTHETIC_RETURN_DELAY.as_actual();
                     }
@@ -708,8 +646,7 @@ impl Mod {
 
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
         self.emblem.tick();
-        self.flow.tick(input_handler.action & BLOCK != 0);
-        self.health.tick();
+        self.flow.tick();
 
         /***** keystates *****/
         let w_down = is_key_down(VK_W);
@@ -846,12 +783,7 @@ impl Mod {
                 let is_rl = combo.is_rl();
                 if self.art_fire_busy() && !is_rl {
                     // Sustained fire still running: queue and flush after release + delay.
-                    log::debug!(
-                        "ART_QUEUE uid={} hold={:?} busy cur={:?}",
-                        uid,
-                        hold,
-                        self.cur_art
-                    );
+                    log::debug!("ART_QUEUE uid={} hold={:?} busy cur={:?}", uid, hold, self.cur_art);
                     self.queued_art = Some((uid, hold));
                     // Delay starts when current fire ends, not when queued.
                     self.queue_flush_left = 0;
@@ -859,11 +791,7 @@ impl Mod {
                     None
                 } else {
                     if is_rl && self.art_fire_busy() {
-                        log::debug!(
-                            "ART_RL_PREEMPT busy cur={:?} -> uid={}",
-                            self.cur_art,
-                            uid
-                        );
+                        log::debug!("ART_RL_PREEMPT busy cur={:?} -> uid={}", self.cur_art, uid);
                         self.clear_art_fire();
                         self.clear_queued_art();
                     }
@@ -900,8 +828,7 @@ impl Mod {
 
         // Bare right-click (r) → default ∅ if configured; skip when `r` is first half of a combo.
         let desired_art = desired_art.or_else(|| {
-            if !blocked_just_now || !self.swapout_countdown.is_done() || performed_block_free_art_just_now
-            {
+            if !blocked_just_now || !self.swapout_countdown.is_done() || performed_block_free_art_just_now {
                 return None;
             }
             if self.art_combo.awaiting_second() {
@@ -927,10 +854,7 @@ impl Mod {
                 if combat_art_slot_matches(desired_art) {
                     self.cur_art = Some(desired_art);
                     if log_equip {
-                        log::debug!(
-                            "ART_EQUIP uid={} slot_match=true (no set_combat_art)",
-                            desired_art
-                        );
+                        log::debug!("ART_EQUIP uid={} slot_match=true (no set_combat_art)", desired_art);
                     }
                     break;
                 }
@@ -1036,9 +960,6 @@ impl Mod {
         if self.attack_delay > 0 {
             strip_input(input_handler, ATTACK);
             self.attack_delay -= 1;
-            if self.hold_for_attack.is_some() {
-                self.art_diag_set_phase("delay");
-            }
         }
         // Start BLOCK prime only after settle. Must run even on the frame delay hits 0,
         // otherwise sustained fire below opens B+A one frame early (then prime runs late),
@@ -1046,7 +967,6 @@ impl Mod {
         if self.attack_delay == 0 && self.pending_rl_attack {
             self.pending_rl_attack = false;
             self.art_block_inject_left = ART_BLOCK_INJECTION_DURATION;
-            self.art_diag_set_phase("prime_start");
         }
 
         // Sustained art fire:
@@ -1057,52 +977,20 @@ impl Mod {
             if let Some(token) = self.hold_for_attack {
                 let held = self.art_combo.token_held(token);
                 let tapping = self.art_tap_frames > 0;
-                self.art_diag_n = self.art_diag_n.saturating_add(1);
                 if held || tapping {
                     if self.art_block_inject_left > 0 {
                         or_input(input_handler, BLOCK);
                         self.art_block_inject_left -= 1;
-                        self.art_diag_set_phase("prime_block");
                     } else {
                         or_input(input_handler, VANILLA_ART_INPUT);
-                        if !self.art_attack_latched {
-                            self.art_attack_latched = true;
-                            self.art_diag_set_phase("open_rl");
-                            log::debug!(
-                                "ART_OPEN n={} hold={:?} held={} tap={} out=B+A cur={:?}",
-                                self.art_diag_n,
-                                token,
-                                held,
-                                self.art_tap_frames,
-                                self.cur_art,
-                            );
-                        } else {
-                            self.art_diag_set_phase("hold_attack");
-                            if self.art_diag_n % 15 == 0 {
-                                log::debug!(
-                                    "ART_HOLD n={} hold={:?} held={} tap={} out=B+A cur={:?}",
-                                    self.art_diag_n,
-                                    token,
-                                    held,
-                                    self.art_tap_frames,
-                                    self.cur_art,
-                                );
-                            }
-                        }
+                        self.art_attack_latched = true;
                     }
                     if tapping && !held {
                         self.art_tap_frames -= 1;
                         if self.art_tap_frames == 0 {
-                            log::debug!("ART_TAP_END");
                             self.end_art_fire_for_queue();
                         }
                     }
-                } else if self.art_diag_n % 15 == 0 {
-                    log::debug!(
-                        "ART_IDLE_HOLD n={} hold={:?} held=false (waiting key?)",
-                        self.art_diag_n,
-                        token
-                    );
                 }
             }
         }
@@ -1276,20 +1164,12 @@ impl ProstheticSlot {
     fn as_slot_index(self) -> usize {
         self as usize
     }
-    #[inline(always)]
-    fn as_prosthetic_index(self) -> u32 {
-        self as u32 / 2
-    }
 }
 
 fn get_equipped_combat_art_item_id() -> Option<ItemID> {
     let items = &player_data().equiped_items;
     let item_id = items[COMBAT_ART_SLOT as usize];
-    if item_id != 256 {
-        ItemID::new(item_id)
-    } else {
-        None
-    }
+    if item_id != 256 { ItemID::new(item_id) } else { None }
 }
 
 fn combat_art_slot_matches(art: UID) -> bool {
@@ -1353,16 +1233,6 @@ fn locate_prosthetic_tool(tool: impl ID) -> Option<ProstheticSlot> {
         }
     }
     None
-}
-
-fn activate_prosthetic_slot(slot: ProstheticSlot) {
-    use std::ffi::c_void;
-    let unknown = unsafe {
-        let character_base: *const c_void =
-            game::resolve_pointer_chain(game::WORLD_DATA, [0x88, 0x1F10, 0x10, 0xF8, 0x10, 0x18, 0x00]);
-        *(character_base.byte_add(0x10) as *const *const c_void)
-    };
-    game::set_equipped_prosthetic(unknown, 0, slot.as_prosthetic_index());
 }
 
 fn game_data() -> &'static game::GameData {

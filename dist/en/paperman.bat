@@ -4,6 +4,7 @@ chcp 936 >nul
 title Sekiro - Paper Doll Tool
 set "HERE=%~dp0"
 set "PAPERDOLL_CFG=%HERE%battle_instinct.cfg"
+set "PAPERDOLL_GAME_DIR=%HERE%"
 set "PAPERDOLL_LANG=en"
 if /i "%~1"=="revert" set "PAPERDOLL_REVERT=1"
 if /i "%~1"=="rollback" set "PAPERDOLL_REVERT=1"
@@ -13,8 +14,8 @@ echo ----------------------------------------------------------
 echo   Reads these lines from battle_instinct.cfg (same folder):
 echo     paper cap fix: on / off
 echo     paper initial cap: 25    per skill bonus: 5    drift: 9
-echo     health fix: on         hp multiplier: 3
-echo   "paper cap fix: off" / "health fix: off" = skip that section.
+echo   "paper cap fix: off" = skip the param writes.
+echo   Param writes require ModEngine: dinput8_modengine.dll + modengine.ini.
 echo   Edit the cfg, then double-click this file. Roll back: paperman.bat revert
 echo ==========================================================
 echo.
@@ -23,7 +24,7 @@ if not exist "%PAPERDOLL_CFG%" (
   goto done
 )
 set "TMPPS=%TEMP%\zhiren_%RANDOM%%RANDOM%.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%~f0' -Encoding Default | Select-Object -Skip 43 | Set-Content -LiteralPath '%TMPPS%' -Encoding Default"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath '%~f0' -Encoding Default | Select-Object -Skip 44 | Set-Content -LiteralPath '%TMPPS%' -Encoding Default"
 if not exist "%TMPPS%" (
   echo [ERROR] could not unpack the temporary script.
   goto done
@@ -42,26 +43,19 @@ exit /b
 
 rem ==== embedded PowerShell below (self-extracting; regenerate with tools/make_bat.ps1) ====
 <#
-  patch_paper_params.ps1 - paper doll + player max HP param one-shot patcher
+  patch_paper_params.ps1 - paper doll param one-shot patcher
   ------------------------------------------------------------------------
-  纸人（Spirit Emblem / 形代）相关 param 一键修改。
+  纸人（Spirit Emblem / 形代）与血纸人（临时纸人）相关 param 一键修改。
   不改 DLL、不覆盖别人的 mod：直接对 Mod Engine 加载的 regulation 参数包
   mods\param\gameparam\gameparam.parambnd.dcx 做字段级补丁（自动备份、可回滚）。
 
   字段来源（本机两套 mod 包对比 + 逐行 dump 实测）：
-    EquipParamGoods  id=1000  纸人      row+0x36 (u16) = 纸人上限         vanilla 15
-    EquipParamGoods  id=1001  临时纸人  row+0x36 (u16) = 临时纸人上限     vanilla 5
-    EquipParamGoods  id=3800  纸人漂流  row+0x8C (u16) = 一次给多少临时   vanilla 5
-    ResourceItemParam goodsId=1000 行  +0x10 (u32)    = 开局携带纸人数    vanilla 6
+    EquipParamGoods  id=1000  纸人      row+0x36 (u16) = 纸人上限
+    EquipParamGoods  id=1001  临时纸人  row+0x36 (u16) = 临时纸人上限
+    EquipParamGoods  id=3800  纸人漂流  row+0x8C (u16) = 一次给多少临时纸人
+    ResourceItemParam goodsId=1000 行  +0x10 (u32)    = 开局携带纸人数
     ResourceItemParam goodsId=1000 行  +0x14/+0x18/+0x1C/+0x20 (f32)
         = 基础上限/4、满上限/4、技能个数、满上限（推断，用于「每个技能 +N」）
-
-  玩家最大 HP（k=2，血条适配）：
-    CalcCorrectGraph row 500  stageMaxGrowVal0 = 320*k, stageMaxGrowVal1..4 = 1120*k
-    MenuParam row 0           PlayerMaxHpLimit = 1920*k, PlayerQuarterHp = 20*k,
-                              HealthHp* 同步 *k，PlayerMaxAddHp = 0
-    默认 k=2：开局最大 HP 640，每条念珠串 +160，10 条后 2240；满级血条长度保持原版比例
-    cfg: 血量功能: 开/关  血量倍率: 3   /   -SkipHp  -HpMultiplier 3
 
   输出语言：
     -Lang en / -Lang zh，或环境变量 PAPERDOLL_LANG=en|zh（发布包 .bat 用它切换）
@@ -72,7 +66,6 @@ rem ==== embedded PowerShell below (self-extracting; regenerate with tools/make_
       应用:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Apply
       回滚:      powershell -ExecutionPolicy Bypass -File tools\patch_paper_params.ps1 -Revert
       自定义:    ... -Apply -InitialPaper 30 -BaseCap 30 -PerSkillBonus 10 -TempCap 15 -DriftAmount 15
-      血量:      ... -Apply -HpMultiplier 2     （默认已开启；关：-SkipHp 或 cfg「血量功能: 关」）
 
   说明：输出串全为 ASCII，中文一律写成 \uXXXX 转义；正文里剩下的中文只有 cfg 键名，
   两者都能被 GBK 编码，所以嵌进 .bat 尾部再被 `Get-Content -Encoding Default` 读出来也不会乱码。
@@ -88,8 +81,6 @@ param(
     [int]$SkillCount    = 5,
     [int]$TempCap       = 15,
     [int]$DriftAmount   = 15,
-    [double]$HpMultiplier = 2.0,
-    [switch]$SkipHp,
     [string]$Lang       = $(if ($env:PAPERDOLL_LANG) { $env:PAPERDOLL_LANG } else { 'auto' }),
     [switch]$SkipGrowthFloats,
     [switch]$Apply,
@@ -139,11 +130,6 @@ $S = @{
         rolledBack = 'Rolled back: {0} -> {1}'
         noGoods = 'EquipParamGoods.param not found in the param package'
         noRes = 'ResourceItemParam.param not found in the param package'
-        missingCcg = 'CalcCorrectGraph.param not found in the param package'
-        missingMenu = 'MenuParam.param not found in the param package'
-        missingCcgRow = 'CalcCorrectGraph row 500 not found'
-        missingMenuRow = 'MenuParam row 0 not found'
-        verifyHp = 'Verify HP: start={0} max={1} limit={2} quarter={3}'
     }
     zh = @{
         off = '当前 cfg 里「纸人上限功能: 关」→ 跳过 param 写入（想强制加 -Force，想回滚加 -Revert）'
@@ -171,11 +157,6 @@ $S = @{
         rolledBack = '已回滚: {0} -> {1}'
         noGoods = '参数包里没有 EquipParamGoods.param'
         noRes = '参数包里没有 ResourceItemParam.param'
-        missingCcg = '参数包里没有 CalcCorrectGraph.param'
-        missingMenu = '参数包里没有 MenuParam.param'
-        missingCcgRow = 'CalcCorrectGraph 里没有 500 行'
-        missingMenuRow = 'MenuParam 里没有 0 行'
-        verifyHp = '校验 HP: 开局={0} 满级={1} 血条基准={2} 四分之一={3}'
     }
 }
 $T = $S[$Lang]
@@ -211,6 +192,12 @@ if (-not $ParamFile) {
     if (-not $gameDir) { throw $T.noGameDir }
     $ParamFile = Join-Path $gameDir 'mods\param\gameparam\gameparam.parambnd.dcx'
     if (-not $CfgFile) { $CfgFile = Join-Path $gameDir 'battle_instinct.cfg' }
+}
+if ($gameDir) {
+    $modEngineDlls = Get-ChildItem -Path $gameDir -Filter 'dinput8_*.dll' -File -ErrorAction SilentlyContinue
+    if (-not $modEngineDlls) {
+        Write-Warning $T.modEngineMissing
+    }
 }
 $driftTouched = $false
 $keyMap = @{
@@ -263,23 +250,8 @@ if ($CfgFile -and (Test-Path $CfgFile)) {
     $swLine = Select-String -Path $CfgFile -Pattern '(纸人上限功能|paper cap fix)\s*[:：]' -Encoding UTF8 | Select-Object -First 1
     if ($swLine -and ($swLine.Line -match '[:：]\s*(关|off|false|no)')) { $capFixOn = 0 }
 }
-# 「血量功能: 开/关」以及倍率
-$hpFixOn = 1
-if ($CfgFile -and (Test-Path $CfgFile)) {
-    foreach ($line in (Get-Content $CfgFile -Encoding UTF8)) {
-        $body = $line.TrimStart('#', ' ').Trim()
-        if ($body -match '^(血量功能|health fix)\s*[:：]\s*(.*)$') {
-            if ($Matches[2] -match '^(关|off|false|no|0)\b') { $hpFixOn = 0 } else { $hpFixOn = 1 }
-        }
-        if ($body -match '^(血量倍率|hp multiplier|health multiplier)\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)') {
-            $HpMultiplier = [double]$Matches[2]
-        }
-    }
-}
-if ($HpMultiplier -le 0) { $HpMultiplier = 3.0 }
 $doPaper = $Force -or ($capFixOn -ne 0)
-$doHp = (-not $SkipHp) -and ($Force -or ($hpFixOn -ne 0))
-if (-not $Revert -and -not $doPaper -and -not $doHp) {
+if (-not $Revert -and -not $doPaper) {
     Write-Host $T.off
     return
 }
@@ -409,7 +381,6 @@ public static class PaperParams
     }
 
     public static uint U32(byte[] b, int o) { return BitConverter.ToUInt32(b, o); }
-    public static int I32(byte[] b, int o) { return BitConverter.ToInt32(b, o); }
     public static ushort U16(byte[] b, int o) { return BitConverter.ToUInt16(b, o); }
     public static float F32(byte[] b, int o) { return BitConverter.ToSingle(b, o); }
     public static void W16(byte[] b, int o, int v) { b[o]=(byte)v; b[o+1]=(byte)(v>>8); }
@@ -437,8 +408,6 @@ $entries = [PaperParams]::Entries($bnd)
 
 $gRows = @{}
 $resRow = -1
-$ccgRows = @{}
-$menuRows = @{}
 $maxCap = $BaseCap + $PerSkillBonus * $SkillCount
 
 function Set-U16([int]$row, [int]$off, [int]$val, [string]$label) {
@@ -489,41 +458,6 @@ if ($doPaper) {
     } else { Write-Host $T.missingRes }
 }
 
-if ($doHp) {
-    $ccg = [PaperParams]::Find($entries, 'CalcCorrectGraph.param')
-    $menu = [PaperParams]::Find($entries, 'MenuParam.param')
-    if (-not $ccg) { throw $T.missingCcg }
-    if (-not $menu) { throw $T.missingMenu }
-    $ccgRows = [PaperParams]::RowOffsets($bnd, $ccg.Start, $ccg.Size)
-    $menuRows = [PaperParams]::RowOffsets($bnd, $menu.Start, $menu.Size)
-    if (-not $ccgRows.ContainsKey(500)) { throw $T.missingCcgRow }
-    if (-not $menuRows.ContainsKey(0)) { throw $T.missingMenuRow }
-
-    $hpStart = [single](320.0 * $HpMultiplier)
-    $hpMax = [single](1120.0 * $HpMultiplier)
-    $hpLimit = [int][math]::Round(1920.0 * $HpMultiplier)
-    $hpQuarter = [int][math]::Round(20.0 * $HpMultiplier)
-    $hpNoDamage = [int][math]::Round(300.0 * $HpMultiplier)
-    $hpLight = [int][math]::Round(250.0 * $HpMultiplier)
-    $hpHeavy = [int][math]::Round(100.0 * $HpMultiplier)
-    $hpDying = [int][math]::Round(1.0 * $HpMultiplier)
-
-    Write-Host ("  HP max x {0}" -f $HpMultiplier)
-    Set-F32 $ccgRows[500] 0x14 $hpStart "CalcCorrectGraph 500 stageMaxGrowVal0"
-    Set-F32 $ccgRows[500] 0x18 $hpMax "CalcCorrectGraph 500 stageMaxGrowVal1"
-    Set-F32 $ccgRows[500] 0x1C $hpMax "CalcCorrectGraph 500 stageMaxGrowVal2"
-    Set-F32 $ccgRows[500] 0x20 $hpMax "CalcCorrectGraph 500 stageMaxGrowVal3"
-    Set-F32 $ccgRows[500] 0x24 $hpMax "CalcCorrectGraph 500 stageMaxGrowVal4"
-    Set-U32 $menuRows[0] 0x08 $hpLimit "MenuParam 0 PlayerMaxHpLimit"
-    Set-U32 $menuRows[0] 0x1C 0 "MenuParam 0 PlayerMaxAddHp"
-    Set-U32 $menuRows[0] 0x9C $hpQuarter "MenuParam 0 PlayerQuarterHp"
-    Set-U32 $menuRows[0] 0x38 $hpNoDamage "MenuParam 0 HealthHpNoDamage"
-    Set-U32 $menuRows[0] 0x3C $hpLight "MenuParam 0 HealthHpLightDamage"
-    Set-U32 $menuRows[0] 0x40 $hpHeavy "MenuParam 0 HealthHpHeavyDamage"
-    Set-U32 $menuRows[0] 0x44 $hpDying "MenuParam 0 HealthHpDying"
-    Set-U32 $menuRows[0] 0x48 0 "MenuParam 0 HealthHpDead"
-}
-
 if (-not $Apply) {
     Write-Host ''
     Write-Host $T.dry
@@ -551,15 +485,4 @@ if ($doPaper) {
         [PaperParams]::U16($check, $cgr[3800] + 0x8C), `
         [PaperParams]::U32($check, $cres + 0x10), `
         [PaperParams]::F32($check, $cres + 0x20))
-}
-if ($doHp) {
-    $ccg = [PaperParams]::Find($ce, 'CalcCorrectGraph.param')
-    $menu = [PaperParams]::Find($ce, 'MenuParam.param')
-    $ccgRows = [PaperParams]::RowOffsets($check, $ccg.Start, $ccg.Size)
-    $menuRows = [PaperParams]::RowOffsets($check, $menu.Start, $menu.Size)
-    Write-Host ($T.verifyHp -f `
-        [PaperParams]::F32($check, $ccgRows[500] + 0x14), `
-        [PaperParams]::F32($check, $ccgRows[500] + 0x18), `
-        [PaperParams]::U32($check, $menuRows[0] + 0x08), `
-        [PaperParams]::U32($check, $menuRows[0] + 0x9C))
 }

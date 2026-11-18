@@ -8,7 +8,7 @@
 //
 //  The learned state is read from the live inventory: learning one of these
 //  skills immediately adds its dummy weapon (650000..650400) to the runtime
-//  inventory.  There is no state file, no cfg override and no inference from
+//  inventory. There is no state file, no cfg override and no inference from
 //  the old cap value.
 //
 //----------------------------------------------------------------------------
@@ -23,20 +23,17 @@ const PER_SKILL: u32 = 2;
 const SKILL_COUNT: usize = 5;
 
 /// `virtualWeaponId` of SkillParam rows 75, 76, 175, 176 and 603
-/// (形代所持上限+1A ... +1E).  Learning a skill adds this weapon to the live
+/// (形代所持上限+1A ... +1E). Learning a skill adds this weapon to the live
 /// inventory; unlearned dummy entries are not present in the runtime inventory.
 const CAP_SKILL_ITEM_IDS: [u32; SKILL_COUNT] = [650000, 650100, 650200, 650300, 650400];
 
-const DEFAULT_CAP_OFFSET: usize = 0x146;
-const DEFAULT_CAP_WIDTH: usize = 2;
+/// PlayerData field used by the game for the live emblem cap.
+const CAP_OFFSET: usize = 0x146;
 const INVENTORY_ITEM_SIZE: usize = 16;
 const INVENTORY_SCAN_LEN: usize = 0x2000;
 
 pub struct Emblem {
     enabled: bool,
-    /// PlayerData offset of the runtime cap field (0 = never write).
-    cap_offset: usize,
-    cap_width: usize,
     last_i: Option<u32>,
     warned_bad_cap: bool,
 }
@@ -45,8 +42,6 @@ impl Emblem {
     pub fn new(cfg: impl AsRef<Path>) -> Emblem {
         let mut emblem = Emblem {
             enabled: true,
-            cap_offset: DEFAULT_CAP_OFFSET,
-            cap_width: DEFAULT_CAP_WIDTH,
             last_i: None,
             warned_bad_cap: false,
         };
@@ -54,10 +49,8 @@ impl Emblem {
             emblem.load(&text);
         }
         log::warn!(
-            "emblem settings: enabled={} cap_off=0x{:x} width={} rule=cap {} + {} * i (i from live inventory)",
+            "emblem settings: enabled={} rule=cap {} + {} * i (i from live inventory)",
             emblem.enabled,
-            emblem.cap_offset,
-            emblem.cap_width,
             BASE_CAP,
             PER_SKILL
         );
@@ -69,29 +62,17 @@ impl Emblem {
             let Some((key, value)) = split_kv(line) else {
                 continue;
             };
-            let key = key.trim().to_ascii_lowercase();
-            match key.as_str() {
-                "纸人上限功能" | "paper cap fix" => self.enabled = parse_bool(value),
-                "纸人上限偏移" | "cap offset" => {
-                    if let Some(v) = parse_int(value) {
-                        self.cap_offset = v.max(0) as usize;
-                    }
-                }
-                "纸人上限宽度" | "cap width" => {
-                    if let Some(v) = parse_int(value) {
-                        self.cap_width = match v {
-                            1 | 2 | 4 => v as usize,
-                            _ => 4,
-                        };
-                    }
-                }
-                _ => (),
+            if matches!(
+                key.trim().to_ascii_lowercase().as_str(),
+                "纸人上限功能" | "paper cap fix"
+            ) {
+                self.enabled = parse_bool(value);
             }
         }
     }
 
     pub fn tick(&mut self) {
-        if !self.enabled || self.cap_offset == 0 {
+        if !self.enabled {
             return;
         }
         let Some(player) = player_data() else {
@@ -102,26 +83,21 @@ impl Emblem {
 
     fn apply(&mut self, player: *mut u8) {
         let Some(found) = detect_cap_skills() else {
-            // Inventory not ready (loading screen / no save).  Do not write a
+            // Inventory not ready (loading screen / no save). Do not write a
             // guessed value; wait for the real skill state.
             return;
         };
 
         let i = count_found(&found);
         let target = BASE_CAP + PER_SKILL * i;
-        let cur = read_u(player, self.cap_offset, self.cap_width) as u32;
+        let cur = unsafe { read_u16(player, CAP_OFFSET) } as u32;
 
         // Reading something that is not a cap value usually means a bad offset;
         // never overwrite it.
         if !(5..=200).contains(&cur) {
             if !self.warned_bad_cap {
                 self.warned_bad_cap = true;
-                log::warn!(
-                    "emblem: cap offset 0x{:x} (u{}) reads {} - not cap-like, skip writing",
-                    self.cap_offset,
-                    self.cap_width * 8,
-                    cur
-                );
+                log::warn!("emblem: cap offset 0x{CAP_OFFSET:x} reads {cur} - not cap-like, skip writing");
             }
             return;
         }
@@ -141,7 +117,7 @@ impl Emblem {
         }
 
         if cur != target {
-            write_u(player, self.cap_offset, self.cap_width, target as u64);
+            unsafe { write_u16(player, CAP_OFFSET, target as u16) };
             log::warn!("emblem: cap {} -> {} (i={})", cur, target, i);
         }
     }
@@ -155,7 +131,7 @@ fn count_found(found: &[bool; SKILL_COUNT]) -> u32 {
 ///
 /// Runtime inventory entries are 16 bytes: `handle, item_id, quantity, index`.
 /// A learned skill adds `650000/650100/650200/650300/650400` as an item; an
-/// unlearned skill has no entry.  This is a direct possession check, not an
+/// unlearned skill has no entry. This is a direct possession check, not an
 /// inference from the emblem cap.
 fn detect_cap_skills() -> Option<[bool; SKILL_COUNT]> {
     unsafe {
@@ -183,7 +159,7 @@ fn detect_cap_skills() -> Option<[bool; SKILL_COUNT]> {
 
         let mut found = [false; SKILL_COUNT];
         for off in (0..scan_len).step_by(INVENTORY_ITEM_SIZE) {
-            let item_id = read_u(base, off + 4, 4) as u32 & 0x00FF_FFFF;
+            let item_id = read_u32(base, off + 4) & 0x00FF_FFFF;
             if let Some(slot) = CAP_SKILL_ITEM_IDS.iter().position(|&id| id == item_id) {
                 found[slot] = true;
                 if found.iter().all(|&v| v) {
@@ -198,7 +174,7 @@ fn detect_cap_skills() -> Option<[bool; SKILL_COUNT]> {
 fn range_readable(addr: usize, len: usize) -> bool {
     use core::ffi::c_void;
     use windows::Win32::System::Memory::{
-        MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
+        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
     };
 
     let mut off = 0usize;
@@ -237,25 +213,17 @@ fn player_data() -> Option<*const u8> {
     }
 }
 
-fn read_u(base: *const u8, offset: usize, width: usize) -> u64 {
-    unsafe {
-        let p = base.add(offset);
-        match width {
-            1 => (p as *const u8).read_unaligned() as u64,
-            2 => u16::from_le((p as *const u16).read_unaligned()) as u64,
-            _ => u32::from_le((p as *const u32).read_unaligned()) as u64,
-        }
-    }
+unsafe fn read_u16(base: *const u8, offset: usize) -> u16 {
+    unsafe { u16::from_le((base.add(offset) as *const u16).read_unaligned()) }
 }
 
-fn write_u(base: *mut u8, offset: usize, width: usize, value: u64) {
+unsafe fn read_u32(base: *const u8, offset: usize) -> u32 {
+    unsafe { u32::from_le((base.add(offset) as *const u32).read_unaligned()) }
+}
+
+unsafe fn write_u16(base: *mut u8, offset: usize, value: u16) {
     unsafe {
-        let p = base.add(offset);
-        match width {
-            1 => (p as *mut u8).write_unaligned(value as u8),
-            2 => (p as *mut u16).write_unaligned((value as u16).to_le()),
-            _ => (p as *mut u32).write_unaligned((value as u32).to_le()),
-        }
+        (base.add(offset) as *mut u16).write_unaligned(value.to_le());
     }
 }
 
@@ -268,22 +236,6 @@ fn split_kv(line: &str) -> Option<(&str, &str)> {
         }
     }
     None
-}
-
-fn parse_int(raw: &str) -> Option<i64> {
-    let text = raw
-        .trim()
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    if text.is_empty() {
-        return None;
-    }
-    match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        Some(hex) => i64::from_str_radix(hex, 16).ok(),
-        None => text.parse::<i64>().ok(),
-    }
 }
 
 fn parse_bool(raw: &str) -> bool {
@@ -304,9 +256,6 @@ mod tests {
         for i in 0..=5u32 {
             assert_eq!(BASE_CAP + PER_SKILL * i, 20 + 2 * i);
         }
-        assert_eq!(BASE_CAP + PER_SKILL, 22);
-        assert_eq!(BASE_CAP + PER_SKILL * 2, 24);
-        assert_eq!(BASE_CAP + PER_SKILL * 5, 30);
     }
 
     #[test]
@@ -319,20 +268,16 @@ mod tests {
     }
 
     #[test]
-    fn shipped_zh_cfg_enables_the_feature_without_state_overrides() {
+    fn shipped_zh_cfg_enables_the_feature() {
         let mut emblem = test_emblem();
         emblem.load(&fs::read_to_string("res/battle_instinct_zh.cfg").expect("read cfg"));
         assert!(emblem.enabled);
-        assert_eq!(emblem.cap_offset, DEFAULT_CAP_OFFSET);
-        assert_eq!(emblem.cap_width, DEFAULT_CAP_WIDTH);
     }
 
     #[test]
     fn commented_switch_still_parses() {
         let mut emblem = test_emblem();
-        emblem.load("# paper cap fix: off\n# cap offset: 0x146\n# cap width: 2\n");
+        emblem.load("# paper cap fix: off\n");
         assert!(!emblem.enabled);
-        assert_eq!(emblem.cap_offset, 0x146);
-        assert_eq!(emblem.cap_width, 2);
     }
 }

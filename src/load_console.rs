@@ -1,7 +1,7 @@
 use std::{
     path::Path,
-    sync::{Mutex, OnceLock},
     sync::atomic::{AtomicBool, Ordering},
+    sync::{Mutex, OnceLock},
     thread,
     time::Duration,
 };
@@ -12,12 +12,12 @@ use windows::{
     Win32::{
         Foundation::HANDLE,
         Storage::FileSystem::{
-            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-            FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, OPEN_EXISTING,
         },
         System::Console::{
-            AllocConsole, FreeConsole, GetStdHandle, SetConsoleTitleW, SetStdHandle,
-            WriteConsoleW, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+            AllocConsole, FreeConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetConsoleTitleW,
+            SetStdHandle, WriteConsoleW,
         },
     },
     core::PCWSTR,
@@ -45,10 +45,6 @@ fn close_if_open() {
     unsafe {
         let _ = FreeConsole();
     }
-}
-
-pub fn set_enabled(enabled: bool) {
-    ENABLED.store(enabled, Ordering::SeqCst);
 }
 
 /// Pop up a console for startup progress (no-op if disabled or allocation fails).
@@ -85,10 +81,7 @@ pub fn open() {
             let _ = SetStdHandle(STD_ERROR_HANDLE, nul);
         }
 
-        let title: Vec<u16> = "Battle Instinct — 加载中"
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
+        let title: Vec<u16> = "Battle Instinct — 加载中".encode_utf16().chain(Some(0)).collect();
         let _ = SetConsoleTitleW(PCWSTR::from_raw(title.as_ptr()));
     }
     print_line("Battle Instinct 正在加载…");
@@ -112,6 +105,7 @@ pub fn print_line(msg: &str) {
 }
 
 /// Print a final message; auto-close only on success.
+#[allow(dead_code)]
 pub fn finish(success: bool, detail: Option<&str>) {
     if !ENABLED.load(Ordering::Relaxed) || !OPEN.load(Ordering::Relaxed) {
         return;

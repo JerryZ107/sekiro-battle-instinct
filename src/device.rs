@@ -35,11 +35,7 @@ impl Gamepad {
                 _ => (),
             }
         }
-        if self.connected {
-            Some(self.left_pos)
-        } else {
-            None
-        }
+        if self.connected { Some(self.left_pos) } else { None }
     }
 }
 

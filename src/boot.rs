@@ -8,6 +8,7 @@ use crate::load_console;
 static EARLY_SCAN_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Called from `version.dll` as early as the game process starts.
+#[allow(dead_code)]
 pub fn on_early_attach(dir: PathBuf) {
     load_console::apply_cfg(&dir);
     load_console::open();
@@ -22,6 +23,7 @@ pub fn on_early_attach(dir: PathBuf) {
 }
 
 /// Called from `dinput8.dll` when DirectInput is first loaded.
+#[allow(dead_code)]
 pub fn on_dinput_attach(dir: &Path) {
     load_console::apply_cfg(dir);
     load_console::open();

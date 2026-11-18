@@ -1,4 +1,4 @@
-﻿mod boot;
+mod boot;
 mod cfg_meta;
 mod config;
 mod core;
@@ -6,7 +6,6 @@ mod device;
 mod emblem;
 mod flow;
 mod frame;
-mod health;
 mod game;
 mod input;
 mod load_console;
@@ -30,9 +29,7 @@ use windows::{
     Win32::{
         Foundation::{GetLastError, HINSTANCE, HMODULE},
         System::{
-            LibraryLoader::{
-                DisableThreadLibraryCalls, GetModuleFileNameW, GetProcAddress, LoadLibraryW,
-            },
+            LibraryLoader::{DisableThreadLibraryCalls, GetModuleFileNameW, GetProcAddress, LoadLibraryW},
             SystemInformation::GetSystemDirectoryW,
             SystemServices::DLL_PROCESS_ATTACH,
         },
@@ -81,8 +78,7 @@ extern "system" fn DllMain(hmodule: HMODULE, call_reason: u32, _reserved: *mut c
 
 static DIRECT_INPUT8_CREATE: OnceLock<DirectInput8CreateFn> = OnceLock::new();
 
-type DirectInput8CreateFn =
-    fn(HINSTANCE, u32, *const GUID, *mut *mut c_void, HINSTANCE) -> HRESULT;
+type DirectInput8CreateFn = fn(HINSTANCE, u32, *const GUID, *mut *mut c_void, HINSTANCE) -> HRESULT;
 
 #[unsafe(no_mangle)]
 extern "system" fn DirectInput8Create(

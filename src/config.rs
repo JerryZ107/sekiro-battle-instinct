@@ -1,10 +1,7 @@
 use std::{collections::HashMap, fs, io, path::Path};
 
-use widestring::U16CStr;
-
 use crate::{
     core::UID,
-    game,
     input::{ArtCombo, ArtToken},
 };
 
@@ -124,10 +121,6 @@ impl Config {
 
     pub fn art(&self, combo: ArtCombo) -> Option<UID> {
         self.arts.get(&combo).copied()
-    }
-
-    pub fn instant_art(&self, combo: ArtCombo) -> Option<UID> {
-        self.instant_arts.get(&combo).copied()
     }
 
     pub fn tool(&self, combo: ToolCombo) -> Option<UID> {
@@ -269,10 +262,7 @@ fn insert_instant_art_bind(config: &mut Config, combo: ArtCombo, id: UID) {
 fn insert_art_bind(config: &mut Config, combo: ArtCombo, id: UID) {
     if let Some(prev) = config.arts.get(&combo) {
         if *prev != id {
-            log::warn!(
-                "Duplicate art bind {:?}: keeping UID {prev}, ignoring {id}",
-                combo
-            );
+            log::warn!("Duplicate art bind {:?}: keeping UID {prev}, ignoring {id}", combo);
         }
         return;
     }
@@ -282,10 +272,7 @@ fn insert_art_bind(config: &mut Config, combo: ArtCombo, id: UID) {
 fn insert_tool_bind(config: &mut Config, combo: ToolCombo, id: UID) {
     if let Some(prev) = config.tools.get(&combo) {
         if *prev != id {
-            log::warn!(
-                "Duplicate tool bind {:?}: keeping UID {prev}, ignoring {id}",
-                combo
-            );
+            log::warn!("Duplicate tool bind {:?}: keeping UID {prev}, ignoring {id}", combo);
         }
         return;
     }
@@ -295,9 +282,7 @@ fn insert_tool_bind(config: &mut Config, combo: ToolCombo, id: UID) {
 fn insert_tool_multi_lock(config: &mut Config, id: UID, secs: f32) {
     if let Some(prev) = config.tool_multi_lock_secs.get(&id) {
         if (*prev - secs).abs() > f32::EPSILON {
-            log::warn!(
-                "Duplicate multi-hit lock for UID {id}: keeping {prev}s, ignoring {secs}s"
-            );
+            log::warn!("Duplicate multi-hit lock for UID {id}: keeping {prev}s, ignoring {secs}s");
         }
         return;
     }
@@ -330,10 +315,7 @@ fn parse_window_secs_comment(line: &str, keys: &[&str], allow_zero: bool) -> Opt
         return None;
     }
     let rest = body.split([':', '：']).nth(1)?.trim();
-    let num: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
     let secs = num.parse::<f32>().ok()?;
     if allow_zero {
         (secs >= 0.0).then_some(secs)
@@ -343,10 +325,7 @@ fn parse_window_secs_comment(line: &str, keys: &[&str], allow_zero: bool) -> Opt
 }
 
 fn parse_secs_value(raw: &str) -> Option<f32> {
-    let num: String = raw
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
+    let num: String = raw.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
     num.parse::<f32>().ok().filter(|&s| s >= 0.0)
 }
 
@@ -461,21 +440,10 @@ fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
     }
 }
 
-#[allow(unused)]
-fn get_item_name(uid: UID) -> Option<String> {
-    let p = game::get_item_name(game::msg_repo(), uid);
-    if p.is_null() {
-        return None;
-    } else {
-        let name = unsafe { U16CStr::from_ptr_str(p) };
-        Some(name.to_string_lossy())
-    }
-}
-
 #[cfg(test)]
 mod test {
     use crate::{
-        config::{rl_window_secs_to_frames, Config, ToolCombo, ToolFirst, ToolTail},
+        config::{Config, ToolCombo, ToolFirst, ToolTail, rl_window_secs_to_frames},
         input::{ArtCombo, ArtToken},
     };
 
@@ -483,10 +451,7 @@ mod test {
     fn test_boot_console_comment() {
         use crate::cfg_meta::parse_boot_console_comment;
 
-        assert_eq!(
-            parse_boot_console_comment("# 启动信息print窗口: 关"),
-            Some(false)
-        );
+        assert_eq!(parse_boot_console_comment("# 启动信息print窗口: 关"), Some(false));
         assert_eq!(parse_boot_console_comment("# 启动窗口: 关"), Some(false));
         assert_eq!(parse_boot_console_comment("# boot console: on"), Some(true));
         let config = Config::from("# 启动信息print窗口: 开\n7100 x ee");
@@ -496,9 +461,7 @@ mod test {
 
     #[test]
     fn test_rl_window_comment() {
-        let config = Config::from(
-            "# rl触发时限: 0.2s\n7100  x  ee",
-        );
+        let config = Config::from("# rl触发时限: 0.2s\n7100  x  ee");
         assert_eq!(config.rl_combo_max_age, 12);
 
         let config = Config::from("# rl window: 0.15\n7700 Sakura rl");
@@ -534,9 +497,7 @@ mod test {
 
     #[test]
     fn test_tool_multi_lock_inline() {
-        use crate::config::{
-            tool_multi_lock_secs_to_frames, DEFAULT_TOOL_MULTI_LOCK_SECS,
-        };
+        use crate::config::{DEFAULT_TOOL_MULTI_LOCK_SECS, tool_multi_lock_secs_to_frames};
 
         let config = Config::from("70500 x t-0s\n75300 x ↑q-0.5s");
         assert_eq!(config.tool_lock_frames(Some(70500)), 0);
@@ -556,30 +517,22 @@ mod test {
 
     #[test]
     fn test_instant_art_bind() {
-        let config = Config::from(
-            "5500  绝技·苇名十字斩\n5500  绝技·苇名十字斩·瞬发  r↓\n7500  x  ↑r",
-        );
+        let config = Config::from("5500  绝技·苇名十字斩\n5500  绝技·苇名十字斩·瞬发  r↓\n7500  x  ↑r");
         assert!(config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Down)).is_none());
         assert_eq!(
-            config.instant_art(ArtCombo::pair(ArtToken::Block, ArtToken::Down)),
-            Some(5500)
+            config
+                .instant_arts
+                .get(&ArtCombo::pair(ArtToken::Block, ArtToken::Down)),
+            Some(&5500)
         );
-        assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Up, ArtToken::Block)),
-            Some(7500)
-        );
+        assert_eq!(config.art(ArtCombo::pair(ArtToken::Up, ArtToken::Block)), Some(7500));
     }
 
     #[test]
     fn test_art_multi_bind() {
         let config = Config::from("7000  Nightjar Reversal  ↓l");
-        assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Down, ArtToken::Attack)),
-            Some(7000)
-        );
-        assert!(config
-            .art(ArtCombo::pair(ArtToken::Attack, ArtToken::Down))
-            .is_none());
+        assert_eq!(config.art(ArtCombo::pair(ArtToken::Down, ArtToken::Attack)), Some(7000));
+        assert!(config.art(ArtCombo::pair(ArtToken::Attack, ArtToken::Down)).is_none());
     }
 
     #[test]
@@ -629,17 +582,9 @@ mod test {
 
     #[test]
     fn test_grapple_key_bindings() {
-        let config = Config::from(
-            "5500 art  e↑\n5501 art  f↑\n76200 umb  ↑f\n71200 spark fq",
-        );
-        assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Up)),
-            Some(5500)
-        );
-        assert_eq!(
-            config.art(ArtCombo::pair(ArtToken::Grapple, ArtToken::Up)),
-            Some(5501)
-        );
+        let config = Config::from("5500 art  e↑\n5501 art  f↑\n76200 umb  ↑f\n71200 spark fq");
+        assert_eq!(config.art(ArtCombo::pair(ArtToken::Interact, ArtToken::Up)), Some(5500));
+        assert_eq!(config.art(ArtCombo::pair(ArtToken::Grapple, ArtToken::Up)), Some(5501));
         assert_eq!(
             config.tool(ToolCombo {
                 first: ToolFirst::Up,
@@ -658,9 +603,7 @@ mod test {
 
     #[test]
     fn test_tool_tail_block_attack_interact() {
-        let config = Config::from(
-            "76200 umb ↑r\n75300 sabi →l\n71200 spark ↓e\n70500 shur rr",
-        );
+        let config = Config::from("76200 umb ↑r\n75300 sabi →l\n71200 spark ↓e\n70500 shur rr");
         assert_eq!(
             config.tool(ToolCombo {
                 first: ToolFirst::Up,

@@ -2,28 +2,20 @@
 
 #![allow(non_snake_case)]
 
-#[path = "../../src/cfg_meta.rs"]
-mod cfg_meta;
 #[path = "../../src/boot.rs"]
 mod boot;
+#[path = "../../src/cfg_meta.rs"]
+mod cfg_meta;
 #[path = "../../src/load_console.rs"]
 mod load_console;
 
-use std::{
-    ffi::c_void,
-    mem,
-    os::windows::ffi::OsStringExt,
-    path::PathBuf,
-    sync::OnceLock,
-};
+use std::{ffi::c_void, mem, os::windows::ffi::OsStringExt, path::PathBuf, sync::OnceLock};
 
 use windows::{
     Win32::{
         Foundation::{BOOL, HMODULE},
         System::{
-            LibraryLoader::{
-                DisableThreadLibraryCalls, GetModuleFileNameW, GetProcAddress, LoadLibraryW,
-            },
+            LibraryLoader::{DisableThreadLibraryCalls, GetModuleFileNameW, GetProcAddress, LoadLibraryW},
             SystemServices::DLL_PROCESS_ATTACH,
         },
     },
@@ -33,7 +25,6 @@ use windows::{
 type DWORD = u32;
 type LPCWSTR = PCWSTR;
 type LPVOID = *mut c_void;
-type LPBOOL = *mut BOOL;
 type PUINT = *mut u32;
 
 static SYSTEM_VERSION: OnceLock<isize> = OnceLock::new();
@@ -50,11 +41,8 @@ fn system_version() -> HMODULE {
 fn proc_named<T>(name: &str) -> T {
     let cname = std::ffi::CString::new(name).expect("export name");
     unsafe {
-        let addr = GetProcAddress(
-            system_version(),
-            windows::core::PCSTR(cname.as_ptr() as *const u8),
-        )
-        .unwrap_or_else(|| panic!("missing version export: {name}"));
+        let addr = GetProcAddress(system_version(), windows::core::PCSTR(cname.as_ptr() as *const u8))
+            .unwrap_or_else(|| panic!("missing version export: {name}"));
         mem::transmute_copy(&addr)
     }
 }
