@@ -1,4 +1,4 @@
-﻿# Battle Instinct (two-key combat arts fork)
+# Battle Instinct (two-key combat arts fork)
 
 ![demo](demo.gif)
 
@@ -101,15 +101,14 @@ Sekiro stores the **spirit-emblem cap inside the save** (it is written when a sk
 
 | Item | Handled by | Note |
 | --- | --- | --- |
-| Emblem cap (incl. old saves), per-skill bonus, master switch | **DLL, live** | writes `PlayerData+0x146`, using `paper initial cap + per skill bonus x learned "form cap" skills` |
+| Emblem cap (incl. old saves), master switch | **DLL, live** | writes `PlayerData+0x146` as exactly `20 + 2 * i`; `i` = learned "form cap" skills A–E (0–5), read from the live inventory every frame |
 | Paper Doll Drift amount/cap, starting dolls, growth floats | **param file** | written once by `patch_paper_params.ps1` (called by the launcher bat) |
 
 Usage:
 
-1. Edit the four lines at the end of `battle_instinct.cfg`
-2. Changed `paper initial cap` / `per skill bonus` → **restart the game** (live, works on old saves too)
+1. The cap is fixed at `20 + 2 * i`; just enter the game and the DLL applies it live (old saves included)
+2. Disable everything with `paper cap fix: off`
 3. Changed `drift` (Paper Doll Drift) → double-click the launcher bat in the same folder (`paperman.bat`, or `纸血挂.bat` for the Chinese cfg); it reads the cfg switch/values and writes the param
-4. Roll back with `paperman.bat revert`; disable everything with `# paper cap fix: off`
 
 Field map and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md) (English) / [docs/纸人参数.md](docs/纸人参数.md) (Chinese).
 
@@ -128,10 +127,10 @@ This mod also supports scaling player max HP and adapting the HP bar:
 - After changing `hp multiplier`:
   1. re-run `纸血挂.bat` / `paperman.bat`, or `tools\patch_paper_params.ps1 -Apply`, to update params;
   2. restart the game so the DLL runtime fix applies.
-- Disable with `# health fix: off`; the old-save DLL fix can be disabled separately with `# health old save fix: off`.
+- Disable with `health fix: off` (master switch: the launcher bat writes no HP param and the DLL syncs nothing); the DLL old-save sync has its own switch, `health old save fix: off`.
 - Field details: [docs/血量参数.md](docs/血量参数.md).
 
-## Config toggles (comments at the end of cfg)
+## Config toggles (for the paper / HP / flow keys the leading `#` is optional; timing keys are still written as `# key: value`)
 
 | Key | Meaning |
 | --- | --- |
@@ -139,10 +138,14 @@ This mod also supports scaling player max HP and adapting the HP bar:
 | `# rl window: 0.3s` | **`rl` (Sakura Dance)**: press `l` within this time after `r`, with both held when `l` registers; real B+A is still stripped |
 | `# tool trigger window: 0.3s` | Two-key prosthetic: first key → `q`/`t` must land within this time (~0.3s) |
 | `# art queue delay: 0.3s` | After the last key is released, wait this long before flushing a queued art; `0s` = flush immediately |
-| `# paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the launcher bat writes no param) |
-| `# paper initial cap: 25` | Cap = this value + `per skill bonus` x learned "form cap" skills |
-| `# per skill bonus: 5` | How much each "form cap" (形代所持上限) skill adds to the cap |
-| `# drift: 9` | Blood/temporary emblem cap, and the amount granted per use of the Paper Doll Drift item |
+| `paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the launcher bat writes no param) |
+| `paper initial cap: 20` / `per skill bonus: 2` | **Only used by the launcher bat for the param file**; the DLL runtime cap is always `20 + 2 * i` and ignores these two values |
+| `drift: 9` | Blood/temporary emblem cap, and the amount granted per use of the Paper Doll Drift item |
+| `health fix: on` | Master HP switch (off = the launcher bat writes no HP param and the DLL syncs nothing); `health old save fix: on` gates the DLL old-save sync alone |
+| `hp multiplier: 2` | Max-HP curve multiplier; re-run `paperman.bat` after changing it |
+| `flow: on` | Perfect-deflect stack flow master switch; `flow duration` / `flow max stacks` / `flow refund ratios` are documented in [docs/心流.md](docs/心流.md) |
+
+> Both releases use `20 + 2 * i` at runtime; `paper initial cap` / `per skill bonus` only affect the param patcher.
 
 A prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
 

@@ -1,4 +1,4 @@
-﻿# Paper doll (spirit emblem) param fields and one-shot patcher
+# Paper doll (spirit emblem) param fields and one-shot patcher
 
 > Conclusion: the paper-doll cap, the starting doll count and the Paper Doll Drift amount
 > are **not** things the DLL can change directly. Every similar mod (including the other
@@ -71,69 +71,62 @@ the fields in the table -> repack to DCX -> re-read to verify.
 Note: this is a global param change, unrelated to per-save state; if another mod overwrites
 the same param file you have to run the tool again.
 
-## Old saves: runtime fix (src/emblem.rs)
+## Old saves: strict runtime rule (src/emblem.rs)
 
 Param edits only change the starting value for **new saves**: the game writes the cap into the
 save when a skill is learned, so a finished old save will not grow from a param edit. That part
 is handled by `src/emblem.rs`:
 
-- Probe (on by default in cfg): once a second it logs every PlayerData field equal to the HUD
-  cap/count and every (id,count) record for items 1000/1001/1020/1021 in InventoryData to
-  `battle_instinct.log` (prefix `emblem probe:`), along with "small integer that looks like a
-  cap" candidates (`candidate` lines) and changed fields (`u32 a -> b` lines).
-- Fix (needs the cap offset filled in *and* `paper cap fix: on`): every frame it writes the cap
-  back as `base cap + per cap-skill bonus x learned skills`. By default the learned count is
-  read directly from whether the five "form cap" skills (UIDs 75/76/175/176/603) are in the
-  inventory, so it follows the loaded save; cfg/state/current-cap inference is only a fallback.
-- Without the offset filled in it **only probes and never writes memory**.
+- Every frame it reads the five learned-skill flags from the **live inventory**:
+  `650000 / 650100 / 650200 / 650300 / 650400` (the `virtualWeaponId` of SkillParam
+  75 / 76 / 175 / 176 / 603, i.e. 形代所持上限+1A…+1E).
+- `i` = how many of those five items are present (0–5); the cap is **exactly `20 + 2 * i`**,
+  written to `PlayerData+0x146` in the same frame.
+- Learning a cap skill adds its inventory item, so the next frame `i` increases and the cap is
+  rewritten immediately. Learning a non-cap skill does not change any of the five flags.
+- There is no state file, no cfg learned-count seed, and no inference from the old cap value.
+- If the live inventory is not ready (loading screen), it writes nothing and waits.
+- Log line on change: `emblem: skills A=1 B=1 C=0 D=1 E=0 -> i=3 cap=26`.
 
-Cfg keys (end of `battle_instinct.cfg`, both the EN and ZH files): paper cap fix / paper probe /
-paper initial cap / per skill bonus / cap skill count / learned cap skills / cap offset /
-cap width / learned-skill offset / old base cap / old per-skill bonus / probe cap value /
-probe count value / probe window.
-
-Locating trick: set the probe cap value to the cap shown on the HUD and the probe count value
-to your current doll count; the probe then prints the in-memory locations of those values
-(`== HUD cap/count` lines) and you can locate them in one shot.
+Cfg keys that matter to the DLL: `paper cap fix` / `cap offset` / `cap width`.
+The `paper initial cap` and `per skill bonus` lines are only read by the launcher bat for the
+param patch; the DLL ignores them and always uses `20 + 2*i`.
 
 ## Runtime fields (located, measured 2026-09-27)
 
 | Target | Location | Note |
 | --- | --- | --- |
 | Paper doll cap (the one the game uses) | `PlayerData + 0x146` (u16) | same value in the save = `sen(0x7C) + 0xCA`; this is the one that matters for old saves |
-| Paper doll cap (save copy, useless) | `PlayerData + 0x170` (u16) | previously mistaken for the cap; cfg restore offset/value writes 25 back |
+| Learned cap-skill flags (runtime) | `InventoryData + 0x10`, 16-byte entries | scan for item IDs `650000/650100/650200/650300/650400`; present = learned |
 | Cap growth reference | `ResourceItemParam goodsId=1000` | the 15 -> 25 set; the real displayed value comes from the field above |
 
-Relationship (measured): cap = **base cap + per "form cap" skill bonus x learned skills**;
-vanilla is `15 + 1x5 = 20`, this mod defaults to `25 + 5x5 = 50` (both configurable in cfg).
+Relationship (strict): cap = **20 + 2 × i**, where i = number of learned items among the five
+`virtualWeaponId`s above. Vanilla is `15 + 1×5 = 20`; this mod always uses the 20/2 rule.
 
 ## cfg knobs
 
 ```ini
-# paper initial cap: 25    <- cap = this + per skill bonus x learned "form cap" skills (DLL, live; restart the game)
-# per skill bonus: 5
-# drift: 9                 <- blood/temporary doll cap and the amount granted per use (param side; run the tools script)
+paper cap fix: on        <- master switch (DLL writes nothing when off)
+paper initial cap: 20    <- only for the launcher bat's param patch; DLL ignores it
+per skill bonus: 2       <- only for the launcher bat's param patch; DLL ignores it
+drift: 9                 <- blood/temporary doll cap and the amount granted per use (param side)
 ```
 
-Technical parameters are fixed in code (normally no need to touch them, but the same-named cfg
-comment still overrides them):
+Technical parameters fixed in code:
 
 | Parameter | Fixed value | Note |
 | --- | --- | --- |
-| paper cap fix | on | on by default even if the line is absent |
 | cap offset / width | `0x146` / 2 | the field actually used at runtime |
-| restore offset / value | `0x170` / 25 | one-time fix for the field written by mistake earlier |
-| cap skill count | 5 | total number of "form cap" skills |
-| old base cap / old per-skill | 15 / 1 | used to infer old saves (vanilla 15+1xn) |
-| probe / probe window | off / 0x1000 | only enable when re-locating fields |
+| cap rule | `20 + 2*i` | i from the five live inventory items |
+| cap skill items | `650000/650100/650200/650300/650400` | SkillParam 75/76/175/176/603 |
 
-Also: `battle_instinct_emblem.state` (auto-generated in the game folder) is only a fallback
-cache used when the skill inventory cannot be read. During normal play the five actual learned
-"form cap" skills take priority, so the file no longer needs to be deleted by hand.
+The old `battle_instinct_emblem.state` fallback file is no longer read or written; delete it if
+it exists.
 
-## Important: in-memory param patching is experimental and off by default (2026-09-27)
+## In-memory param patching (removed)
 
-The DLL used to try scanning memory for the param rows and rewriting them. It is **not viable**:
+The DLL no longer tries to scan memory for the param rows and rewrite them; that experiment was
+not viable:
 
 - Private heap scan: all 6.7 GB scanned, zero anchor hits (param is not on the heap).
 - File-mapping scan (`MEM_MAPPED` <= 64 MB): touches pages the game mmap-ed, causing heavy
@@ -146,11 +139,8 @@ Final split of responsibilities:
 
 | Item | Handled by |
 | --- | --- |
-| Cap (incl. old-save fix), per-skill bonus, master switch | **DLL, live** (writes `PlayerData+0x146`, verified) |
+| Cap (incl. old-save fix), master switch | **DLL, live** (writes `PlayerData+0x146`, verified) |
 | Drift amount/cap, starting dolls, growth floats | **param file**, written once by `tools/patch_paper_params.ps1` |
-
-The experimental in-memory param switch still exists in the cfg, **off by default** - do not
-enable it.
 
 ## Player install (3 files)
 
@@ -163,10 +153,10 @@ paperman.bat      <- edit the cfg, then double-click this (Chinese release: the 
 Drop the three files into the Sekiro folder (next to `sekiro.exe`) and double-click the launcher
 once.
 
-- Switch: `paper cap fix: on/off` in the cfg (off = no param is written)
+- Switch: `paper cap fix: on/off` in the cfg (off = no DLL writes)
 - Roll back: `paperman.bat revert`
-- Only changing `paper initial cap` / `per skill bonus`: edit the cfg -> restart the game
-  (DLL, live; no need to run the bat)
+- The cap itself is fixed at `20 + 2*i`; no cfg value changes it. `paper initial cap` /
+  `per skill bonus` only affect the param patcher.
 - Only changing `drift`: edit the cfg -> double-click `paperman.bat`
 
 ## Release shape (since 2026-09-27: 3 files)

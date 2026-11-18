@@ -28,7 +28,10 @@ const DEFAULT_ACTUAL_MAX_HP_OFFSET: usize = 0x1c;
 const DEFAULT_CURRENT_HP_OFFSET: usize = 0x18;
 
 pub struct Health {
+    /// `血量功能` / `health fix`: master switch for the whole HP section.
     enabled: bool,
+    /// `旧存档血量修正` / `health old save fix`: the old-save max HP sync itself.
+    legacy_fix: bool,
     multiplier: f32,
     level_offset: usize,
     base_max_hp_offset: usize,
@@ -41,6 +44,7 @@ impl Health {
     pub fn new(cfg: impl AsRef<Path>) -> Health {
         let mut health = Health {
             enabled: true,
+            legacy_fix: true,
             multiplier: DEFAULT_MULTIPLIER,
             level_offset: DEFAULT_LEVEL_OFFSET,
             base_max_hp_offset: DEFAULT_BASE_MAX_HP_OFFSET,
@@ -52,8 +56,9 @@ impl Health {
             health.load(&text);
         }
         log::warn!(
-            "health settings: enabled={} multiplier={} offsets lv=0x{:x} base=0x{:x} actual=0x{:x} cur=0x{:x}",
+            "health settings: enabled={} legacy_fix={} multiplier={} offsets lv=0x{:x} base=0x{:x} actual=0x{:x} cur=0x{:x}",
             health.enabled,
+            health.legacy_fix,
             health.multiplier,
             health.level_offset,
             health.base_max_hp_offset,
@@ -69,7 +74,8 @@ impl Health {
                 continue;
             };
             match key.trim().to_ascii_lowercase().as_str() {
-                "旧存档血量修正" | "血量功能" | "health old save fix" | "health fix" => self.enabled = parse_bool(value),
+                "血量功能" | "health fix" => self.enabled = parse_bool(value),
+                "旧存档血量修正" | "health old save fix" => self.legacy_fix = parse_bool(value),
                 "血量倍率" | "血量修正倍率" | "hp multiplier" | "health multiplier" => {
                     if let Some(v) = parse_f32(value) {
                         self.multiplier = v.max(1.0);
@@ -101,7 +107,7 @@ impl Health {
     }
 
     pub fn tick(&mut self) {
-        if !self.enabled {
+        if !(self.enabled && self.legacy_fix) {
             return;
         }
         let Some(player) = player_data() else {
@@ -216,7 +222,8 @@ fn write_u32(base: *mut u8, offset: usize, value: u32) {
 }
 
 fn split_kv(line: &str) -> Option<(&str, &str)> {
-    let body = line.trim().strip_prefix('#')?.trim();
+    // Keys may be commented (`# health fix: on`) or written bare (`health fix: on`).
+    let body = line.trim().trim_start_matches('#').trim();
     for sep in [':', '：'] {
         if let Some((k, v)) = body.split_once(sep) {
             return Some((k, v));
@@ -251,4 +258,41 @@ fn parse_f32(raw: &str) -> Option<f32> {
         .unwrap_or("")
         .parse::<f32>()
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shipped cfgs write these keys *uncommented* (`health fix: on`);
+    /// they must parse exactly like the old `# health fix: on` form.
+    #[test]
+    fn shipped_cfg_reads_bare_health_keys() {
+        for path in ["res/battle_instinct.cfg", "res/battle_instinct_zh.cfg"] {
+            let mut health = Health::new("res/__no_such_cfg__.cfg");
+            health.load(&fs::read_to_string(path).expect("read cfg"));
+            assert!(health.enabled);
+            assert!(health.legacy_fix);
+            assert_eq!(health.multiplier, 2.0);
+        }
+    }
+
+    /// `血量功能: 关` must not be undone by a later `# 旧存档血量修正: 开`
+    /// line: the two keys are separate switches, not spellings of one flag.
+    #[test]
+    fn master_switch_survives_legacy_alias_line() {
+        let mut health = Health::new("res/__no_such_cfg__.cfg");
+        health.load("血量功能: 关\n# 旧存档血量修正: 开\n血量倍率: 3");
+        assert!(!health.enabled);
+        assert!(health.legacy_fix);
+        assert_eq!(health.multiplier, 3.0);
+    }
+
+    #[test]
+    fn legacy_switch_only_gates_the_sync() {
+        let mut health = Health::new("res/__no_such_cfg__.cfg");
+        health.load("血量功能: 开\n旧存档血量修正: 关");
+        assert!(health.enabled);
+        assert!(!health.legacy_fix);
+    }
 }
