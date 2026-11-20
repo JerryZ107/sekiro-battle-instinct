@@ -162,6 +162,8 @@ unsafe extern "system" fn damage_reaction_detour(
         (module, hp_before, posture_before)
     };
 
+    let paper_pending = crate::paper_guard::prepare_damage(damage_info, hp_before);
+
     let result = unsafe { original(owner, arg1, damage_info, arg3, arg4) };
 
     let (hp_after, posture_after, guard_reaction, perfect_deflect) = unsafe {
@@ -182,6 +184,8 @@ unsafe extern "system" fn damage_reaction_detour(
         };
         (hp_after, posture_after, guard_reaction, perfect_deflect)
     };
+
+    crate::paper_guard::finish_damage(paper_pending, module.unwrap_or(std::ptr::null_mut()), hp_after);
 
     let hp_drop = (hp_before - hp_after).max(0);
     let posture_drop = (posture_before - posture_after).max(0);

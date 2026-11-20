@@ -10,6 +10,7 @@ mod game;
 mod input;
 mod load_console;
 mod logger;
+mod paper_guard;
 
 use core::Mod;
 use std::{

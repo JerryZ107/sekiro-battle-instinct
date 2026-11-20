@@ -8,11 +8,12 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 
 ## Features
 
-This build keeps three feature groups only:
+This build contains four feature groups:
 
 1. **Combat-art combos** — two-key short-window activation, queueing, and instant arts.
 2. **Paper doll + blood paper doll** — live emblem-cap correction in the DLL and a param writer for Paper Doll Drift (temporary/blood emblems).
 3. **Flow** — perfect-deflect stacks that mitigate or restore posture.
+4. **Paper-doll damage reduction** — tiers based on raw damage / max HP; each hit spends emblems to reduce 60%, with temporary emblems spent first and downgrade rules when emblems are short.
 
 ## Quick start (recommended)
 
@@ -193,6 +194,8 @@ mods\param\gameparam\gameparam.parambnd.dcx
 | `paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the launcher bat writes no param) |
 | `paper initial cap: 20` / `per skill bonus: 2` | **Only used by the launcher bat for the param file**; the DLL runtime cap is always `20 + 2 * i` and ignores these two values |
 | `drift: 9` | Blood/temporary emblem cap, and the amount granted per use of the Paper Doll Drift item |
+| `paper guard: on` | Paper-doll damage reduction by raw-damage / max-HP tier; temporary emblems are spent first. See [docs/纸人减伤.md](docs/纸人减伤.md) |
+| `paper guard debug: off` | Log tier, raw/reduced damage, actual HP loss, and emblem changes for each hit |
 | `flow: on` | Perfect-deflect stack flow master switch; `flow duration` / `flow max stacks` / `flow refund ratios` are documented in [docs/心流.md](docs/心流.md) |
 
 > Both releases use `20 + 2 * i` at runtime; `paper initial cap` / `per skill bonus` only affect the param patcher.

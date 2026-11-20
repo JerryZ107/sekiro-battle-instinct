@@ -9,6 +9,7 @@ use crate::{
     frame::Frames,
     game::{self},
     input::{ArtCombo, ArtComboWindow, ArtToken},
+    paper_guard,
 };
 
 //----------------------------------------------------------------------------
@@ -137,6 +138,7 @@ impl Mod {
         let config = Config::open(&cfg_path)?;
         let emblem = Emblem::new(&cfg_path);
         let flow = Flow::new(&cfg_path);
+        paper_guard::init(&cfg_path);
         let art_combo = ArtComboWindow::new(config.rl_combo_max_age);
         let modification = Mod {
             config,
