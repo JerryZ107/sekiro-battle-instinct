@@ -89,7 +89,7 @@ is handled by `src/emblem.rs`:
 - Log line on change: `emblem: skills A=1 B=1 C=0 D=1 E=0 -> i=3 cap=26`.
 
 The only DLL cfg key is the `paper cap fix` master switch; the cap offset and width are fixed constants.
-The `paper initial cap` and `per skill bonus` lines are only read by the launcher bat for the
+The `paper initial cap` and `per skill bonus` lines are only read by the automatic startup
 param patch; the DLL ignores them and always uses `20 + 2*i`.
 
 ## Runtime fields (located, measured 2026-09-27)
@@ -107,8 +107,8 @@ Relationship (strict): cap = **20 + 2 × i**, where i = number of learned items 
 
 ```ini
 paper cap fix: on        <- master switch (DLL writes nothing when off)
-paper initial cap: 20    <- only for the launcher bat's param patch; DLL ignores it
-per skill bonus: 2       <- only for the launcher bat's param patch; DLL ignores it
+paper initial cap: 20    <- only for the automatic param patch; DLL ignores it
+per skill bonus: 2       <- only for the automatic param patch; DLL ignores it
 drift: 9                 <- blood/temporary doll cap and the amount granted per use (param side)
 ```
 
@@ -149,37 +149,31 @@ the directory structure preserved:
 
 ```
 dinput8.dll
+version.dll                   <- automatic startup param patcher
 battle_instinct.cfg
-paperman.bat                  <- Chinese release: 纸人挂.bat
+battle_instinct_keybinds.json
 dinput8_modengine.dll         <- ModEngine's dinput8.dll, renamed
 modengine.ini                 <- modOverrideDirectory="\mods"
 mods\param\gameparam\gameparam.parambnd.dcx
 ```
 
-Double-click the launcher once after installation or after editing the cfg. It reads the cfg and
-writes the Drift values into the param package; fully exit and relaunch the game afterward.
+Launch the game normally. `version.dll` reads the cfg and patches the Drift values automatically;
+no manual script is required.
 
 - Switch: `paper cap fix: on/off` in the cfg (off = no DLL writes and no param writes)
-- Roll back: `paperman.bat revert` (Chinese: `纸人挂.bat revert`)
+- Roll back: copy the latest `gameparam.parambnd.dcx.bak-*` back over the param file and restart
 - The cap itself is fixed at `20 + 2*i`; no cfg value changes it. `paper initial cap` /
-  `per skill bonus` only affect the param patcher.
-- Only changing `drift`: edit the cfg -> double-click the launcher -> restart the game
+  `per skill bonus` only affect the automatic param patcher.
+- Only changing `drift`: edit the cfg -> restart the game (it backs up and writes only on changes)
 
 ## Release shape (full bundle)
 
-Release = `dinput8.dll` + `battle_instinct.cfg` + the launcher + `dinput8_modengine.dll` +
-`modengine.ini` + `mods\param\gameparam\gameparam.parambnd.dcx`.
+Release = `dinput8.dll` + `version.dll` + `battle_instinct.cfg` + keybind JSON +
+`dinput8_modengine.dll` + `modengine.ini` + `mods\param\gameparam\gameparam.parambnd.dcx`.
 
-The launcher embeds `tools/patch_paper_params.ps1` **verbatim at the end of the file**. At
-runtime it:
+`version.dll` embeds `tools/patch_paper_params.ps1` at compile time and invokes it through hidden
+PowerShell during startup. If the param values already match the cfg it skips writing; otherwise
+it creates a timestamped backup and writes the new values.
 
-1. runs `chcp 936` and sets `PAPERDOLL_CFG=%~dp0battle_instinct.cfg` (plus `PAPERDOLL_LANG`,
-   which selects the console language);
-2. uses PowerShell to extract everything after the marker line into `%TEMP%\zhiren_*.ps1`;
-3. runs `powershell -File <temp script> -Apply` (the script reads `PAPERDOLL_CFG` itself;
-   `<launcher> revert` sets `PAPERDOLL_REVERT=1` to trigger the rollback);
-4. deletes the temporary file.
-
-Players never handle a `.ps1`; the source stays in `tools/patch_paper_params.ps1` - run
-`just bat` (or `tools/make_bat.ps1`) to regenerate both launchers after editing it.
+Players never handle a `.ps1` or `.bat`; the source stays in `tools/patch_paper_params.ps1`.
 

@@ -8,8 +8,9 @@ mod boot;
 mod cfg_meta;
 #[path = "../../src/load_console.rs"]
 mod load_console;
+mod paper_auto;
 
-use std::{ffi::c_void, mem, os::windows::ffi::OsStringExt, path::PathBuf, sync::OnceLock};
+use std::{ffi::c_void, mem, os::windows::ffi::OsStringExt, path::PathBuf, sync::OnceLock, thread};
 
 use windows::{
     Win32::{
@@ -68,7 +69,14 @@ extern "system" fn DllMain(hmodule: HMODULE, call_reason: u32, _reserved: *mut c
         let len = unsafe { GetModuleFileNameW(hmodule, buf.as_mut_slice()) } as usize;
         let dll_path = PathBuf::from(std::ffi::OsString::from_wide(&buf[..len]));
         if let Some(dir) = dll_path.parent() {
-            boot::on_early_attach(dir.to_path_buf());
+            let dir = dir.to_path_buf();
+            boot::on_early_attach(dir.clone());
+            // The param patch must happen before the game/ModEngine reads
+            // gameparam.parambnd.dcx. Keep it off the loader lock by using a
+            // worker thread started as early as version.dll is attached.
+            let _ = thread::Builder::new()
+                .name("battle-instinct-paper-auto".into())
+                .spawn(move || paper_auto::run(&dir));
         }
     }
     true

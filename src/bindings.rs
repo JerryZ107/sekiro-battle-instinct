@@ -508,12 +508,8 @@ impl BindingSnapshot {
         }
     }
 
-    pub fn current_binding(&self, uid: u32) -> Option<&BindingEntry> {
-        self.entries.iter().find(|entry| entry.uid == uid)
-    }
-
     pub fn current_entry(&self, uid: u32) -> Option<&BindingEntry> {
-        self.current_binding(uid)
+        self.entries.iter().find(|entry| entry.uid == uid)
     }
 
     pub fn name(&self, uid: u32) -> Option<&str> {
@@ -694,6 +690,18 @@ pub fn save_ui_binding_overwrite(
     ui.save(cfg_path)
 }
 
+/// Remove every trigger binding for `uid`. The UID stays disabled in the UI
+/// override file so a cfg-sourced bind cannot reappear after the reset.
+pub fn reset_ui_binding(cfg_path: &Path, uid: u32) -> Result<()> {
+    if category_for_uid(uid).is_none() {
+        return Err(anyhow!("invalid UID {uid}"));
+    }
+    let mut ui = UiBindings::load(cfg_path)?;
+    ui.entries.remove(&uid);
+    ui.disabled.insert(uid);
+    ui.save(cfg_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -860,5 +868,34 @@ mod tests {
             }),
             Some(70500)
         );
+    }
+
+    #[test]
+    fn reset_disables_cfg_and_ui_binding_for_uid() {
+        let dir = std::env::temp_dir().join(format!(
+            "battle-instinct-reset-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("battle_instinct.cfg");
+        std::fs::write(&cfg, "7100 test ee\n5200 test aa\n").unwrap();
+        let snapshot = BindingSnapshot::load(&cfg).unwrap();
+        save_ui_binding(&cfg, &snapshot, 7100, vec![KeyToken::Jump, KeyToken::Crouch]).unwrap();
+        reset_ui_binding(&cfg, 7100).unwrap();
+
+        let ui = UiBindings::load(&cfg).unwrap();
+        assert!(ui.disabled.contains(&7100));
+        assert!(!ui.entries.contains_key(&7100));
+        let reloaded = BindingSnapshot::load(&cfg).unwrap();
+        assert!(reloaded.current_entry(7100).is_none());
+
+        let mut effective = Config::open(&cfg).unwrap();
+        apply_to_config(&mut effective, &ui).unwrap();
+        assert!(!effective.arts.values().any(|uid| *uid == 7100));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -11,7 +11,7 @@ A Sekiro combat-art / prosthetic MOD forked from [dec32/sekiro-battle-instinct](
 This build contains four feature groups:
 
 1. **Combat-art combos** — two-key short-window activation, queueing, and instant arts.
-2. **Paper doll + blood paper doll** — live emblem-cap correction in the DLL and a param writer for Paper Doll Drift (temporary/blood emblems).
+2. **Paper doll + blood paper doll** — live emblem-cap correction in the DLL; `version.dll` automatically patches the Paper Doll Drift (temporary/blood emblem) param at game startup.
 3. **Flow** — perfect-deflect stacks that mitigate or restore posture.
 4. **Paper-doll damage reduction** — tiers based on raw damage / max HP; each hit spends emblems to reduce 60%, with temporary emblems spent first and downgrade rules when emblems are short.
 
@@ -22,8 +22,9 @@ The release bundle already includes this MOD, ModEngine, and the param file requ
 ```text
 Sekiro\
   dinput8.dll
+  version.dll
   battle_instinct.cfg
-  paperman.bat            (Chinese release: 纸人挂.bat)
+  battle_instinct_keybinds.json
   dinput8_modengine.dll
   modengine.ini
   mods\param\gameparam\gameparam.parambnd.dcx
@@ -31,9 +32,9 @@ Sekiro\
 
 For a fresh install, or after editing `battle_instinct.cfg`:
 
-1. Double-click `paperman.bat` (Chinese release: `纸人挂.bat`) and wait for it to finish.
-2. Fully exit the game, then launch it again.
-3. The DLL fixes the spirit-emblem cap live; the temporary-emblem cap and Paper Doll Drift amount come from the param file written by the launcher.
+1. Launch the game normally. `version.dll` checks and patches the param automatically during startup; no manual script is needed.
+2. It creates a backup and writes only when values changed; check `battle_instinct_paper_auto.log` for the result.
+3. The DLL fixes the spirit-emblem cap live; the temporary-emblem cap and Paper Doll Drift amount come from the automatically patched param.
 
 > Do not change the `mods\param\gameparam\gameparam.parambnd.dcx` path. It is the loose param override loaded by ModEngine and is required for Drift changes. Without ModEngine, the DLL's live emblem-cap fix still works, but param values such as the Drift amount remain vanilla.
 
@@ -41,7 +42,8 @@ For a fresh install, or after editing `battle_instinct.cfg`:
 
 - [dist/en/dinput8.dll](dist/en/dinput8.dll)
 - [dist/en/battle_instinct.cfg](dist/en/battle_instinct.cfg)
-- [dist/en/paperman.bat](dist/en/paperman.bat)
+- [dist/en/version.dll](dist/en/version.dll) — automatic startup param patcher
+- [dist/en/battle_instinct_keybinds.json](dist/en/battle_instinct_keybinds.json) — current keybind overrides
 - [dist/en/dinput8_modengine.dll](dist/en/dinput8_modengine.dll)
 - [dist/en/modengine.ini](dist/en/modengine.ini)
 - [dist/en/mods/param/gameparam/gameparam.parambnd.dcx](dist/en/mods/param/gameparam/gameparam.parambnd.dcx)
@@ -127,7 +129,7 @@ Inside the in-game menu:
 - Select a combat art under **Skills -> Combat Arts** or a prosthetic under **Inventory -> Prosthetic Tools**.
 - Press `F` to open the right-hand key configuration page. Press `F` again or click **Cancel** to leave.
 - Combat arts are read directly from the skill-page category table. Prosthetics are read directly from the highlighted `InventoryUnit` row in the equipment page and resolved to a cfg UID. No MenuGaitem polling, OCR, screenshots, or color heuristics are used.
-- `F` is handled by a passive system keyboard-event hook. The callback only compares the `F` virtual key and only acts while the game window is foreground and the game menu is open; there is no screenshot capture or OCR.
+- `F` is handled by a passive system keyboard-event hook. The callback only compares the `F` virtual key and only acts while the game window is foreground and the highlighted row is a combat art or prosthetic. Other menu rows ignore `F` silently and let it pass through; there is no screenshot capture or OCR.
 - Supported modes:
   - Combat arts: fixed two-key trigger (first key + tail key).
   - Prosthetics: single-key or two-key trigger; an existing single-key binding is shown as-is.
@@ -135,6 +137,7 @@ Inside the in-game menu:
   - Prosthetic Use / Prosthetic Switch are valid only as the tail key of a two-key prosthetic bind. Single-key mode exposes only those two shortcut keys.
   - The page shows where the current binding came from: `cfg`, `UI override`, or `unconfigured`.
   - Full-slot, occupied-key, and specific invalid-key errors are distinct, together with an unsaved-change confirmation.
+  - The footer has **Save / Reset / Cancel**. Reset asks for confirmation, removes every trigger binding for that combat art or prosthetic, and closes the page immediately.
 - If the key sequence is occupied when saving, the dialog offers **Overwrite** and **Cancel**. Overwrite disables the previous binding and saves the new one immediately.
 - Jump, sprint and crouch are enabled as normal keys and are written as `j` / `s` / `c` in cfg. Their action edges still come from the game action bits; for jump/crouch, the held state is learned from the physical key that produced the edge so sustained injection does not depend on hard-coded defaults.
 - Saving applies immediately and hot-reloads on the next input frame; no game restart is required.
@@ -149,9 +152,9 @@ The file only overrides UI-managed bindings. It does not rewrite `battle_instinc
 
 > The main-menu dialog hook validates the Sekiro 1.6.0.0 function signature. On a version mismatch, hook installation fails explicitly instead of falling back to OCR or guessing.
 
-## Paper Doll launcher (纸人挂.bat / paperman.bat)
+## Automatic paper-doll param patcher
 
-The launcher is a one-shot param writer; it does not stay running. It reads these values from `battle_instinct.cfg`:
+`version.dll` runs the param patch once during game startup; it does not stay resident. It reads these values from `battle_instinct.cfg`:
 
 ```ini
 paper cap fix: on
@@ -171,25 +174,18 @@ It then writes the ModEngine-loaded `gameparam.parambnd.dcx`:
 
 ### First install / changing values
 
-1. Confirm `dinput8_modengine.dll`, `modengine.ini`, and `mods\param\gameparam\gameparam.parambnd.dcx` from the bundle are in the correct game-root locations.
+1. Confirm `version.dll`, `dinput8_modengine.dll`, `modengine.ini`, and `mods\param\gameparam\gameparam.parambnd.dcx` from the bundle are in the correct game-root locations.
 2. Edit `drift` in `battle_instinct.cfg` if needed. It controls both the temporary-emblem cap and the amount granted per use.
-3. Double-click `paperman.bat` (Chinese: `纸人挂.bat`) and wait for it to finish. It creates a timestamped param backup automatically.
-4. Fully exit and relaunch the game; params are only read at startup.
-5. Use Paper Doll Drift in game and verify the temporary-emblem cap / gain.
+3. Launch the game. `version.dll` compares current param values; it backs up and writes only when something changed.
+4. Use Paper Doll Drift in game and verify the temporary-emblem cap / gain.
 
 ### Rollback
 
-Run:
-
-```bat
-paperman.bat revert
-```
-
-This restores the latest param backup; restart the game afterward. To disable all paper-doll correction, set `paper cap fix: off`; this does not automatically roll back an already-written param file.
+Automatic patching creates `gameparam.parambnd.dcx.bak-*` backups before writing. To roll back, copy the latest backup over `gameparam.parambnd.dcx` and restart the game. To disable all paper-doll correction, set `paper cap fix: off`; this does not automatically roll back an already-written param file.
 
 ### Troubleshooting
 
-- **Drift has no effect**: verify `dinput8_modengine.dll` is loaded and the `mods\param\gameparam\gameparam.parambnd.dcx` path is correct, then rerun the launcher and restart the game.
+- **Drift has no effect**: verify `version.dll` and `dinput8_modengine.dll` are loaded and the `mods\param\gameparam\gameparam.parambnd.dcx` path is correct; check `battle_instinct_paper_auto.log`, then restart the game.
 - **ModEngine conflict**: this MOD chain-loads `dinput8_modengine.dll`; keep this MOD as `dinput8.dll` and do not overwrite it with ModEngine's DLL.
 - **Cap vs. Drift**: the spirit-emblem cap is fixed live by the DLL as `20 + 2 * i`; only the Drift amount and temporary-emblem cap come from the param file.
 - Field and reverse-engineering notes: [docs/paper-doll-params.en.md](docs/paper-doll-params.en.md).
@@ -198,13 +194,13 @@ This restores the latest param backup; restart the game afterward. To disable al
 
 ```bash
 cargo build --release
-just dist     # refresh dist/zh and dist/en (DLL, cfg, launcher, ModEngine and param bundle)
-just bat      # regenerate 纸人挂.bat / paperman.bat only
+just dist     # refresh dist/zh and dist/en (DLLs, cfg, keybind overrides, ModEngine and param bundle)
+just bat      # developer fallback: regenerate the old manual bat only
 just pack     # build battle-instinct_zh.zip / battle-instinct_en.zip
 ```
 
 Output: `target/release/`; release folders `dist/zh/` (Chinese cfg) and `dist/en/` (English cfg).
-After extracting a release, double-click the launcher once (`纸人挂.bat` for Chinese, `paperman.bat` for English).
+After extracting a release, just launch the game; `version.dll` performs the param patch automatically.
 
 ### ModEngine / param bundle
 
@@ -216,7 +212,7 @@ modengine.ini            <- modOverrideDirectory="\mods"
 mods\param\gameparam\gameparam.parambnd.dcx
 ```
 
-`modengine.ini` keeps `modOverrideDirectory="\mods"`. The param file is taken from the local Sekiro: Resurrection package and is included only to provide the Drift fields. If you use another major mod, replace it with that mod's `gameparam.parambnd.dcx` and rerun the launcher.
+`modengine.ini` keeps `modOverrideDirectory="\mods"`. The param file is taken from the local Sekiro: Resurrection package and is included only to provide the Drift fields. If you use another major mod, replace it with that mod's `gameparam.parambnd.dcx` and restart the game so `version.dll` can patch it automatically.
 
 
 ## Config toggles (for the paper / flow keys the leading `#` is optional; timing keys are still written as `# key: value`)
@@ -227,14 +223,14 @@ mods\param\gameparam\gameparam.parambnd.dcx
 | `# rl window: 0.3s` | **`rl` (Sakura Dance)**: press `l` within this time after `r`, with both held when `l` registers; real B+A is still stripped |
 | `# tool trigger window: 0.3s` | Two-key prosthetic: first key → `q`/`t` must land within this time (~0.3s) |
 | `# art queue delay: 0.3s` | After the last key is released, wait this long before flushing a queued art; `0s` = flush immediately |
-| `paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the launcher bat writes no param) |
-| `paper initial cap: 20` / `per skill bonus: 2` | **Only used by the launcher bat for the param file**; the DLL runtime cap is always `20 + 2 * i` and ignores these two values |
+| `paper cap fix: on` | Master switch for the spirit-emblem cap fix (off = DLL writes nothing and the automatic param patch is skipped) |
+| `paper initial cap: 20` / `per skill bonus: 2` | **Only used by the automatic param patch**; the DLL runtime cap is always `20 + 2 * i` and ignores these two values |
 | `drift: 9` | Blood/temporary emblem cap, and the amount granted per use of the Paper Doll Drift item |
 | `paper guard: on` | Paper-doll damage reduction by raw-damage / max-HP tier; temporary emblems are spent first. See [docs/纸人减伤.md](docs/纸人减伤.md) |
 | `paper guard debug: off` | Log tier, raw/reduced damage, actual HP loss, and emblem changes for each hit |
 | `flow: on` | Perfect-deflect stack flow master switch; `flow duration` / `flow max stacks` / `flow refund ratios` are documented in [docs/心流.md](docs/心流.md) |
 
-> Both releases use `20 + 2 * i` at runtime; `paper initial cap` / `per skill bonus` only affect the param patcher.
+> Both releases use `20 + 2 * i` at runtime; `paper initial cap` / `per skill bonus` only affect the automatic param patcher.
 
 A prosthetic bind can append `-time` for multi-hit lock, e.g. `↑q-0.5s` or `↑q-multi-hit0.5s`; default 1s if omitted.
 

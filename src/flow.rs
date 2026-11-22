@@ -43,7 +43,7 @@ impl Default for FlowConfig {
         FlowConfig {
             enabled: true,
             max_stacks: 10,
-            duration_frames: seconds_to_frames(6.0),
+            duration_frames: seconds_to_frames(3.0),
             ratios: DEFAULT_RATIOS,
             debug: false,
         }
@@ -506,7 +506,7 @@ mod tests {
         FlowConfig {
             enabled: true,
             max_stacks: 10,
-            duration_frames: 360,
+            duration_frames: seconds_to_frames(3.0),
             ratios: DEFAULT_RATIOS,
             debug: false,
         }
@@ -574,7 +574,7 @@ mod tests {
             let cfg = FlowConfig::load(Path::new(path));
             assert!(cfg.enabled);
             assert_eq!(cfg.max_stacks, 10);
-            assert_eq!(cfg.duration_frames, seconds_to_frames(6.0));
+            assert_eq!(cfg.duration_frames, seconds_to_frames(3.0));
             assert_eq!(cfg.ratios, DEFAULT_RATIOS);
         }
     }

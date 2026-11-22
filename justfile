@@ -10,23 +10,28 @@ logs:
 bat:
     powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/make_bat.ps1
 
-# 刷新 dist/zh 与 dist/en：DLL、cfg、纸人挂、ModEngine 和 param 整包。
+# 刷新 dist/zh 与 dist/en：DLL、version.dll、cfg、键位覆盖、ModEngine 和 param 整包。
 # Refresh dist/zh and dist/en with the full player bundle.
-dist: bat
-    cargo build --release
+dist:
+    cargo build --release --workspace
     mkdir -p "./dist/zh/mods/param/gameparam" "./dist/en/mods/param/gameparam"
     cp "./target/release/sekiro_battle_instinct.dll" "./dist/zh/dinput8.dll"
     cp "./target/release/sekiro_battle_instinct.dll" "./dist/en/dinput8.dll"
+    cp "./target/release/version.dll" "./dist/zh/version.dll"
+    cp "./target/release/version.dll" "./dist/en/version.dll"
     cp -f "./res/battle_instinct_zh.cfg" "./dist/zh/battle_instinct.cfg"
     cp -f "./res/battle_instinct.cfg" "./dist/en/battle_instinct.cfg"
+    cp -f "./res/battle_instinct_keybinds.json" "./dist/zh/battle_instinct_keybinds.json"
+    cp -f "./res/battle_instinct_keybinds.json" "./dist/en/battle_instinct_keybinds.json"
     cp -f "./third_party/modengine/dinput8_modengine.dll" "./dist/zh/dinput8_modengine.dll"
     cp -f "./third_party/modengine/dinput8_modengine.dll" "./dist/en/dinput8_modengine.dll"
     cp -f "./third_party/modengine/modengine.ini" "./dist/zh/modengine.ini"
     cp -f "./third_party/modengine/modengine.ini" "./dist/en/modengine.ini"
     cp -f "./third_party/gameparam/gameparam.parambnd.dcx" "./dist/zh/mods/param/gameparam/gameparam.parambnd.dcx"
     cp -f "./third_party/gameparam/gameparam.parambnd.dcx" "./dist/en/mods/param/gameparam/gameparam.parambnd.dcx"
+    rm -f "./dist/zh/纸人挂.bat" "./dist/en/paperman.bat"
 
-# 打两个发布 zip：中文包用 纸人挂.bat，英文包用 paperman.bat。
+# 打两个发布 zip。
 pack: dist
     rm -rf "./tmp"
     mkdir -p "./tmp/zh" "./tmp/en"

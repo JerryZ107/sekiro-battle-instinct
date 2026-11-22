@@ -41,7 +41,8 @@ param(
     [switch]$SkipGrowthFloats,
     [switch]$Apply,
     [switch]$Force,
-    [switch]$Revert
+    [switch]$Revert,
+    [switch]$Auto
 )
 
 $ErrorActionPreference = 'Stop'
@@ -364,20 +365,24 @@ $entries = [PaperParams]::Entries($bnd)
 
 $gRows = @{}
 $resRow = -1
+$script:paramChanged = $false
 $maxCap = $BaseCap + $PerSkillBonus * $SkillCount
 
 function Set-U16([int]$row, [int]$off, [int]$val, [string]$label) {
     $old = [PaperParams]::U16($bnd, $row + $off)
+    if ($old -ne $val) { $script:paramChanged = $true }
     [PaperParams]::W16($bnd, $row + $off, $val)
     Write-Host ("  {0,-46} {1} -> {2}" -f $label, $old, $val)
 }
 function Set-U32([int]$row, [int]$off, [int]$val, [string]$label) {
     $old = [PaperParams]::U32($bnd, $row + $off)
+    if ($old -ne [uint32]$val) { $script:paramChanged = $true }
     [PaperParams]::W32($bnd, $row + $off, [uint32]$val)
     Write-Host ("  {0,-46} {1} -> {2}" -f $label, $old, $val)
 }
 function Set-F32([int]$row, [int]$off, [single]$val, [string]$label) {
     $old = [PaperParams]::F32($bnd, $row + $off)
+    if ([math]::Abs([double]$old - [double]$val) -gt 1e-6) { $script:paramChanged = $true }
     [PaperParams]::WF32($bnd, $row + $off, $val)
     Write-Host ("  {0,-46} {1} -> {2}" -f $label, $old, $val)
 }
@@ -412,6 +417,10 @@ if ($doPaper) {
             Set-F32 $resRow 0x20 ([single]$maxCap)            ("ResourceItemParam 1000 " + $T.growthF4)
         }
     } else { Write-Host $T.missingRes }
+}
+
+if ($Auto -and -not $script:paramChanged) {
+    return
 }
 
 if (-not $Apply) {

@@ -82,7 +82,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                     }
                     return LRESULT(1);
                 }
-                if menu_probe::menu_open() {
+                if menu_probe::menu_open() && current_row_is_bind_target() {
                     if OPEN_PENDING.swap(true, Ordering::AcqRel) {
                         return LRESULT(1);
                     }
@@ -95,6 +95,10 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
         }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+fn current_row_is_bind_target() -> bool {
+    game_menu::current_selection().is_some_and(|selection| bindings::category_for_uid(selection.uid).is_some())
 }
 
 fn run_ui_thread(cfg_path: PathBuf) -> Result<()> {
@@ -206,7 +210,7 @@ fn open_overlay(hwnd: HWND) {
     }
     let game_hwnd = unsafe { GetForegroundWindow() };
     match open_editor(&overlay.cfg_path) {
-        Ok(editor) => {
+        Ok(Some(editor)) => {
             log::warn!(
                 "ui: opened uid={} name={} from game menu uid={} category={}",
                 editor.uid,
@@ -236,6 +240,11 @@ fn open_overlay(hwnd: HWND) {
                 let _ = InvalidateRect(hwnd, None, true);
             }
         }
+        Ok(None) => {
+            // F was pressed while the highlighted menu row is not a combat art
+            // or prosthetic. This is a normal no-op, not an error.
+            log::debug!("ui: F ignored; current menu row is not a keybind target");
+        }
         Err(error) => {
             log::warn!("ui: cannot open key config: {error:#}");
             unsafe {
@@ -249,20 +258,23 @@ fn open_overlay(hwnd: HWND) {
     }
 }
 
-fn open_editor(cfg_path: &std::path::Path) -> Result<Editor> {
+fn open_editor(cfg_path: &std::path::Path) -> Result<Option<Editor>> {
     let snapshot = BindingSnapshot::load(cfg_path)?;
-    let selection = game_menu::current_selection()
-        .ok_or_else(|| anyhow!("尚未从当前菜单分类表定位到选中条目，请重新高亮条目后按 F"))?;
-    // The menu resolved an exact SkillParam `acquireWeaponId` anchor. It does
-    // not need to already exist in cfg: the editor can create a UI override for
-    // any valid combat-art/prosthetic anchor, and the existing combo reload path
-    // will consume it unchanged.
+    let Some(selection) = game_menu::current_selection() else {
+        return Ok(None);
+    };
+    // Only combat-art and prosthetic UIDs have a key configuration page.
+    // Other menu selections are a silent no-op for F.
+    if bindings::category_for_uid(selection.uid).is_none() {
+        return Ok(None);
+    }
     let uid = selection.uid;
-    let mut editor = Editor::new(uid, snapshot)
-        .ok_or_else(|| anyhow!("invalid anchor UID {uid} category={}", selection.category))?;
+    let Some(mut editor) = Editor::new(uid, snapshot) else {
+        return Ok(None);
+    };
     editor.menu_uid = selection.uid;
     editor.menu_category = selection.category;
-    Ok(editor)
+    Ok(Some(editor))
 }
 
 fn position_overlay(hwnd: HWND, game_hwnd: HWND) {
@@ -356,6 +368,10 @@ fn handle_click(hwnd: HWND, x: i32, y: i32) {
                             save_editor_keys(hwnd, keys, true);
                             return;
                         }
+                        Some(ModalAction::ResetAndClose) => {
+                            reset_editor_binding(hwnd);
+                            return;
+                        }
                         None => {}
                     }
                     invalidate(hwnd);
@@ -406,8 +422,31 @@ fn handle_click(hwnd: HWND, x: i32, y: i32) {
     }
     if l.save.contains(x, y) {
         save_editor(hwnd);
+    } else if l.reset.contains(x, y) {
+        editor.request_reset();
+        invalidate(hwnd);
     } else if l.cancel.contains(x, y) {
         request_close(hwnd);
+    }
+}
+
+fn reset_editor_binding(hwnd: HWND) {
+    let Some(overlay) = overlay_mut(hwnd) else {
+        return;
+    };
+    let Some(editor) = overlay.editor.as_mut() else {
+        return;
+    };
+    match bindings::reset_ui_binding(&overlay.cfg_path, editor.uid) {
+        Ok(()) => {
+            bindings::request_reload();
+            log::warn!("ui: reset uid={} name={}", editor.uid, editor.name);
+            close_overlay(hwnd);
+        }
+        Err(error) => {
+            editor.show_message(&format!("重置失败：{error:#}"));
+            invalidate(hwnd);
+        }
     }
 }
 

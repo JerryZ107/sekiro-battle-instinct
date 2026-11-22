@@ -39,6 +39,7 @@ pub enum ModalAction {
     DiscardAndClose,
     ApplyMode(BindingMode),
     OverwriteAndSave(Vec<KeyToken>),
+    ResetAndClose,
 }
 
 #[derive(Clone, Debug)]
@@ -268,6 +269,18 @@ impl Editor {
         }
     }
 
+    /// Reset removes every trigger binding for this skill/prosthetic. The
+    /// confirmation also tells the user how to replace individual slots without
+    /// using the reset path.
+    pub fn request_reset(&mut self) {
+        self.modal = Some(Modal {
+            message: "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请点击首键或尾键的对应键位以移除）".into(),
+            confirm: "确认重置".into(),
+            cancel: Some("取消".into()),
+            action: ModalAction::ResetAndClose,
+        });
+    }
+
     pub fn modal_confirm(&mut self) -> Option<ModalAction> {
         let modal = self.modal.take()?;
         Some(modal.action)
@@ -297,6 +310,7 @@ pub struct Layout {
     pub slots: Vec<Rect>,
     pub grid: Vec<GridItem>,
     pub save: Rect,
+    pub reset: Rect,
     pub cancel: Rect,
     pub footnote: Rect,
     pub modal_panel: Option<Rect>,
@@ -388,9 +402,15 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
     let grid_bottom = grid_top + rows as i32 * (cell_h + gap);
     let footnote = Rect::new(content_l, grid_bottom + 10, content_r, grid_bottom + 34);
     let button_y = h - 56;
-    let button_w = (content_r - content_l - gap) / 2;
+    let button_w = (content_r - content_l - gap * 2) / 3;
     let save = Rect::new(content_l, button_y, content_l + button_w, h - 18);
-    let cancel = Rect::new(content_l + button_w + gap, button_y, content_r, h - 18);
+    let reset = Rect::new(
+        content_l + button_w + gap,
+        button_y,
+        content_l + button_w * 2 + gap,
+        h - 18,
+    );
+    let cancel = Rect::new(content_l + button_w * 2 + gap * 2, button_y, content_r, h - 18);
 
     let mut modal_panel = None;
     let mut modal_confirm = None;
@@ -426,6 +446,7 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
         slots,
         grid,
         save,
+        reset,
         cancel,
         footnote,
         modal_panel,
@@ -568,5 +589,26 @@ mod tests {
                 .iter()
                 .any(|(_, _, disabled)| *disabled && items.iter().any(|(label, _, _)| label.contains("暂未支持")))
         );
+    }
+
+    #[test]
+    fn reset_modal_requires_confirmation_and_mentions_slot_removal() {
+        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
+        e.request_reset();
+        let modal = e.modal.as_ref().unwrap();
+        assert!(modal.message.contains("若要更换键位，请点击首键或尾键的对应键位以移除"));
+        assert_eq!(modal.confirm, "确认重置");
+        assert_eq!(modal.cancel.as_deref(), Some("取消"));
+        assert!(matches!(modal.action, ModalAction::ResetAndClose));
+    }
+
+    #[test]
+    fn bottom_buttons_are_three_non_overlapping_rects() {
+        let e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
+        let l = layout(&e, 760, 760);
+        assert!(l.save.r <= l.reset.l);
+        assert!(l.reset.r <= l.cancel.l);
+        assert_eq!(l.save.t, l.reset.t);
+        assert_eq!(l.reset.t, l.cancel.t);
     }
 }

@@ -23,6 +23,7 @@ const MUTED: COLORREF = COLORREF(0x00958a78);
 const DISABLED_BG: COLORREF = COLORREF(0x00231f1c);
 const DISABLED_TEXT: COLORREF = COLORREF(0x00665f54);
 const GREEN: COLORREF = COLORREF(0x00465d3d);
+const RESET_BG: COLORREF = COLORREF(0x00483f2e);
 const RED: COLORREF = COLORREF(0x005c3838);
 
 fn fill(hdc: HDC, rect: Rect, color: COLORREF) {
@@ -186,9 +187,9 @@ pub fn paint(hwnd: HWND, editor: &Editor) {
         // Key display slots
         for (i, rect) in l.slots.iter().copied().enumerate() {
             let label = match editor.mode {
-                BindingMode::Single => "键位".to_string(),
-                BindingMode::Two if i == 0 => "首键".to_string(),
-                BindingMode::Two => "尾键".to_string(),
+                BindingMode::Single => "键位（点击移除）".to_string(),
+                BindingMode::Two if i == 0 => "首键（点击移除）".to_string(),
+                BindingMode::Two => "尾键（点击移除）".to_string(),
             };
             fill(hdc, rect, PANEL);
             frame(hdc, rect, GOLD, 1);
@@ -222,7 +223,7 @@ pub fn paint(hwnd: HWND, editor: &Editor) {
         text(
             hdc,
             l.footnote,
-            "点击下方键位填入，点击上方键位移除。跳跃/下蹲·垫步本阶段禁用；忍具键/切换键仅作义手忍具尾键。",
+            "点击下方键位填入，点击上方键位移除。重置会删除本技能/忍具的全部触发键位。",
             (13 * scale / 100).clamp(11, 19),
             MUTED,
             false,
@@ -233,6 +234,9 @@ pub fn paint(hwnd: HWND, editor: &Editor) {
         fill(hdc, l.save, GREEN);
         frame(hdc, l.save, GOLD, 1);
         text(hdc, l.save, "保存", (20 * scale / 100).clamp(15, 30), TEXT, true, true);
+        fill(hdc, l.reset, RESET_BG);
+        frame(hdc, l.reset, GOLD, 1);
+        text(hdc, l.reset, "重置", (20 * scale / 100).clamp(15, 30), TEXT, true, true);
         fill(hdc, l.cancel, RED);
         frame(hdc, l.cancel, GOLD, 1);
         text(

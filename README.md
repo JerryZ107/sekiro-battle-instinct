@@ -11,9 +11,9 @@
 当前版本包含以下四组功能，相关实现与配置已按功能收敛：
 
 1. **武技搓招**：双键短窗口触发武技，含排队与瞬发逻辑。
-2. **纸人 + 血纸人**：DLL 实时修正纸人上限；一键脚本写入纸人漂流（血纸人/临时纸人）等 param 数值。
+2. **纸人 + 血纸人**：DLL 实时修正纸人上限；`version.dll` 在游戏启动阶段自动修补纸人漂流（血纸人/临时纸人）等 param 数值。
 3. **心流**：完美弹反叠层，按层数减免/回复架势。
-4. **纸人减伤**：按原始伤害 / 最大血量分三档，受击时消耗纸人减免 60%；临时纸人优先消耗，纸人不足时按降级规则部分减免。
+4. **纸人减伤**：按原始伤害 / 最大血量分三档，纸人充足时减免 60%；纸人不足时按 30% / 30% / 20% 的降级规则部分减免，临时纸人优先消耗。
 
 ## 直接使用（推荐）
 
@@ -22,8 +22,9 @@
 ```text
 Sekiro\
   dinput8.dll
+  version.dll
   battle_instinct.cfg
-  纸人挂.bat
+  battle_instinct_keybinds.json
   dinput8_modengine.dll
   modengine.ini
   mods\param\gameparam\gameparam.parambnd.dcx
@@ -31,9 +32,9 @@ Sekiro\
 
 首次安装或修改 `battle_instinct.cfg` 后：
 
-1. 双击 `纸人挂.bat`，等待脚本提示完成。
-2. 完整退出游戏，再重新启动。
-3. 游戏内纸人上限由 DLL 每帧实时修正；纸人漂流的临时纸人上限与单次数量由 `纸人挂.bat` 写入的 param 生效。
+1. 正常启动游戏；`version.dll` 会在启动阶段自动检查并修补 param，无需手动双击脚本。
+2. 只有数值发生变化时才会自动备份并写入；检查结果可看 `battle_instinct_paper_auto.log`。
+3. 游戏内纸人上限由 DLL 每帧实时修正；纸人漂流的临时纸人上限与单次数量由自动修补后的 param 生效。
 
 > `mods\param\gameparam\gameparam.parambnd.dcx` 的目录结构不能改；这是 ModEngine 的 loose param 覆盖文件，也是纸人漂流生效的前提。没有 ModEngine 时，DLL 的纸人上限实时修正仍生效，但纸人漂流等 param 数值保持原版。
 
@@ -41,7 +42,8 @@ Sekiro\
 
 - [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
 - [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
-- [dist/zh/纸人挂.bat](dist/zh/纸人挂.bat)　- 纸人挂入口（双击）
+- [dist/zh/version.dll](dist/zh/version.dll)　- 启动阶段自动修补 param
+- [dist/zh/battle_instinct_keybinds.json](dist/zh/battle_instinct_keybinds.json)　- 当前键位覆盖
 - [dist/zh/dinput8_modengine.dll](dist/zh/dinput8_modengine.dll)
 - [dist/zh/modengine.ini](dist/zh/modengine.ini)
 - [dist/zh/mods/param/gameparam/gameparam.parambnd.dcx](dist/zh/mods/param/gameparam/gameparam.parambnd.dcx)
@@ -131,7 +133,7 @@ Sekiro\
 - 在「技能 → 流派招式」或「持有物品 → 义手忍具」中选中一个技能/忍具。
 - 按 `F` 打开右侧键位配置页；再次按 `F` 或点「取消」退出。
 - 流派招式从技能页分类表直接读取；义手忍具从装备页 `InventoryUnit` 的当前高亮行直接读取，并解析为 cfg UID。不使用 MenuGaitem 轮询、OCR、截图或颜色判断。
-- `F` 通过系统键盘事件 Hook 被动触发：回调只比较 `F` 键，且仅在游戏窗口处于前台、游戏菜单打开时生效；无截图、无 OCR。
+- `F` 通过系统键盘事件 Hook 被动触发：回调只比较 `F` 键，且仅在游戏窗口处于前台、当前高亮项为流派招式或义手忍具时生效；其他菜单项静默忽略并放行 `F`，无截图、无 OCR。
 - 配置页支持：
   - 流派招式：固定双键触发（首键 + 尾键）。
   - 义手忍具：单键触发 / 双键触发；已存在的单键绑定会直接回显。
@@ -139,6 +141,7 @@ Sekiro\
   - 忍具键 / 忍具切换键只能作为义手忍具双键配置的尾键；单键模式只提供这两个快捷键。
   - 显示当前键位来源：`cfg` / `UI 覆盖` / `未配置`。
   - 满槽提示、键位占用冲突提示、具体非法键位提示、未保存退出确认。
+  - 底部提供「保存 / 重置 / 取消」；重置会确认后删除该技能或忍具的全部触发键位并直接退出配置页。
 - 保存时若键位已被占用，弹窗提供「覆盖原键位」和「取消」；覆盖会让原绑定失效并立即保存新绑定。
 - 跳跃 / 冲刺 / 下蹲已启用为普通键位，cfg 中分别写作 `j` / `s` / `c`。
 - 保存后立即写入并在下一帧热加载，不需要重启游戏。
@@ -153,9 +156,9 @@ battle_instinct_keybinds.json
 
 > 主菜单对话框 Hook 针对 Sekiro 1.6.0.0 的函数签名做了校验。版本不匹配时会明确报错并停止安装该 Hook，不会回退到 OCR 或猜测识别。
 
-## 纸人挂使用说明（纸人上限 / 纸人漂流）
+## 纸人 param 自动修补（纸人上限 / 纸人漂流）
 
-纸人挂是一次性 param 写入器，不会常驻后台。它读取同目录 `battle_instinct.cfg` 中的以下数值：
+`version.dll` 在游戏启动阶段自动运行一次 param 修补，不常驻后台。它读取同目录 `battle_instinct.cfg` 中的以下数值：
 
 ```ini
 纸人上限功能: 开
@@ -175,25 +178,18 @@ battle_instinct_keybinds.json
 
 ### 首次安装 / 改数值
 
-1. 确认发行包中的 `dinput8_modengine.dll`、`modengine.ini` 和 `mods\param\gameparam\gameparam.parambnd.dcx` 都已按目录结构放进游戏根目录。
+1. 确认发行包中的 `version.dll`、`dinput8_modengine.dll`、`modengine.ini` 和 `mods\param\gameparam\gameparam.parambnd.dcx` 都已按目录结构放进游戏根目录。
 2. 按需修改 `battle_instinct.cfg` 里的 `纸人漂流`；它同时作为临时纸人上限和单次数量。
-3. 双击 `纸人挂.bat`，等待提示「完成」。脚本会自动备份 param 文件。
-4. 完整退出游戏并重新启动；param 只在启动时读取。
-5. 进游戏使用纸人漂流，确认临时纸人上限和单次增加量符合配置。
+3. 启动游戏。`version.dll` 会自动比较 param 当前值：有变化才备份并写入，已一致则直接跳过。
+4. 进游戏使用纸人漂流，确认临时纸人上限和单次增加量符合配置。
 
 ### 回滚
 
-运行：
-
-```bat
-纸人挂.bat revert
-```
-
-恢复最近一次 param 备份，然后重启游戏。想关闭整套纸人修正，把 cfg 里的 `纸人上限功能` 改为 `关`；这不会自动回滚已经写入的 param。
+自动修补会在写入前生成 `gameparam.parambnd.dcx.bak-*` 备份。需要回滚时，把最近一次备份文件覆盖回 `gameparam.parambnd.dcx`，然后重启游戏。想关闭整套纸人修正，把 cfg 里的 `纸人上限功能` 改为 `关`；这不会自动回滚已经写入的 param。
 
 ### 常见问题
 
-- **纸人漂流没变化**：确认 `dinput8_modengine.dll` 已加载、`mods\param\gameparam\gameparam.parambnd.dcx` 路径正确，并重新运行 `纸人挂.bat` 后重启游戏。
+- **纸人漂流没变化**：确认 `version.dll` 和 `dinput8_modengine.dll` 已加载、`mods\param\gameparam\gameparam.parambnd.dcx` 路径正确，并查看 `battle_instinct_paper_auto.log` 后重启游戏。
 - **ModEngine 冲突**：本 MOD 会自动链式加载 `dinput8_modengine.dll`；不要把自己的 `dinput8.dll` 直接覆盖成 ModEngine，否则本 MOD 不会加载。
 - **纸人上限和漂流数值的区别**：纸人上限由 DLL 按 `20 + 2 × i` 实时修正；纸人漂流数量/临时上限才需要 param。
 - 字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。
@@ -202,13 +198,13 @@ battle_instinct_keybinds.json
 
 ```bash
 cargo build --release
-just dist     # 刷新 dist/zh 与 dist/en（含 DLL、cfg、纸人挂和 ModEngine/param 整包）
-just bat      # 只重新生成 纸人挂.bat / paperman.bat
+just dist     # 刷新 dist/zh 与 dist/en（含 DLL、version.dll、cfg、键位覆盖和 ModEngine/param 整包）
+just bat      # 仅供开发调试：重新生成旧版手动 bat
 just pack     # 打包 battle-instinct_zh.zip / battle-instinct_en.zip
 ```
 
 产物在 `target/release/`；发行目录为 `dist/zh/`（中文 cfg）与 `dist/en/`（英文 cfg）。
-玩家侧按发行包目录结构解压后，双击一次 `纸人挂.bat`（英文包为 `paperman.bat`）即可。
+玩家侧按发行包目录结构解压后，直接启动游戏即可；param 修补由 `version.dll` 自动完成。
 
 ### ModEngine / param 文件说明
 
@@ -220,7 +216,7 @@ modengine.ini            ← modOverrideDirectory="\mods"
 mods\param\gameparam\gameparam.parambnd.dcx
 ```
 
-`modengine.ini` 保持 `modOverrideDirectory="\mods"`。param 文件来自当前游戏目录中的 Resurrection 参数包，仅用于提供纸人漂流等字段；如你使用其它大型 mod，请用对应版本的 `gameparam.parambnd.dcx` 替换并重跑 `纸人挂.bat`。
+`modengine.ini` 保持 `modOverrideDirectory="\mods"`。param 文件来自当前游戏目录中的 Resurrection 参数包，仅用于提供纸人漂流等字段；如你使用其它大型 mod，请用对应版本的 `gameparam.parambnd.dcx` 替换，然后重启游戏让 `version.dll` 自动修补。
 
 
 ## cfg 可调项（纸人 / 心流这几组键名前的 `#` 可有可无，时序类键仍写作 `# 键: 值`）
@@ -231,14 +227,14 @@ mods\param\gameparam\gameparam.parambnd.dcx
 | `# rl触发时限: 0.3s` | **`rl` 樱舞**：按 `r` 后在此时间内按 `l`，且触发时 `r`、`l` 同时按住；真实 B+A 仍被剥离 |
 | `# 忍具触发时限: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
 | `# 武技排队等待: 0.3s` | 上一招末键松手后，再等此时长才放出排队武技；`0s` = 松手后立刻放 |
-| `纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存；`纸人挂.bat` 也不写 param） |
-| `纸人初始上限: 20` / `技能增加上限: 2` | **只给 `纸人挂.bat` 写 param 用**；DLL 运行时固定为 `20 + 2 × i`，不受这两项影响 |
+| `纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存；自动 param 修补也跳过） |
+| `纸人初始上限: 20` / `技能增加上限: 2` | **只给自动 param 修补用**；DLL 运行时固定为 `20 + 2 × i`，不受这两项影响 |
 | `纸人漂流: 9` | 血纸人(临时纸人)上限，也是纸人漂流一次给的数量 |
 | `纸人减伤功能: 开` | 按原始伤害 / 最大血量分三档，消耗纸人减免本次受击伤害；临时纸人优先。详见 [docs/纸人减伤.md](docs/纸人减伤.md) |
 | `纸人减伤调试日志: 关` | 输出每刀的分档、原始/减伤后伤害、实际 HP 掉落和纸人数量变化 |
 | `心流功能: 开` | 完美弹反叠层「心流」总开关；`心流持续时间` / `心流最大层数` / `心流回复比例` 见 [docs/心流.md](docs/心流.md) |
 
-> 中英文发行包运行时都按 `20 + 2 × i`；cfg 里的 `纸人初始上限` / `技能增加上限` 只供 param 脚本使用。
+> 中英文发行包运行时都按 `20 + 2 × i`；cfg 里的 `纸人初始上限` / `技能增加上限` 只供自动 param 补丁使用。
 
 忍具多段触发时限写在**键位后**加 `-时间`，如 `↑q-0.5s` 或 `↑q-多段触发时限0.5s`；未写则默认 1s。
 

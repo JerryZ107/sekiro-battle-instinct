@@ -8,9 +8,9 @@
 //   >  66%  -> tier 3, cost 3, reduce 60%
 //
 // When there are not enough paper dolls:
-//   tier 3, 2 dolls -> cost 2, reduce 40%
+//   tier 3, 2 dolls -> cost 2, reduce 30%
 //   tier 3, 1 doll  -> cost 1, reduce 20%
-//   tier 2, 1 doll  -> cost 1, reduce 40%
+//   tier 2, 1 doll  -> cost 1, reduce 30%
 //   0 dolls         -> no reduction
 //
 // Temporary paper dolls (goods id 1001) are spent before normal paper dolls
@@ -272,9 +272,9 @@ fn plan_for(tier: Tier, total_emblems: u16) -> Option<MitigationPlan> {
     match tier {
         Tier::One if total_emblems >= 1 => Some(MitigationPlan { cost: 1, percent: 60 }),
         Tier::Two if total_emblems >= 2 => Some(MitigationPlan { cost: 2, percent: 60 }),
-        Tier::Two if total_emblems == 1 => Some(MitigationPlan { cost: 1, percent: 40 }),
+        Tier::Two if total_emblems == 1 => Some(MitigationPlan { cost: 1, percent: 30 }),
         Tier::Three if total_emblems >= 3 => Some(MitigationPlan { cost: 3, percent: 60 }),
-        Tier::Three if total_emblems == 2 => Some(MitigationPlan { cost: 2, percent: 40 }),
+        Tier::Three if total_emblems == 2 => Some(MitigationPlan { cost: 2, percent: 30 }),
         Tier::Three if total_emblems == 1 => Some(MitigationPlan { cost: 1, percent: 20 }),
         _ => None,
     }
@@ -494,10 +494,10 @@ mod tests {
         assert_eq!(plan_for(Tier::Three, 0), None);
 
         let p = plan_for(Tier::Two, 1).unwrap();
-        assert_eq!((p.cost, p.percent), (1, 40));
+        assert_eq!((p.cost, p.percent), (1, 30));
 
         let p = plan_for(Tier::Three, 2).unwrap();
-        assert_eq!((p.cost, p.percent), (2, 40));
+        assert_eq!((p.cost, p.percent), (2, 30));
         let p = plan_for(Tier::Three, 1).unwrap();
         assert_eq!((p.cost, p.percent), (1, 20));
     }

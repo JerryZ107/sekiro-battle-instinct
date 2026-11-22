@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "disabled": [70500],
+  "bindings": [
+    {"uid":5100,"keys":["Up","Interact"]},
+    {"uid":5300,"keys":["Jump","Interact"]},
+    {"uid":5400,"keys":["Block","Jump"]},
+    {"uid":5500,"keys":["Block","Crouch"]},
+    {"uid":5600,"keys":["Attack","Sprint"]},
+    {"uid":5900,"keys":["Up","Grapple"]},
+    {"uid":6000,"keys":["Block","Sprint"]},
+    {"uid":7100,"keys":["Interact","Interact"]},
+    {"uid":7200,"keys":["Interact","Up"]},
+    {"uid":7400,"keys":["Jump","Attack"]},
+    {"uid":7500,"keys":["Up","Block"]},
+    {"uid":7600,"keys":["Block","Up"]},
+    {"uid":70100,"keys":["ProstheticUse"]},
+    {"uid":71200,"keys":["Interact","ProstheticUse"]},
+    {"uid":72200,"keys":["Grapple","ProstheticSwitch"]},
+    {"uid":72300,"keys":["Grapple","ProstheticUse"]},
+    {"uid":73200,"keys":["Jump","ProstheticUse"]},
+    {"uid":73300,"keys":["Jump","ProstheticSwitch"]},
+    {"uid":74200,"keys":["Down","ProstheticSwitch"]},
+    {"uid":76200,"keys":["Crouch","Block"]},
+    {"uid":76300,"keys":["Crouch","ProstheticUse"]},
+    {"uid":77200,"keys":["Crouch","ProstheticSwitch"]},
+    {"uid":78100,"keys":["Sprint","ProstheticUse"]},
+    {"uid":78300,"keys":["Interact","Sprint"]},
+    {"uid":78400,"keys":["Interact","ProstheticSwitch"]},
+    {"uid":79200,"keys":["Interact","Grapple"]}
+  ]
+}
