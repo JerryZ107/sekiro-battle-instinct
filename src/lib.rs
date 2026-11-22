@@ -237,7 +237,7 @@ fn modify(path: &Path) {
         game_menu::install_hooks()?;
         load_console::print_line("  ✔ 菜单选中项 Hook 已安装");
 
-        ui::start(ui_cfg_path);
+        ui::start(ui_cfg_path)?;
         MinHook::enable_all_hooks()?;
         log::warn!("Battle Instinct hook enabled.");
         Ok::<_, anyhow::Error>(())

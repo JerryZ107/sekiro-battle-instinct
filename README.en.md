@@ -127,7 +127,7 @@ Default release prosthetic binds:
 Inside the in-game menu:
 
 - Select a combat art under **Skills -> Combat Arts** or a prosthetic under **Inventory -> Prosthetic Tools**.
-- Press `F` to open the right-hand key configuration page. Press `F` again or click **Cancel** to leave.
+- Press `F` to open the right-hand key configuration page. Press `F` again or click **Cancel** to leave. The page is rendered directly into the game frame; no separate window is created or activated, so the game stays foreground in fullscreen.
 - Combat arts are read directly from the skill-page category table. Prosthetics are read directly from the highlighted `InventoryUnit` row in the equipment page and resolved to a cfg UID. No MenuGaitem polling, OCR, screenshots, or color heuristics are used.
 - `F` is handled by a passive system keyboard-event hook. The callback only compares the `F` virtual key and only acts while the game window is foreground and the highlighted row is a combat art or prosthetic. Other menu rows ignore `F` silently and let it pass through; there is no screenshot capture or OCR.
 - Supported modes:
