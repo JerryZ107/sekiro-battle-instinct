@@ -1,252 +1,102 @@
 # Battle Instinct（战斗本能）（双键搓招版）
 
-![演示](demo.gif)
+**简体中文** | [English](README.en.md)
 
-**简体中文** ｜ [English](README.en.md)
+![Battle Instinct 演示](demo.gif)
 
-基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 修改的只狼武技 / 忍具 MOD。原版用**方向序列 + 防御/攻击**切换武技；本分支在保留原作者换槽、注入等核心机制的前提下，**重新设计了武技搓招与忍具触发逻辑**（借助 AI 辅助实现）：武技为**两个键位**短窗口连招；忍具为 **首键(方向/攻防/交互/钩锁) + q/t**，或单独 `t` / `q`，直接装备并注入使用。
+基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 的个人衍生版，主打双键搓招与更自由的键位配置。
 
-## 功能范围
+## 一、MOD 介绍
 
-当前版本包含以下四组功能，相关实现与配置已按功能收敛：
+### 1. 流派招式键位设置
 
-1. **武技搓招**：双键短窗口触发武技，含排队与瞬发逻辑。
-2. **纸人 + 血纸人**：DLL 实时修正纸人上限；`version.dll` 在游戏启动阶段自动修补纸人漂流（血纸人/临时纸人）等 param 数值。
-3. **心流**：完美弹反叠层，按层数减免/回复架势。
-4. **纸人减伤**：按原始伤害 / 最大血量分三档，纸人充足时减免 60%；纸人不足时按 30% / 30% / 20% 的降级规则部分减免，临时纸人优先消耗。
+流派招式现可自由设置键位。在「技能 → 流派招式」中选中对应技能，按 `F` 即可进入设置页面。
 
-## 直接使用（推荐）
+![流派招式键位设置](moves.jpg)
 
-发行包已包含本 MOD、ModEngine 和纸人漂流所需的 param 文件。将压缩包**保持目录结构**解压到 `sekiro.exe` 所在目录：
+### 2. 义手忍具键位设置
 
-```text
-Sekiro\
-  dinput8.dll
-  version.dll
-  battle_instinct.cfg
-  battle_instinct_keybinds.json
-  dinput8_modengine.dll
-  modengine.ini
-  mods\param\gameparam\gameparam.parambnd.dcx
-```
+义手忍具现可自由设置键位。在「持有物品 → 义手忍具」中选中对应忍具，按 `F` 即可进入设置页面。可配置单键触发，也可配置双键触发。
 
-首次安装或修改 `battle_instinct.cfg` 后：
+![义手忍具双键触发设置](hand1.jpg)
 
-1. 正常启动游戏；`version.dll` 会在启动阶段自动检查并修补 param，无需手动双击脚本。
-2. 只有数值发生变化时才会自动备份并写入；检查结果可看 `battle_instinct_paper_auto.log`。
-3. 游戏内纸人上限由 DLL 每帧实时修正；纸人漂流的临时纸人上限与单次数量由自动修补后的 param 生效。
+![义手忍具单键触发设置](hand2.jpg)
 
-> `mods\param\gameparam\gameparam.parambnd.dcx` 的目录结构不能改；这是 ModEngine 的 loose param 覆盖文件，也是纸人漂流生效的前提。没有 ModEngine 时，DLL 的纸人上限实时修正仍生效，但纸人漂流等 param 数值保持原版。
+### 3. 被动：纸人上限增加
 
-### 中文发行包
+- 初始纸人上限增加为 **20**。
+- 纸人上限提升技能所增加的纸人上限改为 **+2**，满技能时上限为 **30**。
+- 纸人漂流使用后获得的临时纸人增加为 **9**。
 
-- [dist/zh/dinput8.dll](dist/zh/dinput8.dll)
-- [dist/zh/battle_instinct.cfg](dist/zh/battle_instinct.cfg)
-- [dist/zh/version.dll](dist/zh/version.dll)　- 启动阶段自动修补 param
-- [dist/zh/battle_instinct_keybinds.json](dist/zh/battle_instinct_keybinds.json)　- 当前键位覆盖
-- [dist/zh/dinput8_modengine.dll](dist/zh/dinput8_modengine.dll)
-- [dist/zh/modengine.ini](dist/zh/modengine.ini)
-- [dist/zh/mods/param/gameparam/gameparam.parambnd.dcx](dist/zh/mods/param/gameparam/gameparam.parambnd.dcx)
+![纸人上限与纸人漂流](paperman.jpg)
 
-## 与原版的关系
+### 4. 被动：纸人替伤
 
-- **上游**：[@dec32](https://github.com/dec32) 的 [Battle Instinct](https://github.com/dec32/sekiro-battle-instinct)
-- **本仓库**：理念不同的独立维护版（双键搓招 + 忍具 q/t），**不是**上游官方分支
+根据单次受伤的伤害占血量上限的比例划分伤害等级。纸人充足时，每次受击消耗 1 个纸人，减免本次掉血量的 **60%**。
 
-若你更需要原版手感，请直接使用上游发布页。
+| 伤害等级 | 单次受伤占血量上限 | 纸人充足时的效果 |
+| --- | --- | --- |
+| 第一等级 | 1%～33% | 消耗 1 个纸人，减免本次掉血量的 60% |
+| 第二等级 | 33%～66% | 消耗 1 个纸人，减免本次掉血量的 60% |
+| 第三等级 | 66%～100% | 消耗 1 个纸人，减免本次掉血量的 60% |
 
-## 武技搓招（两个键）
+纸人不足时，按以下规则降级结算：
 
-键位含义跟游戏动作绑定，改键后仍有效。双键命中后：换武技槽 → 短暂压制攻击 → 注入防御+攻击放招；第二键按住可继续注入防御+攻击（方便蓄力），松开即停。当前招持续注入时再搓出的招会排队，**末键松手后再等一段 cfg 可调时间**（`# 武技排队等待`，默认约 0.3s；`0s` 则立刻放）才放出。默认检测窗口约 **0.3s**；**首键为 `l`**（如 `l↑`）时约 **0.7s**；**`rl` 樱舞** 单独受 `# rl触发时限` 约束（默认 **0.3s**）：按 `r` 后须在此时间内按 `l`，且触发时须同时按住 `r` 与 `l`。武技侧不建议以 `r`/`l` 为首键：防御优先级较高，攻击键容易按出突刺。源码：`res/battle_instinct_zh.cfg`（中文）、`res/battle_instinct.cfg`（英文）；发行包：`dist/zh/`、`dist/en/`。
+| 当前纸人 | 遭遇的攻击等级 | 消耗纸人 | 本次掉血量减免 |
+| --- | --- | --- | --- |
+| 2 | 第三等级 | 2 | 30% |
+| 1 | 第三等级 | 1 | 20% |
+| 1 | 第二等级 | 1 | 30% |
+| 0 | 任意等级 | 0 | 无减免 |
 
-| 符号 | 含义 |
+### 5. 被动：心流
+
+- 心流上限为 **10 层**。
+- 只狼在受击时完美弹反 3 次后获得第 1 层；随后 3 秒内，每次完美弹反获得 1 层。
+- 完美弹反失败，或连续超过 3 秒未完美弹反时，层数归零。
+- 心流效果为完美弹反时减免本次弹反所需的躯干值。
+
+| 心流层数 | 减免本次弹反所需躯干值 |
 | --- | --- |
-| `r`（鼠标右键） | 防御 / 格挡 |
-| `l`（鼠标左键） | 攻击 |
-| `e` | 动作、(长按)吸引 |
-| `f` | 钩锁 |
-| `j` | 跳跃 |
-| `s` | 冲刺 |
-| `c` | 下蹲 |
-| `↑↓←→` | 移动（WASD / 摇杆） |
-| `ee` | 连按两次动作键 |
-| `rl` / `re` / `er` / `el` / `rf` / `fr` 等 | 两个键的顺序组合；同一行可用 `/` 写多种搓法，如 `↓l/l↓` |
+| 1 | 20% |
+| 2 | 30% |
+| 3 | 40% |
+| 4 | 50% |
+| 5 | 60% |
+| 6 | 70% |
+| 7 | 80% |
+| 8 | 90% |
+| 9 | 100% |
+| 10 | 110% |
 
-`e`=交互、`f`=钩锁、`j`=跳跃、`s`=冲刺、`c`=下蹲，均跟随游戏内动作位（改键/手柄可用）。
+> **关于 110%：** 不消耗躯干值，并恢复此次弹反所需躯干值的 10%。
 
-当前发行包默认键位（可改 cfg）：
+> **PS：** MOD 初次加载可能会花上一段时间，请耐心等待。
 
-| 武技 | 键位 |
+## 二、如何下载并使用
+
+### 下载
+
+| 版本 | 下载链接 |
 | --- | --- |
-| 一字斩·二连 | `ee` |
-| 巨型忍者落杀 | `r↑` |
-| 寄鹰斩 | `↑l` |
-| 寄鹰斩·反向回旋 | `↓l` |
-| 苇名十字斩·瞬发 | `r↓`（持防 + 按下方向；cfg 名称含「瞬发」） |
-| 仙峰寺菩萨脚 | `↑r` |
-| 连击叩拜拳·破魔 | `↓r` |
-| 旋风斩 | `e↑` |
-| 樱舞 | `rl` |
-| 飞渡浮舟 | `l↑` |
-| 飞渡漩涡云 | `↑e` |
-| 龙闪 | `er` |
-| 一心 | `el` |
-| 不死斩 | `re` |
-| 一字斩 | `ff` |
-| 绝技·巨型忍者突刺 | `fl` |
+| 简体中文版 | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-battle-instinct/releases/download/nightly/battle-instinct_zh.zip) |
+| English version | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-battle-instinct/releases/download/nightly/battle-instinct_en.zip) |
 
-## 忍具（q / t）
+更多版本与更新请见 [GitHub Releases](https://github.com/JerryZ107/sekiro-battle-instinct/releases)。
 
-- `q` = 游戏内「切换忍具」；`t` =「使用忍具」
-- 配置里写 `t`：全场唯一**默认**忍具，按/按住即装备并注入使用；其它忍具结束后会回到它
-- 配置里写 `q`：可另绑一个单键忍具，**触发方式与 `t` 相同**（不会成为回默认目标）
-- 双键：首键为方向、r/l/e/j/s/c，**尾键为 q/t，或 r/l/e/j/s/c**（方向不能当第二键）；短窗口内「首键 → 尾键」→ 装备并注入使用，尾键按住则持续注入（窗口可在 cfg 用 `# 忍具触发时限` 调整，默认约 0.3s）。例：`↑q`、`↑r`、`→l`、`↓e`、`jc`。尾键为动作键时，同帧不会再出同键武技（请避免与武技键位冲突）
-- 若已配置裸 `q`，不宜再写 `qt`（单键 `q` 会先触发）
-- 未写键位的忍具行忽略
-- 当前存档未获得的武技/忍具绑定会自动禁用；学会对应技能/忍具后自动恢复，不需要切换键位配置。
-- `q` 始终作为 MOD 触发键拦截，不会回落成原生忍具切换；没有可用 `q` 绑定时按下无动作。
+### 安装
 
-因忍具键与忍具切换键皆有默认忍具，故其不能作为首键，只能作为尾键。且由于防御优先级较高、攻击键容易按出突刺，不建议使用 `r`/`l` 为首键。请写 `↑q` / `→t`，不要写 `q↑`。松开末键后约 **1 秒**锁定（可在键位后加 `-时间` 单独配置，如 `↑q-0.5s`）：不能换其他忍具；再按 `t`/`q` 刷新锁定并继续注入（多段），不回默认；按住期间不倒计时。锁定结束后约 **1.4 秒**回到唯一的 `t` 默认忍具。
+1. 下载压缩包后，请保持目录结构不变，解压到 `sekiro.exe` 所在目录。
+2. 若该目录中已存在其他 MOD 的 `dinput8.dll`，请将其改名为 `dinput8_modengine.dll`；本 MOD 会将其合并加载。
 
-当前发行包默认忍具键位：
+## 三、感谢
 
-| 忍具 | 键位 |
-| --- | --- |
-| 琉璃手里剑 | `t-0s` |
-| 老羽雾鸦 | `q-0s` |
-| 凤凰紫青伞 | `↓q-0s` |
-| 爱哭鬼 | `et-0s` |
-| 火舌 | `↑q-0.67s` |
-| 螺旋号 | `et-0.67s` |
-| 火镰式机关斧 | `↓t-0.5s` |
-| 琉璃锈丸 | `↑t-0.5s` |
-| 气吹长火筒 | `←t-0.5s` |
-| 长效火花 | `→t-0s` |
-| 捐赠簿 | `eq-0s` |
-
-## 技能键位配置 UI
-
-![键位配置 UI](docs/keyconfig-ui.png)
-
-进入游戏内菜单后：
-
-- 在「技能 → 流派招式」或「持有物品 → 义手忍具」中选中一个技能/忍具。
-- 按 `F` 打开右侧键位配置页；再次按 `F` 或点「取消」退出。配置页直接绘制在游戏渲染帧内，不会创建或激活独立窗口，全屏下游戏始终保持前台。
-- 流派招式从技能页分类表直接读取；义手忍具从装备页 `InventoryUnit` 的当前高亮行直接读取，并解析为 cfg UID。不使用 MenuGaitem 轮询、OCR、截图或颜色判断。
-- `F` 通过系统键盘事件 Hook 被动触发：回调只比较 `F` 键，且仅在游戏窗口处于前台、当前高亮项为流派招式或义手忍具时生效；其他菜单项静默忽略并放行 `F`，无截图、无 OCR。
-- 配置页支持：
-  - 流派招式：固定双键触发（首键 + 尾键）。
-  - 义手忍具：单键触发 / 双键触发；已存在的单键绑定会直接回显。
-  - 点击下方键位填入最早的空槽；点击上方已填键位只移除该槽，下一次输入优先补最前空槽。
-  - 忍具键 / 忍具切换键只能作为义手忍具双键配置的尾键；单键模式只提供这两个快捷键。
-  - 显示当前键位来源：`cfg` / `UI 覆盖` / `未配置`。
-  - 满槽提示、键位占用冲突提示、具体非法键位提示、未保存退出确认。
-  - 底部提供「保存 / 重置 / 取消」；重置会确认后删除该技能或忍具的全部触发键位并直接退出配置页。
-- 保存时若键位已被占用，弹窗提供「覆盖原键位」和「取消」；覆盖会让原绑定失效并立即保存新绑定。
-- 跳跃 / 冲刺 / 下蹲已启用为普通键位，cfg 中分别写作 `j` / `s` / `c`。
-- 保存后立即写入并在下一帧热加载，不需要重启游戏。
-
-UI 配置保存在游戏目录的独立文件：
-
-```text
-battle_instinct_keybinds.json
-```
-
-该文件只保存 UI 管理的键位覆盖，不会改写 `battle_instinct.cfg`，也不会替换 `menu/*.gfx`。覆盖已占用键位时，被替换的 cfg UID 会记录在 JSON 的 `disabled` 列表中。原 cfg 中的瞬发、多段触发时限等高级属性保持不变；删除该 JSON 即可回到 cfg 原始键位。
-
-> 主菜单对话框 Hook 针对 Sekiro 1.6.0.0 的函数签名做了校验。版本不匹配时会明确报错并停止安装该 Hook，不会回退到 OCR 或猜测识别。
-
-## 纸人 param 自动修补（纸人上限 / 纸人漂流）
-
-`version.dll` 在游戏启动阶段自动运行一次 param 修补，不常驻后台。它读取同目录 `battle_instinct.cfg` 中的以下数值：
-
-```ini
-纸人上限功能: 开
-纸人初始上限: 20
-技能增加上限: 2
-纸人漂流: 9
-```
-
-然后写入 ModEngine 加载的 `gameparam.parambnd.dcx`：
-
-| 字段 | 作用 |
-| --- | --- |
-| `EquipParamGoods 1000 +0x36` | 纸人基础上限 |
-| `EquipParamGoods 1001 +0x36` | 血纸人 / 临时纸人上限 |
-| `EquipParamGoods 3800 +0x8C` | 纸人漂流一次给多少临时纸人 |
-| `ResourceItemParam goodsId=1000` | 初始纸人、上限成长浮点 |
-
-### 首次安装 / 改数值
-
-1. 确认发行包中的 `version.dll`、`dinput8_modengine.dll`、`modengine.ini` 和 `mods\param\gameparam\gameparam.parambnd.dcx` 都已按目录结构放进游戏根目录。
-2. 按需修改 `battle_instinct.cfg` 里的 `纸人漂流`；它同时作为临时纸人上限和单次数量。
-3. 启动游戏。`version.dll` 会自动比较 param 当前值：有变化才备份并写入，已一致则直接跳过。
-4. 进游戏使用纸人漂流，确认临时纸人上限和单次增加量符合配置。
-
-### 回滚
-
-自动修补会在写入前生成 `gameparam.parambnd.dcx.bak-*` 备份。需要回滚时，把最近一次备份文件覆盖回 `gameparam.parambnd.dcx`，然后重启游戏。想关闭整套纸人修正，把 cfg 里的 `纸人上限功能` 改为 `关`；这不会自动回滚已经写入的 param。
-
-### 常见问题
-
-- **纸人漂流没变化**：确认 `version.dll` 和 `dinput8_modengine.dll` 已加载、`mods\param\gameparam\gameparam.parambnd.dcx` 路径正确，并查看 `battle_instinct_paper_auto.log` 后重启游戏。
-- **ModEngine 冲突**：本 MOD 会自动链式加载 `dinput8_modengine.dll`；不要把自己的 `dinput8.dll` 直接覆盖成 ModEngine，否则本 MOD 不会加载。
-- **纸人上限和漂流数值的区别**：纸人上限由 DLL 按 `20 + 2 × i` 实时修正；纸人漂流数量/临时上限才需要 param。
-- 字段与踩坑记录见 [docs/纸人参数.md](docs/纸人参数.md)。
-
-## 自行编译（可选）
-
-```bash
-cargo build --release
-just dist     # 刷新 dist/zh 与 dist/en（含 DLL、version.dll、cfg、键位覆盖和 ModEngine/param 整包）
-just bat      # 仅供开发调试：重新生成旧版手动 bat
-just pack     # 打包 battle-instinct_zh.zip / battle-instinct_en.zip
-```
-
-产物在 `target/release/`；发行目录为 `dist/zh/`（中文 cfg）与 `dist/en/`（英文 cfg）。
-玩家侧按发行包目录结构解压后，直接启动游戏即可；param 修补由 `version.dll` 自动完成。
-
-### ModEngine / param 文件说明
-
-发行包已附带：
-
-```text
-dinput8_modengine.dll    ← ModEngine 的 dinput8.dll 改名版本
-modengine.ini            ← modOverrideDirectory="\mods"
-mods\param\gameparam\gameparam.parambnd.dcx
-```
-
-`modengine.ini` 保持 `modOverrideDirectory="\mods"`。param 文件来自当前游戏目录中的 Resurrection 参数包，仅用于提供纸人漂流等字段；如你使用其它大型 mod，请用对应版本的 `gameparam.parambnd.dcx` 替换，然后重启游戏让 `version.dll` 自动修补。
-
-
-## cfg 可调项（纸人 / 心流这几组键名前的 `#` 可有可无，时序类键仍写作 `# 键: 值`）
-
-| 键 | 说明 |
-| --- | --- |
-| `# 启动信息print窗口: 关` | 启动时是否弹出加载信息窗口（默认关） |
-| `# rl触发时限: 0.3s` | **`rl` 樱舞**：按 `r` 后在此时间内按 `l`，且触发时 `r`、`l` 同时按住；真实 B+A 仍被剥离 |
-| `# 忍具触发时限: 0.3s` | 双键忍具：首键后须在此时间内按 `q`/`t`（默认约 0.3s） |
-| `# 武技排队等待: 0.3s` | 上一招末键松手后，再等此时长才放出排队武技；`0s` = 松手后立刻放 |
-| `纸人上限功能: 开` | 纸人上限运行时修正总开关（关 = DLL 不写内存；自动 param 修补也跳过） |
-| `纸人初始上限: 20` / `技能增加上限: 2` | **只给自动 param 修补用**；DLL 运行时固定为 `20 + 2 × i`，不受这两项影响 |
-| `纸人漂流: 9` | 血纸人(临时纸人)上限，也是纸人漂流一次给的数量 |
-| `纸人减伤功能: 开` | 按原始伤害 / 最大血量分三档，消耗纸人减免本次受击伤害；临时纸人优先。详见 [docs/纸人减伤.md](docs/纸人减伤.md) |
-| `纸人减伤调试日志: 关` | 输出每刀的分档、原始/减伤后伤害、实际 HP 掉落和纸人数量变化 |
-| `心流功能: 开` | 完美弹反叠层「心流」总开关；`心流持续时间` / `心流最大层数` / `心流回复比例` 见 [docs/心流.md](docs/心流.md) |
-
-> 中英文发行包运行时都按 `20 + 2 × i`；cfg 里的 `纸人初始上限` / `技能增加上限` 只供自动 param 补丁使用。
-
-忍具多段触发时限写在**键位后**加 `-时间`，如 `↑q-0.5s` 或 `↑q-多段触发时限0.5s`；未写则默认 1s。
-
-
-## 感谢
-
-- **[dec32](https://github.com/dec32)**：[Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者——本 MOD 基于其代码与架构
-- **[Katalash](https://github.com/katalash)**：[ModEngine](https://github.com/katalash/ModEngine) 原作者——发行包内附带其 DLL 与配置
+- **dec32**：Battle Instinct 原作者——本 MOD 基于其代码与架构
+- **Katalash**：ModEngine 原作者——发行包内附带其 DLL 与配置
 - 参数包来自本机安装的 **Sekiro: Resurrection**，仅作为纸人漂流 param 覆盖文件随包提供
-- [Tmsrise](https://github.com/tmsrise)：[Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
-- [ReaperAnon](https://github.com/ReaperAnon)：[Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
-- [Yuzheng Wu](https://github.com/Persona-woo)：原版输入手感测试与改进
+- **Tmsrise**：Sekiro Weapon Wheel
+- **ReaperAnon**：Sekiro Hotkey System
+- **Yuzheng Wu**：原版输入手感测试与改进
 
 第三方组件与打包文件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
