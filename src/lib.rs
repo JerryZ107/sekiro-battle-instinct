@@ -1,3 +1,5 @@
+mod binding_validation;
+mod bindings;
 mod boot;
 mod cfg_meta;
 mod config;
@@ -7,10 +9,13 @@ mod emblem;
 mod flow;
 mod frame;
 mod game;
+mod game_menu;
 mod input;
 mod load_console;
 mod logger;
+mod menu_probe;
 mod paper_guard;
+mod ui;
 
 use core::Mod;
 use std::{
@@ -202,6 +207,7 @@ fn modify(path: &Path) {
 
     load_console::print_line("读取配置 battle_instinct.cfg …");
     let result = (|| unsafe {
+        let ui_cfg_path = path.clone();
         let modification = Mod::new(path)?;
 
         load_console::print_line("安装伤害事件钩子…");
@@ -226,6 +232,12 @@ fn modify(path: &Path) {
         };
 
         STATE.set(state).map_err(|_| anyhow!("Failed to set STATE"))?;
+
+        load_console::print_line("安装菜单选中项 Hook…");
+        game_menu::install_hooks()?;
+        load_console::print_line("  ✔ 菜单选中项 Hook 已安装");
+
+        ui::start(ui_cfg_path);
         MinHook::enable_all_hooks()?;
         log::warn!("Battle Instinct hook enabled.");
         Ok::<_, anyhow::Error>(())

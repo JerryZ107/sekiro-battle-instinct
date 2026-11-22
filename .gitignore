@@ -8,3 +8,10 @@
 !/dist/en/
 !/dist/en/**
 /.cursor/
+# Local reverse-engineering references and extracted data, not part of the MOD
+/Smithbox/
+/Smithbox-meta/
+/sekiro_textdump.exe
+/dmg_event_factory.txt
+/env_*.txt
+/sm_vtable_disasm.txt

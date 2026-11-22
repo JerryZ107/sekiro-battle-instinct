@@ -1,7 +1,12 @@
-use std::{fmt, num::NonZero, path::Path};
+use std::{
+    fmt,
+    num::NonZero,
+    path::{Path, PathBuf},
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use crate::{
+    bindings,
     config::{Config, ToolCombo, ToolFirst, ToolTail},
     device::{Gamepad, is_key_down},
     emblem::Emblem,
@@ -72,6 +77,7 @@ const PROSTHETIC_SLOT_2: u8 = 4;
 //----------------------------------------------------------------------------
 
 pub struct Mod {
+    cfg_path: PathBuf,
     config: Config,
     emblem: Emblem,
     flow: Flow,
@@ -135,12 +141,13 @@ pub struct Mod {
 impl Mod {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Mod> {
         let cfg_path = path.as_ref().to_path_buf();
-        let config = Config::open(&cfg_path)?;
+        let config = bindings::load_effective_config(&cfg_path)?;
         let emblem = Emblem::new(&cfg_path);
         let flow = Flow::new(&cfg_path);
         paper_guard::init(&cfg_path);
         let art_combo = ArtComboWindow::new(config.rl_combo_max_age);
         let modification = Mod {
+            cfg_path: cfg_path.clone(),
             config,
             emblem,
             flow,
@@ -647,6 +654,17 @@ impl Mod {
     }
 
     pub fn process_input(&mut self, input_handler: &mut game::InputHandler) {
+        if bindings::take_reload_request() {
+            match bindings::load_effective_config(&self.cfg_path) {
+                Ok(config) => {
+                    self.config = config;
+                    log::warn!("keybinds: runtime config reloaded");
+                }
+                Err(error) => {
+                    log::error!("keybinds: reload failed: {error:#}");
+                }
+            }
+        }
         self.emblem.tick();
         self.flow.tick();
 

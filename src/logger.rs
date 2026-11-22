@@ -167,8 +167,11 @@ mod tests {
             writer.flush().unwrap();
         }
 
-        assert!(fs::metadata(&path).unwrap().len() <= MAX_LOG_BYTES);
-        assert!(path.with_extension("log.1").exists());
+        let active = fs::metadata(&path).unwrap().len();
+        let rotated = fs::metadata(path.with_extension("log.1")).unwrap().len();
+        assert!(active <= MAX_LOG_BYTES);
+        assert!(rotated <= MAX_LOG_BYTES);
+        assert!(active + rotated <= MAX_LOG_BYTES * 2);
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -113,6 +113,36 @@ Default release prosthetic binds:
 | Long Spark | `→t-0s` |
 | Finger Whistle / Divine Abduction bind | `eq-0s` |
 
+## Key configuration UI (phase 1)
+
+![Key configuration UI](docs/keyconfig-ui.png)
+
+Inside the in-game menu:
+
+- Select a combat art under **Skills -> Combat Arts** or a prosthetic under **Inventory -> Prosthetic Tools**.
+- Press `F` to open the right-hand key configuration page. Press `F` again or click **Cancel** to leave.
+- Combat arts are read directly from the skill-page category table. Prosthetics are read directly from the highlighted `InventoryUnit` row in the equipment page and resolved to a cfg UID. No MenuGaitem polling, OCR, screenshots, or color heuristics are used.
+- `F` is handled by a passive system keyboard-event hook. The callback only compares the `F` virtual key and only acts while the game menu is open; there is no screenshot capture or OCR.
+- Supported modes:
+  - Combat arts: fixed two-key trigger (first key + tail key).
+  - Prosthetics: single-key or two-key trigger; an existing single-key binding is shown as-is.
+  - Clicking a lower-grid key fills the earliest empty slot. Clicking a filled upper slot removes only that slot; the next click fills the earliest gap.
+  - Prosthetic Use / Prosthetic Switch are valid only as the tail key of a two-key prosthetic bind. Single-key mode exposes only those two shortcut keys.
+  - The page shows where the current binding came from: `cfg`, `UI override`, or `unconfigured`.
+  - Full-slot, occupied-key, and specific invalid-key errors are distinct, together with an unsaved-change confirmation.
+- Jump and crouch/dodge are shown disabled in this phase.
+- Saving applies immediately and hot-reloads on the next input frame; no game restart is required.
+
+UI-owned bindings are stored separately in:
+
+```text
+battle_instinct_keybinds.json
+```
+
+The file only overrides UI-managed bindings. It does not rewrite `battle_instinct.cfg` and does not replace any `menu/*.gfx` file. Advanced cfg properties such as instant arts and prosthetic multi-hit lock remain intact. Delete the JSON file to fall back to the original cfg.
+
+> The main-menu dialog hook validates the Sekiro 1.6.0.0 function signature. On a version mismatch, hook installation fails explicitly instead of falling back to OCR or guessing.
+
 ## Paper Doll launcher (纸人挂.bat / paperman.bat)
 
 The launcher is a one-shot param writer; it does not stay running. It reads these values from `battle_instinct.cfg`:
