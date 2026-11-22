@@ -21,6 +21,9 @@ pub enum ToolTail {
     Attack,
     Interact,
     Grapple,
+    Jump,
+    Sprint,
+    Crouch,
 }
 
 /// First key of a prosthetic combo. `t` cannot be first; `q` can.
@@ -34,6 +37,9 @@ pub enum ToolFirst {
     Attack,
     Interact,
     Grapple,
+    Jump,
+    Sprint,
+    Crouch,
     /// `q` as first key (e.g. `qt`).
     Switch,
 }
@@ -49,6 +55,9 @@ impl ToolFirst {
             ArtToken::Attack => ToolFirst::Attack,
             ArtToken::Interact => ToolFirst::Interact,
             ArtToken::Grapple => ToolFirst::Grapple,
+            ArtToken::Jump => ToolFirst::Jump,
+            ArtToken::Sprint => ToolFirst::Sprint,
+            ArtToken::Crouch => ToolFirst::Crouch,
         }
     }
 }
@@ -89,7 +98,7 @@ pub fn tool_multi_lock_secs_to_frames(secs: f32) -> u16 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// Combat arts keyed by r/l/e/f + direction pairs (or empty for ∅).
     pub arts: HashMap<ArtCombo, UID>,
@@ -121,6 +130,13 @@ impl Config {
 
     pub fn art(&self, combo: ArtCombo) -> Option<UID> {
         self.arts.get(&combo).copied()
+    }
+
+    /// Generic combo lookup for the normal two-token buffer. Supported instant
+    /// arts are still handled by the same-frame instant path first; this fallback
+    /// lets UI rebinds of instant-marked UIDs use any legal two-token combo.
+    pub fn art_or_instant(&self, combo: ArtCombo) -> Option<UID> {
+        self.arts.get(&combo).or_else(|| self.instant_arts.get(&combo)).copied()
     }
 
     pub fn tool(&self, combo: ToolCombo) -> Option<UID> {
@@ -380,6 +396,9 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         'l' | 'L' => ToolFirst::Attack,
         'e' | 'E' => ToolFirst::Interact,
         'f' | 'F' => ToolFirst::Grapple,
+        'j' | 'J' => ToolFirst::Jump,
+        's' | 'S' => ToolFirst::Sprint,
+        'c' | 'C' => ToolFirst::Crouch,
         'q' | 'Q' => ToolFirst::Switch,
         't' | 'T' => return None, // t cannot be first of a two-key bind
         _ => return None,
@@ -395,6 +414,9 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         'l' | 'L' => ToolTail::Attack,
         'e' | 'E' => ToolTail::Interact,
         'f' | 'F' => ToolTail::Grapple,
+        'j' | 'J' => ToolTail::Jump,
+        's' | 'S' => ToolTail::Sprint,
+        'c' | 'C' => ToolTail::Crouch,
         _ => return None,
     };
     // Same physical key twice (e.g. `rr`) is not useful as a prosthetic bind.
@@ -404,6 +426,9 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
             | (ToolFirst::Attack, ToolTail::Attack)
             | (ToolFirst::Interact, ToolTail::Interact)
             | (ToolFirst::Grapple, ToolTail::Grapple)
+            | (ToolFirst::Jump, ToolTail::Jump)
+            | (ToolFirst::Sprint, ToolTail::Sprint)
+            | (ToolFirst::Crouch, ToolTail::Crouch)
             | (ToolFirst::Switch, ToolTail::Switch)
     ) {
         return None;
@@ -429,6 +454,9 @@ fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
             'l' | 'L' => ArtToken::Attack,
             'e' | 'E' => ArtToken::Interact,
             'f' | 'F' => ArtToken::Grapple,
+            'j' | 'J' => ArtToken::Jump,
+            's' | 'S' => ArtToken::Sprint,
+            'c' | 'C' => ArtToken::Crouch,
             _ => return None,
         };
         tokens.push(token);
@@ -634,5 +662,45 @@ mod test {
             None
         );
         assert_eq!(config.tool_on_t, None);
+    }
+
+    #[test]
+    fn test_jump_sprint_crouch_key_bindings() {
+        let config = Config::from("5100 art  jc\n5501 art  sl\n76200 umb  ↑j\n71200 spark sc\n70500 shur  ct");
+        assert_eq!(config.art(ArtCombo::pair(ArtToken::Jump, ArtToken::Crouch)), Some(5100));
+        assert_eq!(
+            config.art(ArtCombo::pair(ArtToken::Sprint, ArtToken::Attack)),
+            Some(5501)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Jump
+            }),
+            Some(76200)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Sprint,
+                tail: ToolTail::Crouch
+            }),
+            Some(71200)
+        );
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Crouch,
+                tail: ToolTail::Use
+            }),
+            Some(70500)
+        );
+    }
+
+    #[test]
+    fn instant_art_uid_is_visible_to_generic_ui_combo_lookup() {
+        let config = Config::from("5500 绝技·苇名十字斩·瞬发 r↓");
+        let combo = ArtCombo::pair(ArtToken::Block, ArtToken::Down);
+        assert_eq!(config.art(combo), None);
+        assert_eq!(config.instant_arts.get(&combo), Some(&5500));
+        assert_eq!(config.art_or_instant(combo), Some(5500));
     }
 }

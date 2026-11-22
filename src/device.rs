@@ -1,10 +1,61 @@
 use std::{error, fmt};
 
 use gilrs::{Axis, EventType, Gilrs};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VIRTUAL_KEY};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyState, VIRTUAL_KEY};
 
 pub fn is_key_down(keycode: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(keycode.0.into()) as u16 & 0x8000 != 0 }
+}
+
+fn is_key_async_down(keycode: u16) -> bool {
+    unsafe { GetAsyncKeyState(keycode as i32) as u16 & 0x8000 != 0 }
+}
+
+/// Some game action bits (notably jump/crouch) are short press pulses rather
+/// than held states. Learn which physical key produced each action edge so the
+/// mod can keep using that action as "held" without hard-coding Space/Ctrl.
+/// Triggering still comes from the game's logical action bit.
+pub struct KeyHoldTracker {
+    down: [bool; 256],
+    mapped: [[u64; 4]; 3],
+}
+
+impl KeyHoldTracker {
+    pub fn new() -> Self {
+        Self {
+            down: [false; 256],
+            mapped: [[0; 4]; 3],
+        }
+    }
+
+    /// Refresh physical key state and return the keys that became down this frame.
+    pub fn update(&mut self) -> [u64; 4] {
+        let mut newly_down = [0u64; 4];
+        for vk in 8u16..=254 {
+            let down = is_key_async_down(vk);
+            if down && !self.down[vk as usize] {
+                newly_down[(vk >> 6) as usize] |= 1u64 << (vk & 63);
+            }
+            self.down[vk as usize] = down;
+        }
+        newly_down
+    }
+
+    /// Remember the key(s) that caused an action edge. Empty edge sets (for
+    /// example a gamepad button) leave the previous keyboard mapping intact.
+    pub fn learn(&mut self, slot: usize, newly_down: [u64; 4]) {
+        if newly_down.iter().any(|bits| *bits != 0) {
+            self.mapped[slot] = newly_down;
+        }
+    }
+
+    pub fn held(&self, slot: usize) -> bool {
+        let mapped = &self.mapped[slot];
+        (8usize..=254).any(|vk| {
+            let bit = 1u64 << (vk & 63);
+            mapped[vk >> 6] & bit != 0 && self.down[vk]
+        })
+    }
 }
 
 pub struct Gamepad {

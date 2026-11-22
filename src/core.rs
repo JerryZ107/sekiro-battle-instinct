@@ -8,7 +8,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use crate::{
     bindings,
     config::{Config, ToolCombo, ToolFirst, ToolTail},
-    device::{Gamepad, is_key_down},
+    device::{Gamepad, KeyHoldTracker, is_key_down},
     emblem::Emblem,
     flow::Flow,
     frame::Frames,
@@ -55,11 +55,15 @@ const EMPOWERED_MORTAL_DRAW: UID = 7300;
 const ATTACK: u64 = 0x1;
 const BLOCK: u64 = 0x4;
 const JUMP: u64 = 0x10;
+/// 「冲刺」action bit (SpMove, action index 5; verified in-game 2026-11-22).
+const SPRINT: u64 = 0x20;
 /// 「动作」— verified in-game via action probe.
 const INTERACT: u64 = 0x1000;
 /// Grapple/hook action — verified in-game via action probe (E rebound to grapple reads 0x20000008).
 const GRAPPLE: u64 = 0x20000000;
 const DODGE: u64 = 0x2000;
+/// 「下蹲」action bit (Crouch, action index 15; verified in-game 2026-11-22).
+const CROUCH: u64 = 0x8000;
 const USE_PROSTHETIC: u64 = 0x40040002;
 /// 「切换忍具」— verified in-game via action probe (2026-09-01).
 const SWITCH_PROSTHETIC: u64 = 0x400;
@@ -79,6 +83,9 @@ const PROSTHETIC_SLOT_2: u8 = 4;
 pub struct Mod {
     cfg_path: PathBuf,
     config: Config,
+    base_config: Config,
+    availability_signature: Option<u64>,
+    availability_tick: u8,
     emblem: Emblem,
     flow: Flow,
     art_combo: ArtComboWindow,
@@ -103,6 +110,8 @@ pub struct Mod {
     art_block_inject_left: u8,
     /// True after the first BLOCK|ATTACK frame that opens the art.
     art_attack_latched: bool,
+    /// Native action bits of the combo that fired; stripped until injection ends.
+    combo_suppress_mask: u64,
     /// Latest combo art waiting until sustained fire ends (size 1, newest wins).
     queued_art: Option<(UID, ArtToken)>,
     /// Frames left after last-key release before flushing `queued_art` (from cfg).
@@ -133,6 +142,14 @@ pub struct Mod {
     tool_attack_down: bool,
     tool_interact_down: bool,
     tool_grapple_down: bool,
+    tool_jump_down: bool,
+    tool_sprint_down: bool,
+    tool_crouch_down: bool,
+    /// Physical-key hold supplement learned from game action edges.
+    key_hold: KeyHoldTracker,
+    prev_jump_action: bool,
+    prev_sprint_action: bool,
+    prev_crouch_action: bool,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
     combo_dirs_last: [bool; 4],
@@ -141,7 +158,8 @@ pub struct Mod {
 impl Mod {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Mod> {
         let cfg_path = path.as_ref().to_path_buf();
-        let config = bindings::load_effective_config(&cfg_path)?;
+        let base_config = bindings::load_effective_config(&cfg_path)?;
+        let config = base_config.clone();
         let emblem = Emblem::new(&cfg_path);
         let flow = Flow::new(&cfg_path);
         paper_guard::init(&cfg_path);
@@ -149,6 +167,9 @@ impl Mod {
         let modification = Mod {
             cfg_path: cfg_path.clone(),
             config,
+            base_config,
+            availability_signature: None,
+            availability_tick: 0,
             emblem,
             flow,
             gamepad: Gamepad::new()?,
@@ -169,6 +190,7 @@ impl Mod {
             hold_for_attack: None,
             art_block_inject_left: 0,
             art_attack_latched: false,
+            combo_suppress_mask: 0,
             queued_art: None,
             queue_flush_left: 0,
             queue_flush_skip_tick: false,
@@ -187,12 +209,69 @@ impl Mod {
             tool_attack_down: false,
             tool_interact_down: false,
             tool_grapple_down: false,
+            tool_jump_down: false,
+            tool_sprint_down: false,
+            tool_crouch_down: false,
+            key_hold: KeyHoldTracker::new(),
+            prev_jump_action: false,
+            prev_sprint_action: false,
+            prev_crouch_action: false,
             ejection: None,
             combo_dirs_last: [false; 4],
         };
         Ok(modification)
     }
 
+    fn refresh_available_bindings(&mut self, force: bool) {
+        if !force {
+            self.availability_tick = self.availability_tick.saturating_add(1);
+            if self.availability_signature.is_some() && self.availability_tick < 15 {
+                return;
+            }
+        }
+        self.availability_tick = 0;
+
+        let Some(signature) = availability_signature(&self.base_config) else {
+            return;
+        };
+        if !force && self.availability_signature == Some(signature) {
+            return;
+        }
+        self.availability_signature = Some(signature);
+
+        let mut config = self.base_config.clone();
+        filter_config_by_availability(&mut config);
+        let arts = config.arts.len() + config.instant_arts.len();
+        let tools =
+            config.tools.len() + usize::from(config.tool_on_t.is_some()) + usize::from(config.tool_on_q.is_some());
+        log::warn!("keybinds: available filter arts={arts} tools={tools}");
+        self.config = config;
+        self.reset_binding_runtime_state();
+    }
+
+    fn reset_binding_runtime_state(&mut self) {
+        self.art_combo.clear();
+        self.clear_art_fire();
+        self.queued_art = None;
+        self.queue_flush_left = 0;
+        self.queue_flush_skip_tick = false;
+        self.cur_art = None;
+        self.attack_delay = 0;
+        self.prosthetic_delay = 0;
+        self.injected_blocks = 0;
+        self.disable_block = false;
+        self.pending_rl_attack = false;
+        self.suppress_late_rl_skill = false;
+        self.tool_first = None;
+        self.tool_first_age = 0;
+        self.hold_tool_tail = None;
+        self.tool_min_use = 0;
+        self.cur_tool = None;
+        self.return_default_left = 0;
+        self.tool_lock_left = 0;
+        self.switch_down_last = false;
+        self.tools_inited = false;
+    }
     fn instant_combo_matches(
         &self,
         combo: ArtCombo,
@@ -314,6 +393,7 @@ impl Mod {
         self.art_attack_latched = false;
         self.pending_rl_attack = false;
         self.art_tap_frames = 0;
+        self.combo_suppress_mask = 0;
     }
 
     /// End sustained fire; if a queued art is waiting, start the cfg flush delay.
@@ -488,9 +568,10 @@ impl Mod {
         self.tool_first_age = 0;
     }
 
-    /// Track ↑↓←→/r/l/e/f as first key; on q/t/r/l/e/f complete combo → equip + hold-inject USE.
+    /// Track normal action tokens as the prosthetic first key; on another normal
+    /// token or q/t complete the combo → equip + hold-inject USE.
     /// Bare `t` arms `tool_on_t`. Bare `q` arms `tool_on_q` (same fire style; return-default stays `t`).
-    /// Returns true when a tool was armed via `r`/`l`/`e`/`f` tail (caller should clear art combo).
+    /// Returns true when a tool was armed via a normal action tail (caller should clear art combo).
     fn handle_prosthetic_input(
         &mut self,
         input_handler: &mut game::InputHandler,
@@ -502,6 +583,9 @@ impl Mod {
         attacking: bool,
         interacting: bool,
         grappling: bool,
+        jumping: bool,
+        sprinting: bool,
+        crouching: bool,
         using_tool: bool,
         used_tool_just_now: bool,
     ) -> bool {
@@ -559,6 +643,33 @@ impl Mod {
         }
         self.tool_grapple_down = grappling;
 
+        if jumping && !self.tool_jump_down {
+            if self.try_complete_tool_tail(ToolTail::Jump) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Jump);
+            }
+        }
+        self.tool_jump_down = jumping;
+
+        if sprinting && !self.tool_sprint_down {
+            if self.try_complete_tool_tail(ToolTail::Sprint) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Sprint);
+            }
+        }
+        self.tool_sprint_down = sprinting;
+
+        if crouching && !self.tool_crouch_down {
+            if self.try_complete_tool_tail(ToolTail::Crouch) {
+                armed_via_art_tail = true;
+            } else {
+                self.push_tool_first(ToolFirst::Crouch);
+            }
+        }
+        self.tool_crouch_down = crouching;
+
         if self.tool_first.is_some() {
             self.tool_first_age = self.tool_first_age.saturating_add(1);
             if self.tool_first_age >= self.config.tool_combo_max_age {
@@ -567,7 +678,8 @@ impl Mod {
             }
         }
 
-        // q = switch prosthetic: observe hold, swallow vanilla 3-slot cycle.
+        // q is reserved as a trigger key in this MOD. Always swallow the native
+        // 3-slot switch action, even when no available binding currently uses q.
         let switch_down = input_handler.action & SWITCH_PROSTHETIC != 0;
         if switch_down {
             input_handler.action &= !SWITCH_PROSTHETIC;
@@ -622,6 +734,9 @@ impl Mod {
                 Some(ToolTail::Attack) => attacking,
                 Some(ToolTail::Interact) => interacting,
                 Some(ToolTail::Grapple) => grappling,
+                Some(ToolTail::Jump) => jumping,
+                Some(ToolTail::Sprint) => sprinting,
+                Some(ToolTail::Crouch) => crouching,
                 None => false,
             };
             if self.prosthetic_delay > 0 || held || self.tool_min_use > 0 {
@@ -657,7 +772,9 @@ impl Mod {
         if bindings::take_reload_request() {
             match bindings::load_effective_config(&self.cfg_path) {
                 Ok(config) => {
-                    self.config = config;
+                    self.base_config = config;
+                    self.availability_signature = None;
+                    self.refresh_available_bindings(true);
                     log::warn!("keybinds: runtime config reloaded");
                 }
                 Err(error) => {
@@ -665,6 +782,9 @@ impl Mod {
                 }
             }
         }
+        self.refresh_available_bindings(false);
+        let has_available_arts = !self.config.arts.is_empty() || !self.config.instant_arts.is_empty();
+
         self.emblem.tick();
         self.flow.tick();
 
@@ -703,13 +823,35 @@ impl Mod {
         let interacting = action_snapshot & INTERACT != 0;
         let grappling = action_snapshot & GRAPPLE != 0;
         let using_tool = action_snapshot & USE_PROSTHETIC != 0;
-        let jumping = action_snapshot & JUMP != 0;
+        let jump_action = action_snapshot & JUMP != 0;
+        let sprint_action = action_snapshot & SPRINT != 0;
+        let crouch_action = action_snapshot & CROUCH != 0;
         let dodging = action_snapshot & DODGE != 0;
+
+        // Jump/crouch are emitted by the game as short action pulses in some
+        // contexts. Learn the physical key at the action edge and OR that key's
+        // held state into the logical token for the rest of the press.
+        let newly_down = self.key_hold.update();
+        if jump_action && !self.prev_jump_action {
+            self.key_hold.learn(0, newly_down);
+        }
+        if sprint_action && !self.prev_sprint_action {
+            self.key_hold.learn(1, newly_down);
+        }
+        if crouch_action && !self.prev_crouch_action {
+            self.key_hold.learn(2, newly_down);
+        }
+        self.prev_jump_action = jump_action;
+        self.prev_sprint_action = sprint_action;
+        self.prev_crouch_action = crouch_action;
+        let jumping = jump_action || self.key_hold.held(0);
+        let sprinting = sprint_action || self.key_hold.held(1);
+        let crouching = crouch_action || self.key_hold.held(2);
         let attacked_just_now = !self.attacking_last_frame && attacking;
         let blocked_just_now = !self.blocking_last_frame && blocking;
         let used_tool_just_now = !self.using_tool_last_frame && using_tool;
 
-        /***** prosthetic: (dir|r|l|e|f)+q/t or bare t → equip + hold-inject USE *****/
+        /***** prosthetic: normal token + tail, or bare t → equip + hold-inject USE *****/
         if !self.tools_inited {
             self.tools_inited = true;
             if self.config.tool_on_t.is_some() {
@@ -726,22 +868,32 @@ impl Mod {
             attacking,
             interacting,
             grappling,
+            jumping,
+            sprinting,
+            crouching,
             using_tool,
             used_tool_just_now,
         );
 
-        /***** update combat-art token buffer (r/l/e/f + directions) *****/
-        // `e` and `f` both follow game action bits (remap/pad compatible).
-        self.art_combo.tick(
-            combo_up,
-            combo_right,
-            combo_down,
-            combo_left,
-            blocking,
-            attacking,
-            interacting,
-            grappling,
-        );
+        /***** update combat-art token buffer (normal action tokens + directions) *****/
+        // Logical action bits keep in-game remaps and gamepad bindings working.
+        if has_available_arts {
+            self.art_combo.tick(
+                combo_up,
+                combo_right,
+                combo_down,
+                combo_left,
+                blocking,
+                attacking,
+                interacting,
+                grappling,
+                jumping,
+                sprinting,
+                crouching,
+            );
+        } else {
+            self.art_combo.clear();
+        }
         // Tool took this r/l/e/f completion — do not also fire a combat art on the same keys.
         if tool_armed_via_art_tail {
             self.art_combo.clear();
@@ -762,10 +914,18 @@ impl Mod {
             )
             .is_some();
 
-        /***** end sustained fire early when jump/dodge or last token released *****/
-        if jumping || dodging {
+        /***** end sustained fire early on external jump/dodge or last token release *****/
+        let combo_owns_jump = self.combo_suppress_mask & JUMP != 0;
+        let combo_owns_sprint = self.combo_suppress_mask & SPRINT != 0;
+        let external_jump = jumping && !combo_owns_jump;
+        let external_dodge = dodging && !combo_owns_sprint;
+        if external_jump || external_dodge {
             if self.art_fire_busy() {
-                log::debug!("ART_ABORT jump={} dodge={}", jumping, dodging);
+                log::debug!(
+                    "ART_ABORT external_jump={} external_dodge={}",
+                    external_jump,
+                    external_dodge
+                );
             }
             self.clear_art_fire();
             self.clear_queued_art();
@@ -796,9 +956,10 @@ impl Mod {
             self.swapout_countdown.count_on(!attacking);
         }
 
-        let desired_art = if let Some(combo) = self.art_combo.take_completed() {
+        let completed_combo = self.art_combo.take_completed();
+        let desired_art = if let Some(combo) = completed_combo {
             // Two consecutive tokens matched (e.g. r↑, ↑e, ↑f, ee, ff, rl, rf, fr, fl).
-            if let (Some(uid), Some(hold)) = (self.config.art(combo), combo.second()) {
+            if let (Some(uid), Some(hold)) = (self.config.art_or_instant(combo), combo.second()) {
                 self.art_combo.clear();
                 let is_rl = combo.is_rl();
                 if self.art_fire_busy() && !is_rl {
@@ -825,6 +986,7 @@ impl Mod {
                     );
                     performed_block_free_art_just_now = true;
                     pending_rl = true;
+                    self.combo_suppress_mask = combo_action_mask(combo);
                     self.arm_combo_fire(hold);
                     self.clear_queued_art();
                     Some(uid)
@@ -869,24 +1031,13 @@ impl Mod {
         let mut art_swapped_this_hit = false;
         if let Some(desired_art) = desired_art {
             let mut desired_art = desired_art;
-            let log_equip = performed_block_free_art_just_now;
             loop {
                 if combat_art_slot_matches(desired_art) {
                     self.cur_art = Some(desired_art);
-                    if log_equip {
-                        log::debug!("ART_EQUIP uid={} slot_match=true (no set_combat_art)", desired_art);
-                    }
                     break;
                 }
                 if set_combat_art(desired_art) {
                     art_swapped_this_hit = true;
-                    if log_equip {
-                        log::debug!(
-                            "ART_EQUIP uid={} same_slot=false delay={}",
-                            desired_art,
-                            ATTACK_SUPRESSION_DURATION
-                        );
-                    }
                     self.cur_art = Some(desired_art);
                     self.attack_delay = ATTACK_SUPRESSION_DURATION;
                     break;
@@ -928,8 +1079,9 @@ impl Mod {
         if performed_block_free_art_just_now {
             // Combo path: sustained fire starts after attack_delay (see below).
         } else if self.injected_blocks >= 1 {
-            if jumping || dodging {
-                // DODGE and JUMP cancel the injection because they cancel the combat art itself
+            if external_jump || external_dodge {
+                // External DODGE/JUMP cancels the art; combo-owned jump/sprint bits are
+                // suppressed instead of being allowed to preempt the injection.
                 self.injected_blocks = 0
             } else if self.cur_art.is_sheathed() {
                 // hold BLOCK for sheathing attacks as long as ATTACK is held until:
@@ -962,10 +1114,10 @@ impl Mod {
         // Real keyboard B+A must never reach the skill slot; only mod-injected B+A (below) may
         // activate arts. While waiting for the second key of block-first combos, also strip
         // stray ATTACK so held-l + new block cannot vanilla-fire before the combo completes.
-        if self.art_combo.awaiting_block_second() && blocking {
+        if has_available_arts && self.art_combo.awaiting_block_second() && blocking {
             strip_input(input_handler, ATTACK);
         }
-        if blocking && attacking {
+        if has_available_arts && blocking && attacking {
             strip_input(input_handler, VANILLA_ART_INPUT);
         }
         if instant_art_fired {
@@ -987,6 +1139,18 @@ impl Mod {
         if self.attack_delay == 0 && self.pending_rl_attack {
             self.pending_rl_attack = false;
             self.art_block_inject_left = ART_BLOCK_INJECTION_DURATION;
+        }
+
+        // The combo keys themselves must never reach the game's native action
+        // handling once the combo has been recognized (guard/sprint/jump/crouch
+        // animations can otherwise preempt the MOD's BLOCK+ATTACK injection).
+        if self.combo_suppress_mask != 0 {
+            // Suppress only the current logical action. Do NOT clear action_b/
+            // action_c here: the game uses them as press/hold history, and
+            // clearing them every frame would turn the injected B+A into a new
+            // attack edge on every frame (repeated sheathing for Ashina Cross /
+            // One Mind instead of a sustained ready-to-draw state).
+            input_handler.action &= !self.combo_suppress_mask;
         }
 
         // Sustained art fire:
@@ -1035,6 +1199,9 @@ impl Mod {
                 input_handler.action_b &= !GRAPPLE;
                 input_handler.action_c &= !GRAPPLE;
             }
+            Some(ToolTail::Jump) => strip_input(input_handler, JUMP),
+            Some(ToolTail::Sprint) => strip_input(input_handler, SPRINT),
+            Some(ToolTail::Crouch) => strip_input(input_handler, CROUCH),
             _ => {}
         }
 
@@ -1048,6 +1215,101 @@ impl Mod {
     }
 }
 
+fn availability_signature(config: &Config) -> Option<u64> {
+    if !inventory_ready() {
+        return None;
+    }
+
+    let mut uids: Vec<UID> = Vec::new();
+    uids.extend(config.arts.values().copied());
+    uids.extend(config.instant_arts.values().copied());
+    uids.extend(config.tools.values().copied());
+    uids.extend(config.tool_on_t);
+    uids.extend(config.tool_on_q);
+    uids.sort_unstable();
+    uids.dedup();
+
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for uid in uids {
+        hash ^= uid as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash ^= u64::from(is_uid_available(uid));
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Some(hash)
+}
+
+fn inventory_ready() -> bool {
+    unsafe {
+        let game_data = game::game_data();
+        if game_data.is_null() {
+            return false;
+        }
+        let player = (*game_data).player_data;
+        if player.is_null() {
+            return false;
+        }
+        !(*player).inventory_data.is_null()
+    }
+}
+
+fn is_uid_available(uid: UID) -> bool {
+    uid.get_item_id().is_some()
+}
+
+fn art_fallback(uid: UID) -> Option<UID> {
+    match uid {
+        ICHIMONJI_DOUBLE => Some(ICHIMONJI),
+        PRAYING_STRIKES_EXORCISM => Some(PRAYING_STRIKES),
+        HIGH_MONK => Some(SENPO_LEAPING_KICKS),
+        SHADOWFALL => Some(SHADOWRUSH),
+        EMPOWERED_MORTAL_DRAW => Some(MORTAL_DRAW),
+        _ => None,
+    }
+}
+
+fn resolve_available_art_with<F>(uid: UID, available: &mut F) -> Option<UID>
+where
+    F: FnMut(UID) -> bool,
+{
+    let mut current = uid;
+    loop {
+        if available(current) {
+            return Some(current);
+        }
+        current = art_fallback(current)?;
+    }
+}
+
+fn filter_config_by_availability_with<F>(config: &mut Config, mut available: F)
+where
+    F: FnMut(UID) -> bool,
+{
+    let arts = std::mem::take(&mut config.arts);
+    config.arts = arts
+        .into_iter()
+        .filter_map(|(combo, uid)| resolve_available_art_with(uid, &mut available).map(|uid| (combo, uid)))
+        .collect();
+
+    let instant_arts = std::mem::take(&mut config.instant_arts);
+    config.instant_arts = instant_arts
+        .into_iter()
+        .filter_map(|(combo, uid)| resolve_available_art_with(uid, &mut available).map(|uid| (combo, uid)))
+        .collect();
+
+    config.tools.retain(|_, uid| available(*uid));
+    if config.tool_on_t.is_some_and(|uid| !available(uid)) {
+        config.tool_on_t = None;
+    }
+    if config.tool_on_q.is_some_and(|uid| !available(uid)) {
+        config.tool_on_q = None;
+    }
+    config.tool_multi_lock_secs.retain(|uid, _| available(*uid));
+}
+
+fn filter_config_by_availability(config: &mut Config) {
+    filter_config_by_availability_with(config, is_uid_available);
+}
 trait CombatArt: Sized {
     fn is_sheathed(self) -> bool;
     fn swapout_cooldown(self) -> Frames;
@@ -1199,6 +1461,25 @@ fn combat_art_slot_matches(art: UID) -> bool {
     }
 }
 
+fn combo_action_mask(combo: ArtCombo) -> u64 {
+    [combo.first(), combo.second()]
+        .into_iter()
+        .flatten()
+        .map(|token| match token {
+            ArtToken::Block => BLOCK,
+            ArtToken::Attack => ATTACK,
+            ArtToken::Interact => INTERACT,
+            ArtToken::Grapple => GRAPPLE,
+            ArtToken::Jump => JUMP,
+            // The sprint key also drives native dodge/step; swallow that companion
+            // action while the combo owns the sprint key.
+            ArtToken::Sprint => SPRINT | DODGE,
+            ArtToken::Crouch => CROUCH,
+            ArtToken::Up | ArtToken::Right | ArtToken::Down | ArtToken::Left => 0,
+        })
+        .fold(0, |mask, bit| mask | bit)
+}
+
 fn strip_input(input: &mut game::InputHandler, mask: u64) {
     input.action &= !mask;
     input.action_b &= !mask;
@@ -1265,4 +1546,64 @@ fn player_data() -> &'static game::PlayerData {
 
 fn inventory_data() -> &'static game::InventoryData {
     unsafe { player_data().inventory_data.as_ref().expect("`inventory_data` is null") }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_arts_and_tools_are_filtered_and_arts_fall_back() {
+        let mut config = Config::default();
+        let fallback_combo = ArtCombo::pair(ArtToken::Block, ArtToken::Attack);
+        let missing_combo = ArtCombo::pair(ArtToken::Interact, ArtToken::Attack);
+        let tool_combo = ToolCombo {
+            first: ToolFirst::Up,
+            tail: ToolTail::Use,
+        };
+
+        config.arts.insert(fallback_combo, ICHIMONJI_DOUBLE);
+        config.arts.insert(missing_combo, PRAYING_STRIKES_EXORCISM);
+        config.instant_arts.insert(ArtCombo::empty(), SAKURA_DANCE);
+        config.tools.insert(tool_combo, 78300);
+        config.tool_on_t = Some(70500);
+        config.tool_on_q = Some(70400);
+        config.tool_multi_lock_secs.insert(78300, 0.5);
+        config.tool_multi_lock_secs.insert(70500, 0.5);
+
+        let available = [ICHIMONJI, SAKURA_DANCE, 78300, 70400];
+        filter_config_by_availability_with(&mut config, |uid| available.contains(&uid));
+
+        assert_eq!(config.arts.get(&fallback_combo), Some(&ICHIMONJI));
+        assert!(!config.arts.contains_key(&missing_combo));
+        assert_eq!(config.instant_arts.get(&ArtCombo::empty()), Some(&SAKURA_DANCE));
+        assert_eq!(config.tools.get(&tool_combo), Some(&78300));
+        assert_eq!(config.tool_on_t, None);
+        assert_eq!(config.tool_on_q, Some(70400));
+        assert_eq!(config.tool_multi_lock_secs.len(), 1);
+        assert!(config.tool_multi_lock_secs.contains_key(&78300));
+    }
+
+    #[test]
+    fn available_upgraded_art_keeps_upgraded_uid() {
+        let mut config = Config::default();
+        let combo = ArtCombo::pair(ArtToken::Block, ArtToken::Attack);
+        config.arts.insert(combo, ICHIMONJI_DOUBLE);
+
+        filter_config_by_availability_with(&mut config, |uid| uid == ICHIMONJI_DOUBLE || uid == ICHIMONJI);
+
+        assert_eq!(config.arts.get(&combo), Some(&ICHIMONJI_DOUBLE));
+    }
+
+    #[test]
+    fn sprint_combo_mask_also_suppresses_native_dodge() {
+        let combo = ArtCombo::pair(ArtToken::Block, ArtToken::Sprint);
+        assert_eq!(combo_action_mask(combo), BLOCK | SPRINT | DODGE);
+
+        let combo = ArtCombo::pair(ArtToken::Block, ArtToken::Jump);
+        assert_eq!(combo_action_mask(combo), BLOCK | JUMP);
+
+        let combo = ArtCombo::pair(ArtToken::Block, ArtToken::Crouch);
+        assert_eq!(combo_action_mask(combo), BLOCK | CROUCH);
+    }
 }

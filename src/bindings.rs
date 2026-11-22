@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub const KEYBIND_FILE: &str = "battle_instinct_keybinds.json";
-const KEYBIND_VERSION: u32 = 1;
+const KEYBIND_VERSION: u32 = 2;
 
 pub const COMBAT_ART_UID_MIN: u32 = 5000;
 pub const COMBAT_ART_UID_MAX: u32 = 10000;
@@ -32,12 +32,15 @@ pub enum KeyToken {
     Attack,
     Interact,
     Grapple,
+    Jump,
+    Sprint,
+    Crouch,
     ProstheticUse,
     ProstheticSwitch,
 }
 
 impl KeyToken {
-    pub const ALL_NORMAL: [KeyToken; 8] = [
+    pub const ALL_NORMAL: [KeyToken; 11] = [
         KeyToken::Up,
         KeyToken::Right,
         KeyToken::Down,
@@ -46,6 +49,9 @@ impl KeyToken {
         KeyToken::Attack,
         KeyToken::Interact,
         KeyToken::Grapple,
+        KeyToken::Jump,
+        KeyToken::Sprint,
+        KeyToken::Crouch,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -57,6 +63,9 @@ impl KeyToken {
             KeyToken::Attack => "攻击",
             KeyToken::Interact => "交互",
             KeyToken::Grapple => "钩锁",
+            KeyToken::Jump => "跳跃",
+            KeyToken::Sprint => "冲刺",
+            KeyToken::Crouch => "下蹲",
             KeyToken::ProstheticUse => "忍具键",
             KeyToken::ProstheticSwitch => "忍具切换键",
         }
@@ -76,6 +85,9 @@ impl KeyToken {
             ArtToken::Attack => KeyToken::Attack,
             ArtToken::Interact => KeyToken::Interact,
             ArtToken::Grapple => KeyToken::Grapple,
+            ArtToken::Jump => KeyToken::Jump,
+            ArtToken::Sprint => KeyToken::Sprint,
+            ArtToken::Crouch => KeyToken::Crouch,
         }
     }
 
@@ -89,6 +101,9 @@ impl KeyToken {
             KeyToken::Attack => ArtToken::Attack,
             KeyToken::Interact => ArtToken::Interact,
             KeyToken::Grapple => ArtToken::Grapple,
+            KeyToken::Jump => ArtToken::Jump,
+            KeyToken::Sprint => ArtToken::Sprint,
+            KeyToken::Crouch => ArtToken::Crouch,
             KeyToken::ProstheticUse | KeyToken::ProstheticSwitch => return None,
         })
     }
@@ -103,6 +118,9 @@ impl KeyToken {
             ToolFirst::Attack => KeyToken::Attack,
             ToolFirst::Interact => KeyToken::Interact,
             ToolFirst::Grapple => KeyToken::Grapple,
+            ToolFirst::Jump => KeyToken::Jump,
+            ToolFirst::Sprint => KeyToken::Sprint,
+            ToolFirst::Crouch => KeyToken::Crouch,
             ToolFirst::Switch => KeyToken::ProstheticSwitch,
         }
     }
@@ -117,6 +135,9 @@ impl KeyToken {
             KeyToken::Attack => ToolFirst::Attack,
             KeyToken::Interact => ToolFirst::Interact,
             KeyToken::Grapple => ToolFirst::Grapple,
+            KeyToken::Jump => ToolFirst::Jump,
+            KeyToken::Sprint => ToolFirst::Sprint,
+            KeyToken::Crouch => ToolFirst::Crouch,
             KeyToken::ProstheticSwitch => ToolFirst::Switch,
             KeyToken::ProstheticUse => return None,
         })
@@ -130,6 +151,9 @@ impl KeyToken {
             ToolTail::Attack => KeyToken::Attack,
             ToolTail::Interact => KeyToken::Interact,
             ToolTail::Grapple => KeyToken::Grapple,
+            ToolTail::Jump => KeyToken::Jump,
+            ToolTail::Sprint => KeyToken::Sprint,
+            ToolTail::Crouch => KeyToken::Crouch,
         }
     }
 
@@ -141,6 +165,9 @@ impl KeyToken {
             KeyToken::Attack => ToolTail::Attack,
             KeyToken::Interact => ToolTail::Interact,
             KeyToken::Grapple => ToolTail::Grapple,
+            KeyToken::Jump => ToolTail::Jump,
+            KeyToken::Sprint => ToolTail::Sprint,
+            KeyToken::Crouch => ToolTail::Crouch,
             KeyToken::Up | KeyToken::Right | KeyToken::Down | KeyToken::Left => return None,
         })
     }
@@ -155,6 +182,9 @@ impl KeyToken {
             KeyToken::Attack => "Attack",
             KeyToken::Interact => "Interact",
             KeyToken::Grapple => "Grapple",
+            KeyToken::Jump => "Jump",
+            KeyToken::Sprint => "Sprint",
+            KeyToken::Crouch => "Crouch",
             KeyToken::ProstheticUse => "ProstheticUse",
             KeyToken::ProstheticSwitch => "ProstheticSwitch",
         }
@@ -170,6 +200,9 @@ impl KeyToken {
             "Attack" => KeyToken::Attack,
             "Interact" => KeyToken::Interact,
             "Grapple" => KeyToken::Grapple,
+            "Jump" => KeyToken::Jump,
+            "Sprint" => KeyToken::Sprint,
+            "Crouch" => KeyToken::Crouch,
             "ProstheticUse" => KeyToken::ProstheticUse,
             "ProstheticSwitch" => KeyToken::ProstheticSwitch,
             _ => return None,
@@ -210,6 +243,7 @@ pub struct BindingEntry {
 #[derive(Clone, Debug, Default)]
 pub struct UiBindings {
     pub entries: HashMap<u32, Vec<KeyToken>>,
+    pub disabled: HashSet<u32>,
 }
 
 impl UiBindings {
@@ -259,6 +293,8 @@ impl UiBindings {
             }
             rest = &after[end + 1..];
         }
+        out.disabled = parse_disabled_field(text);
+        out.entries.retain(|uid, _| !out.disabled.contains(uid));
         Ok(out)
     }
 
@@ -268,11 +304,28 @@ impl UiBindings {
 
     pub fn save(&self, cfg_path: &Path) -> Result<()> {
         let path = Self::path_for_cfg(cfg_path);
-        let mut uids: Vec<u32> = self.entries.keys().copied().collect();
+        let mut uids: Vec<u32> = self
+            .entries
+            .keys()
+            .copied()
+            .filter(|uid| !self.disabled.contains(uid))
+            .collect();
         uids.sort_unstable();
         let mut text = String::new();
         text.push_str("{\n");
         text.push_str(&format!("  \"version\": {KEYBIND_VERSION},\n"));
+        if !self.disabled.is_empty() {
+            let mut disabled: Vec<u32> = self.disabled.iter().copied().collect();
+            disabled.sort_unstable();
+            text.push_str("  \"disabled\": [");
+            for (index, uid) in disabled.iter().enumerate() {
+                if index > 0 {
+                    text.push(',');
+                }
+                text.push_str(&uid.to_string());
+            }
+            text.push_str("],\n");
+        }
         text.push_str("  \"bindings\": [\n");
         for (index, uid) in uids.iter().enumerate() {
             let keys = &self.entries[uid];
@@ -319,6 +372,38 @@ fn parse_uid_field(obj: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+fn parse_disabled_field(text: &str) -> HashSet<u32> {
+    let Some(pos) = text.find("\"disabled\"") else {
+        return HashSet::new();
+    };
+    let after = &text[pos + 10..];
+    let Some(open) = after.find('[') else {
+        return HashSet::new();
+    };
+    let Some(close) = after[open + 1..].find(']') else {
+        return HashSet::new();
+    };
+    let arr = &after[open + 1..open + 1 + close];
+    let mut out = HashSet::new();
+    let mut digits = String::new();
+    for ch in arr.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else if !digits.is_empty() {
+            if let Ok(uid) = digits.parse() {
+                out.insert(uid);
+            }
+            digits.clear();
+        }
+    }
+    if !digits.is_empty() {
+        if let Ok(uid) = digits.parse() {
+            out.insert(uid);
+        }
+    }
+    out
+}
+
 fn parse_keys_field(obj: &str) -> Result<Option<Vec<KeyToken>>> {
     let Some(pos) = obj.find("\"keys\"") else {
         return Ok(None);
@@ -362,8 +447,9 @@ impl BindingSnapshot {
         let mut entries = Vec::new();
         let mut seen = HashSet::<(u32, Vec<KeyToken>)>::new();
         let overridden: HashSet<u32> = ui.entries.keys().copied().collect();
+        let disabled = ui.disabled.clone();
         let mut push = |uid: u32, keys: Vec<KeyToken>| {
-            if overridden.contains(&uid) {
+            if overridden.contains(&uid) || disabled.contains(&uid) {
                 return;
             }
             let key = (uid, keys.clone());
@@ -405,6 +491,9 @@ impl BindingSnapshot {
             push(uid, vec![KeyToken::ProstheticSwitch]);
         }
         for (uid, keys) in &ui.entries {
+            if disabled.contains(uid) {
+                continue;
+            }
             entries.push(BindingEntry {
                 uid: *uid,
                 keys: keys.clone(),
@@ -433,6 +522,10 @@ impl BindingSnapshot {
 
     pub fn validate_candidate(&self, uid: u32, keys: &[KeyToken]) -> Result<(), BindingValidationError> {
         validate_candidate(&self.entries, uid, keys)
+    }
+
+    pub fn conflicting_entry(&self, uid: u32, keys: &[KeyToken]) -> Option<&BindingEntry> {
+        self.entries.iter().find(|entry| entry.uid != uid && entry.keys == keys)
     }
 }
 
@@ -500,7 +593,8 @@ pub fn load_effective_config(cfg_path: &Path) -> Result<Config> {
 }
 pub fn apply_to_config(config: &mut Config, ui: &UiBindings) -> Result<()> {
     let instant_uids: HashSet<u32> = config.instant_arts.values().copied().collect();
-    for uid in ui.entries.keys().copied() {
+    let managed_uids: HashSet<u32> = ui.entries.keys().chain(ui.disabled.iter()).copied().collect();
+    for uid in managed_uids {
         config.arts.retain(|_, value| *value != uid);
         config.instant_arts.retain(|_, value| *value != uid);
         config.tools.retain(|_, value| *value != uid);
@@ -513,6 +607,9 @@ pub fn apply_to_config(config: &mut Config, ui: &UiBindings) -> Result<()> {
     }
 
     for (uid, keys) in &ui.entries {
+        if ui.disabled.contains(uid) {
+            continue;
+        }
         match category_for_uid(*uid) {
             Some(BindingCategory::CombatArt) => {
                 if keys.len() != 2 {
@@ -553,7 +650,47 @@ pub fn save_ui_binding(cfg_path: &Path, snapshot: &BindingSnapshot, uid: u32, ke
         .validate_candidate(uid, &keys)
         .map_err(|error| anyhow!(error.to_string()))?;
     let mut ui = UiBindings::load(cfg_path)?;
+    ui.disabled.remove(&uid);
     ui.upsert(uid, keys);
+    ui.save(cfg_path)
+}
+
+/// Save the new binding and remove the binding(s) currently occupying the same
+/// key sequence. Config-sourced bindings are disabled through the JSON override
+/// file; UI-sourced bindings are removed. This keeps one key sequence mapped to
+/// exactly one UID.
+pub fn save_ui_binding_overwrite(
+    cfg_path: &Path,
+    snapshot: &BindingSnapshot,
+    uid: u32,
+    keys: Vec<KeyToken>,
+) -> Result<()> {
+    match snapshot.validate_candidate(uid, &keys) {
+        Ok(()) | Err(BindingValidationError::Occupied) => {}
+        Err(error) => return Err(anyhow!(error.to_string())),
+    }
+
+    let conflicts: Vec<(u32, BindingSource)> = snapshot
+        .entries
+        .iter()
+        .filter(|entry| entry.uid != uid && entry.keys == keys)
+        .map(|entry| (entry.uid, entry.source))
+        .collect();
+
+    let mut ui = UiBindings::load(cfg_path)?;
+    for (conflict_uid, source) in conflicts {
+        ui.entries.remove(&conflict_uid);
+        match source {
+            BindingSource::Cfg => {
+                ui.disabled.insert(conflict_uid);
+            }
+            BindingSource::UiOverride | BindingSource::None => {
+                ui.disabled.remove(&conflict_uid);
+            }
+        }
+    }
+    ui.disabled.remove(&uid);
+    ui.entries.insert(uid, keys);
     ui.save(cfg_path)
 }
 
@@ -631,6 +768,58 @@ mod tests {
     }
 
     #[test]
+    fn disabled_uids_are_parsed_and_excluded_from_snapshot() {
+        let config = Config::from("7100 test ee\n5200 test ea\n");
+        let ui = UiBindings::parse(
+            r#"{
+              "version": 2,
+              "disabled": [7100],
+              "bindings": [
+                {"uid":5200,"keys":["Interact","Attack"]}
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert!(ui.disabled.contains(&7100));
+        let snapshot = BindingSnapshot::from_config(Path::new("__missing_cfg__"), &config, &ui);
+        assert!(snapshot.current_entry(7100).is_none());
+        assert_eq!(snapshot.current_entry(5200).unwrap().source, BindingSource::UiOverride);
+    }
+
+    #[test]
+    fn overwrite_disables_cfg_conflict_and_keeps_new_binding() {
+        let dir = std::env::temp_dir().join(format!(
+            "battle-instinct-overwrite-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("battle_instinct.cfg");
+        std::fs::write(&cfg, "7100 test ee\n5200 test aa\n").unwrap();
+        let snapshot = BindingSnapshot::load(&cfg).unwrap();
+        save_ui_binding_overwrite(&cfg, &snapshot, 5200, vec![KeyToken::Interact, KeyToken::Interact]).unwrap();
+
+        let ui = UiBindings::load(&cfg).unwrap();
+        assert!(ui.disabled.contains(&7100));
+        assert_eq!(
+            ui.entries.get(&5200),
+            Some(&vec![KeyToken::Interact, KeyToken::Interact])
+        );
+
+        let reloaded = BindingSnapshot::load(&cfg).unwrap();
+        assert!(reloaded.current_entry(7100).is_none());
+        assert_eq!(reloaded.current_entry(5200).unwrap().source, BindingSource::UiOverride);
+
+        let mut effective = Config::open(&cfg).unwrap();
+        apply_to_config(&mut effective, &ui).unwrap();
+        assert!(!effective.arts.values().any(|uid| *uid == 7100));
+        assert!(effective.arts.values().any(|uid| *uid == 5200));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
     fn ui_override_replaces_existing_uid_binding() {
         let mut config = Config::from("7100 一字斩·二连 ee\n70500 手里剑 t-0s\n");
         let mut ui = UiBindings::default();
@@ -641,5 +830,35 @@ mod tests {
             && combo.first() == Some(ArtToken::Interact)
             && combo.second() == Some(ArtToken::Attack)));
         assert_eq!(config.tool_on_q, Some(70500));
+    }
+
+    #[test]
+    fn parses_and_applies_jump_sprint_crouch_tokens() {
+        let ui = UiBindings::parse(
+            r#"{
+              "version": 2,
+              "bindings": [
+                {"uid":5100,"keys":["Jump","Crouch"]},
+                {"uid":70500,"keys":["Sprint","ProstheticUse"]}
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(ui.entries.get(&5100), Some(&vec![KeyToken::Jump, KeyToken::Crouch]));
+        assert_eq!(
+            ui.entries.get(&70500),
+            Some(&vec![KeyToken::Sprint, KeyToken::ProstheticUse])
+        );
+
+        let mut config = Config::from("5100 art jc\n70500 tool st\n");
+        apply_to_config(&mut config, &ui).unwrap();
+        assert_eq!(config.art(ArtCombo::pair(ArtToken::Jump, ArtToken::Crouch)), Some(5100));
+        assert_eq!(
+            config.tool(ToolCombo {
+                first: ToolFirst::Sprint,
+                tail: ToolTail::Use
+            }),
+            Some(70500)
+        );
     }
 }

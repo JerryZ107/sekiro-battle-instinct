@@ -1,3 +1,4 @@
+use crate::binding_validation::BindingValidationError;
 use crate::bindings::{BindingCategory, BindingSnapshot, BindingSource, KeyToken};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub enum ModalAction {
     Dismiss,
     DiscardAndClose,
     ApplyMode(BindingMode),
+    OverwriteAndSave(Vec<KeyToken>),
 }
 
 #[derive(Clone, Debug)]
@@ -225,22 +227,16 @@ impl Editor {
         }
         let keys = self.keys();
         if let Err(error) = self.snapshot.validate_candidate(self.uid, &keys) {
+            // Occupied key sequences are a save-time decision. Keep the draft
+            // intact so the save button can offer overwrite/cancel.
+            if error == BindingValidationError::Occupied {
+                return;
+            }
             if let Some(slot) = self.slots.get_mut(clicked_index) {
                 *slot = None;
             }
             self.show_message(&error.to_string());
         }
-    }
-
-    pub fn validate_for_save(&self) -> Result<Vec<KeyToken>, String> {
-        if !self.complete() {
-            return Err("请先完成键位配置".into());
-        }
-        let keys = self.keys();
-        self.snapshot
-            .validate_candidate(self.uid, &keys)
-            .map_err(|error| error.to_string())?;
-        Ok(keys)
     }
 
     pub fn show_message(&mut self, message: &str) {
@@ -249,6 +245,15 @@ impl Editor {
             confirm: "确定".into(),
             cancel: None,
             action: ModalAction::Dismiss,
+        });
+    }
+
+    pub fn show_overwrite_confirm(&mut self, conflict_name: &str, keys: Vec<KeyToken>) {
+        self.modal = Some(Modal {
+            message: format!("当前键位已被「{conflict_name}」占用。\n覆盖后原键位将被清除，是否继续？"),
+            confirm: "覆盖原键位".into(),
+            cancel: Some("取消".into()),
+            action: ModalAction::OverwriteAndSave(keys),
         });
     }
 
@@ -323,8 +328,6 @@ pub fn grid_items(editor: &Editor) -> Vec<(String, Option<KeyToken>, bool)> {
             out.push(("忍具切换键".into(), Some(KeyToken::ProstheticSwitch), false));
         }
     }
-    out.push(("跳跃（暂未支持）".into(), None, true));
-    out.push(("下蹲·垫步（暂未支持）".into(), None, true));
     out
 }
 
@@ -507,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn conflict_rolls_back_only_the_clicked_slot() {
+    fn occupied_conflict_is_deferred_until_save() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
         e.snapshot.entries.push(BindingEntry {
             uid: 5200,
@@ -516,10 +519,28 @@ mod tests {
         });
         e.click_slot(0);
         e.click_key(KeyToken::Block);
-        assert_eq!(e.modal.as_ref().unwrap().message, "当前键位已被占用");
-        assert_eq!(e.slots, vec![None, Some(KeyToken::Attack)]);
+        assert!(e.modal.is_none());
+        assert_eq!(e.slots, vec![Some(KeyToken::Block), Some(KeyToken::Attack)]);
+        assert_eq!(
+            e.snapshot.validate_candidate(e.uid, &e.keys()).unwrap_err(),
+            BindingValidationError::Occupied
+        );
     }
 
+    #[test]
+    fn overwrite_modal_has_confirm_and_cancel_only() {
+        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
+        e.show_overwrite_confirm("other", vec![KeyToken::Interact, KeyToken::Interact]);
+        let modal = e.modal.as_ref().unwrap();
+        assert_eq!(modal.confirm, "覆盖原键位");
+        assert_eq!(modal.cancel.as_deref(), Some("取消"));
+        match &modal.action {
+            ModalAction::OverwriteAndSave(keys) => {
+                assert_eq!(keys, &vec![KeyToken::Interact, KeyToken::Interact]);
+            }
+            other => panic!("unexpected modal action: {other:?}"),
+        }
+    }
     #[test]
     fn full_slots_show_required_message() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
@@ -528,9 +549,24 @@ mod tests {
     }
 
     #[test]
-    fn save_rejects_incomplete_binding() {
+    fn incomplete_binding_is_not_saveable() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
         e.click_slot(1);
-        assert_eq!(e.validate_for_save().unwrap_err(), "请先完成键位配置");
+        assert!(!e.complete());
+    }
+
+    #[test]
+    fn new_action_keys_are_enabled_in_grid() {
+        let e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
+        let items = grid_items(&e);
+        for token in [KeyToken::Jump, KeyToken::Sprint, KeyToken::Crouch] {
+            let item = items.iter().find(|(_, t, _)| *t == Some(token)).unwrap();
+            assert!(!item.2, "{} should be enabled", token.label());
+        }
+        assert!(
+            !items
+                .iter()
+                .any(|(_, _, disabled)| *disabled && items.iter().any(|(label, _, _)| label.contains("暂未支持")))
+        );
     }
 }

@@ -63,11 +63,14 @@ Keys follow in-game actions (remaps still work). On a two-key match: swap art sl
 | `l` (left mouse) | Attack |
 | `e` | Interact / hold to beckon |
 | `f` | Grapple / hook |
+| `j` | Jump |
+| `s` | Sprint |
+| `c` | Crouch |
 | `↑↓←→` | Move (WASD / stick) |
 | `ee` | Double-tap interact |
 | `rl` / `re` / `er` / `el` / `rf` / `fr` … | Ordered two-key pairs; one line can hold several combos separated by `/`, e.g. `↓l/l↓` |
 
-`e`=interact and `f`=grapple both follow the in-game action bits, so keyboard remaps/gamepad work.
+`e`=interact, `f`=grapple, `j`=jump, `s`=sprint and `c`=crouch all follow the in-game action bits, so keyboard remaps/gamepad work.
 
 Default release binds (editable in cfg):
 
@@ -94,8 +97,10 @@ Default release binds (editable in cfg):
 - `q` = in-game "Switch Prosthetic"; `t` = "Use Prosthetic"
 - Bare `t`: unique **default** tool — press/hold to equip and inject use; other tools return to it afterward
 - Bare `q`: optional second one-key tool with the **same fire style as `t`** (not the return-default target)
+- Bindings for combat arts or prosthetics not yet unlocked in the current save are disabled automatically and re-enabled after learning them; no profile switching is needed.
+- `q` is always consumed as the MOD trigger key and never falls back to the native prosthetic switch. With no available `q` binding, pressing it does nothing.
 
-Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first keys — only tails. Also avoid `r`/`l` as first keys: block has high priority; attack easily thrusts. Prefer `↑q` / `→t`; never write `q↑`. After releasing the tail key, about **1s** of lock by default (override per bind with `-time`, e.g. `↑q-0.5s`): cannot switch tools; pressing `t`/`q` again refreshes the lock and keeps injecting (multi-hit). After lock ends, about **1.4s** later it returns to the bare-`t` default.
+Two-key prosthetic binds may start with a direction or `r/l/e/f/j/s/c`, and may end with `q/t` or `r/l/e/f/j/s/c` (directions cannot be the second key). Because both Use (`t`) and Switch (`q`) have default tools, they cannot be first keys — only tails. Also avoid `r`/`l` as first keys: block has high priority; attack easily thrusts. Prefer `↑q` / `→t`; never write `q↑`. After releasing the tail key, about **1s** of lock by default (override per bind with `-time`, e.g. `↑q-0.5s`): cannot switch tools; pressing `t`/`q` again refreshes the lock and keeps injecting (multi-hit). After lock ends, about **1.4s** later it returns to the bare-`t` default.
 
 Default release prosthetic binds:
 
@@ -113,7 +118,7 @@ Default release prosthetic binds:
 | Long Spark | `→t-0s` |
 | Finger Whistle / Divine Abduction bind | `eq-0s` |
 
-## Key configuration UI (phase 1)
+## Key configuration UI
 
 ![Key configuration UI](docs/keyconfig-ui.png)
 
@@ -122,7 +127,7 @@ Inside the in-game menu:
 - Select a combat art under **Skills -> Combat Arts** or a prosthetic under **Inventory -> Prosthetic Tools**.
 - Press `F` to open the right-hand key configuration page. Press `F` again or click **Cancel** to leave.
 - Combat arts are read directly from the skill-page category table. Prosthetics are read directly from the highlighted `InventoryUnit` row in the equipment page and resolved to a cfg UID. No MenuGaitem polling, OCR, screenshots, or color heuristics are used.
-- `F` is handled by a passive system keyboard-event hook. The callback only compares the `F` virtual key and only acts while the game menu is open; there is no screenshot capture or OCR.
+- `F` is handled by a passive system keyboard-event hook. The callback only compares the `F` virtual key and only acts while the game window is foreground and the game menu is open; there is no screenshot capture or OCR.
 - Supported modes:
   - Combat arts: fixed two-key trigger (first key + tail key).
   - Prosthetics: single-key or two-key trigger; an existing single-key binding is shown as-is.
@@ -130,7 +135,8 @@ Inside the in-game menu:
   - Prosthetic Use / Prosthetic Switch are valid only as the tail key of a two-key prosthetic bind. Single-key mode exposes only those two shortcut keys.
   - The page shows where the current binding came from: `cfg`, `UI override`, or `unconfigured`.
   - Full-slot, occupied-key, and specific invalid-key errors are distinct, together with an unsaved-change confirmation.
-- Jump and crouch/dodge are shown disabled in this phase.
+- If the key sequence is occupied when saving, the dialog offers **Overwrite** and **Cancel**. Overwrite disables the previous binding and saves the new one immediately.
+- Jump, sprint and crouch are enabled as normal keys and are written as `j` / `s` / `c` in cfg. Their action edges still come from the game action bits; for jump/crouch, the held state is learned from the physical key that produced the edge so sustained injection does not depend on hard-coded defaults.
 - Saving applies immediately and hot-reloads on the next input frame; no game restart is required.
 
 UI-owned bindings are stored separately in:
@@ -139,7 +145,7 @@ UI-owned bindings are stored separately in:
 battle_instinct_keybinds.json
 ```
 
-The file only overrides UI-managed bindings. It does not rewrite `battle_instinct.cfg` and does not replace any `menu/*.gfx` file. Advanced cfg properties such as instant arts and prosthetic multi-hit lock remain intact. Delete the JSON file to fall back to the original cfg.
+The file only overrides UI-managed bindings. It does not rewrite `battle_instinct.cfg` and does not replace any `menu/*.gfx` file. When an occupied key is overwritten, the replaced cfg UID is recorded in the JSON `disabled` list. Advanced cfg properties such as instant arts and prosthetic multi-hit lock remain intact. Delete the JSON file to fall back to the original cfg.
 
 > The main-menu dialog hook validates the Sekiro 1.6.0.0 function signature. On a version mismatch, hook installation fails explicitly instead of falling back to OCR or guessing.
 

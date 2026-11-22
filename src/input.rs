@@ -15,6 +15,9 @@ pub enum ArtToken {
     Attack,
     Interact,
     Grapple,
+    Jump,
+    Sprint,
+    Crouch,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -73,6 +76,9 @@ pub struct ArtComboWindow {
     attack_down: bool,
     interact_down: bool,
     grapple_down: bool,
+    jump_down: bool,
+    sprint_down: bool,
+    crouch_down: bool,
     max_age_rl: u16,
 }
 
@@ -96,6 +102,9 @@ impl ArtComboWindow {
             attack_down: false,
             interact_down: false,
             grapple_down: false,
+            jump_down: false,
+            sprint_down: false,
+            crouch_down: false,
             max_age_rl,
         }
     }
@@ -110,6 +119,9 @@ impl ArtComboWindow {
         attack: bool,
         interact: bool,
         grapple: bool,
+        jump: bool,
+        sprint: bool,
+        crouch: bool,
     ) {
         self.completed_this_frame = None;
         let mut updated = false;
@@ -145,6 +157,21 @@ impl ArtComboWindow {
             updated |= self.push(ArtToken::Grapple);
         }
         self.grapple_down = grapple;
+
+        if jump && !self.jump_down {
+            updated |= self.push(ArtToken::Jump);
+        }
+        self.jump_down = jump;
+
+        if sprint && !self.sprint_down {
+            updated |= self.push(ArtToken::Sprint);
+        }
+        self.sprint_down = sprint;
+
+        if crouch && !self.crouch_down {
+            updated |= self.push(ArtToken::Crouch);
+        }
+        self.crouch_down = crouch;
 
         if attack && !self.attack_down {
             updated |= self.push(ArtToken::Attack);
@@ -232,6 +259,9 @@ impl ArtComboWindow {
             ArtToken::Attack => self.attack_down,
             ArtToken::Interact => self.interact_down,
             ArtToken::Grapple => self.grapple_down,
+            ArtToken::Jump => self.jump_down,
+            ArtToken::Sprint => self.sprint_down,
+            ArtToken::Crouch => self.crouch_down,
         }
     }
 
@@ -251,7 +281,9 @@ mod test {
     fn test_art_button_pairs() {
         // same-frame rl
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, true, true, false, false);
+        w.tick(
+            false, false, false, false, true, true, false, false, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
@@ -259,7 +291,9 @@ mod test {
 
         // same-frame r+e
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, true, false, true, false);
+        w.tick(
+            false, false, false, false, true, false, true, false, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Block, ArtToken::Interact))
@@ -267,7 +301,9 @@ mod test {
 
         // same-frame e+l
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, false, true, true, false);
+        w.tick(
+            false, false, false, false, false, true, true, false, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Interact, ArtToken::Attack))
@@ -275,9 +311,13 @@ mod test {
 
         // sequential e+r
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, false, false, true, false);
+        w.tick(
+            false, false, false, false, false, false, true, false, false, false, false,
+        );
         assert!(w.take_completed().is_none());
-        w.tick(false, false, false, false, true, false, true, false);
+        w.tick(
+            false, false, false, false, true, false, true, false, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Interact, ArtToken::Block))
@@ -285,11 +325,17 @@ mod test {
 
         // sequential rl with block held until attack
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, true, false, false, false);
+        w.tick(
+            false, false, false, false, true, false, false, false, false, false, false,
+        );
         for _ in 0..4 {
-            w.tick(false, false, false, false, true, false, false, false);
+            w.tick(
+                false, false, false, false, true, false, false, false, false, false, false,
+            );
         }
-        w.tick(false, false, false, false, true, true, false, false);
+        w.tick(
+            false, false, false, false, true, true, false, false, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
@@ -297,30 +343,48 @@ mod test {
 
         // block released before attack: no rl
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, true, false, false, false);
+        w.tick(
+            false, false, false, false, true, false, false, false, false, false, false,
+        );
         for _ in 0..6 {
-            w.tick(false, false, false, false, false, false, false, false);
+            w.tick(
+                false, false, false, false, false, false, false, false, false, false, false,
+            );
         }
-        w.tick(false, false, false, false, false, true, false, false);
+        w.tick(
+            false, false, false, false, false, true, false, false, false, false, false,
+        );
         assert!(w.take_completed().is_none());
 
         // hold block past rl window then attack: no rl
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, true, false, false, false);
+        w.tick(
+            false, false, false, false, true, false, false, false, false, false, false,
+        );
         for _ in 0..6 {
-            w.tick(false, false, false, false, true, false, false, false);
+            w.tick(
+                false, false, false, false, true, false, false, false, false, false, false,
+            );
         }
-        w.tick(false, false, false, false, true, true, false, false);
+        w.tick(
+            false, false, false, false, true, true, false, false, false, false, false,
+        );
         assert!(w.take_completed().is_none());
         assert!(w.take_late_rl_rejected());
 
         // within rl window while both held
         let mut w = ArtComboWindow::new(18);
-        w.tick(false, false, false, false, true, false, false, false);
+        w.tick(
+            false, false, false, false, true, false, false, false, false, false, false,
+        );
         for _ in 0..10 {
-            w.tick(false, false, false, false, true, false, false, false);
+            w.tick(
+                false, false, false, false, true, false, false, false, false, false, false,
+            );
         }
-        w.tick(false, false, false, false, true, true, false, false);
+        w.tick(
+            false, false, false, false, true, true, false, false, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Block, ArtToken::Attack))
@@ -328,9 +392,13 @@ mod test {
 
         // The grapple key is an independent token and can form the same pairs as interact.
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, false, false, false, true);
+        w.tick(
+            false, false, false, false, false, false, false, true, false, false, false,
+        );
         assert!(w.take_completed().is_none());
-        w.tick(false, false, false, false, false, true, false, true);
+        w.tick(
+            false, false, false, false, false, true, false, true, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Grapple, ArtToken::Attack))
@@ -338,12 +406,59 @@ mod test {
 
         // f then r
         let mut w = ArtComboWindow::new(6);
-        w.tick(false, false, false, false, false, false, false, true);
-        w.tick(false, false, false, false, true, false, false, true);
+        w.tick(
+            false, false, false, false, false, false, false, true, false, false, false,
+        );
+        w.tick(
+            false, false, false, false, true, false, false, true, false, false, false,
+        );
         assert_eq!(
             w.take_completed(),
             Some(ArtCombo::pair(ArtToken::Grapple, ArtToken::Block))
         );
         assert!(w.token_held(ArtToken::Grapple));
+    }
+
+    #[test]
+    fn test_jump_sprint_crouch_tokens() {
+        let mut w = ArtComboWindow::new(18);
+        w.tick(
+            false, false, false, false, false, false, false, false, true, false, false,
+        );
+        assert!(w.token_held(ArtToken::Jump));
+        assert!(w.take_completed().is_none());
+        w.tick(
+            false, false, false, false, false, true, false, false, true, false, false,
+        );
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Jump, ArtToken::Attack))
+        );
+
+        let mut w = ArtComboWindow::new(18);
+        w.tick(
+            false, false, false, false, false, false, false, false, false, true, false,
+        );
+        assert!(w.token_held(ArtToken::Sprint));
+        w.tick(
+            false, false, false, false, false, true, false, false, false, true, false,
+        );
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Sprint, ArtToken::Attack))
+        );
+
+        let mut w = ArtComboWindow::new(18);
+        w.tick(
+            false, false, false, false, false, false, false, false, false, false, true,
+        );
+        assert!(w.token_held(ArtToken::Crouch));
+        w.tick(
+            false, false, false, false, false, true, false, false, false, false, true,
+        );
+        assert_eq!(
+            w.take_completed(),
+            Some(ArtCombo::pair(ArtToken::Crouch, ArtToken::Attack))
+        );
     }
 }

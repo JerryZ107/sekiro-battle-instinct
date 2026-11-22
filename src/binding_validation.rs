@@ -116,4 +116,11 @@ mod tests {
         assert!(validate_candidate(&[], 7100, &[KeyToken::Interact]).is_err());
         assert!(validate_candidate(&[], 7100, &[KeyToken::Interact, KeyToken::ProstheticUse]).is_err());
     }
+
+    #[test]
+    fn jump_sprint_crouch_are_normal_and_prosthetic_tail_keys() {
+        assert!(validate_candidate(&[], 7100, &[KeyToken::Jump, KeyToken::Crouch]).is_ok());
+        assert!(validate_candidate(&[], 70500, &[KeyToken::Sprint, KeyToken::ProstheticUse]).is_ok());
+        assert!(validate_candidate(&[], 70500, &[KeyToken::Crouch, KeyToken::Jump]).is_ok());
+    }
 }

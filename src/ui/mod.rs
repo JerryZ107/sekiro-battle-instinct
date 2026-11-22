@@ -12,17 +12,18 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::Gdi::{ClientToScreen, InvalidateRect, UpdateWindow},
-        System::LibraryLoader::GetModuleHandleW,
+        System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentProcessId},
         UI::{
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, SetThreadDpiAwarenessContext},
             Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE, VK_F},
             WindowsAndMessaging::{
                 CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect,
-                GetForegroundWindow, GetMessageW, GetWindowLongPtrW, HWND_TOPMOST, IsWindowVisible, KBDLLHOOKSTRUCT,
-                MB_ICONWARNING, MB_OK, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
-                SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow,
-                TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-                WM_LBUTTONDOWN, WM_PAINT, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+                GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HWND_TOPMOST,
+                IsWindowVisible, KBDLLHOOKSTRUCT, MB_ICONWARNING, MB_OK, MessageBoxW, PostMessageW, PostQuitMessage,
+                RegisterClassW, SW_HIDE, SW_SHOW, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP,
+                WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT, WM_SYSKEYDOWN, WNDCLASSW,
+                WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
             },
         },
     },
@@ -30,6 +31,7 @@ use windows::{
 };
 
 use crate::{
+    binding_validation::BindingValidationError,
     bindings::{self, BindingSnapshot},
     game_menu, menu_probe,
 };
@@ -59,6 +61,17 @@ pub fn start(cfg_path: PathBuf) {
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
+        // The overlay hotkey is only valid while the game (or its own overlay)
+        // owns the foreground window. Otherwise a background F keypress in a
+        // browser/chat window would still read stale menu memory and open it.
+        let foreground = unsafe { GetForegroundWindow() };
+        let mut foreground_pid = 0u32;
+        unsafe {
+            let _ = GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
+        }
+        if foreground_pid != unsafe { GetCurrentProcessId() } {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
         let keyboard = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         if keyboard.vkCode == VK_F.0 as u32 {
             let hwnd = HWND(OVERLAY_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
@@ -339,6 +352,10 @@ fn handle_click(hwnd: HWND, x: i32, y: i32) {
                             return;
                         }
                         Some(ModalAction::ApplyMode(mode)) => editor.apply_mode(mode),
+                        Some(ModalAction::OverwriteAndSave(keys)) => {
+                            save_editor_keys(hwnd, keys, true);
+                            return;
+                        }
                         None => {}
                     }
                     invalidate(hwnd);
@@ -401,19 +418,54 @@ fn save_editor(hwnd: HWND) {
     let Some(editor) = overlay.editor.as_mut() else {
         return;
     };
-    let keys = match editor.validate_for_save() {
-        Ok(keys) => keys,
-        Err(message) => {
-            editor.show_message(&message);
+    if !editor.complete() {
+        editor.show_message("请先完成键位配置");
+        invalidate(hwnd);
+        return;
+    }
+
+    let keys = editor.keys();
+    match editor.snapshot.validate_candidate(editor.uid, &keys) {
+        Ok(()) => save_editor_keys(hwnd, keys, false),
+        Err(BindingValidationError::Occupied) => {
+            let conflict_name = editor
+                .snapshot
+                .conflicting_entry(editor.uid, &keys)
+                .map(|entry| {
+                    editor
+                        .snapshot
+                        .name(entry.uid)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| format!("UID {}", entry.uid))
+                })
+                .unwrap_or_else(|| "其他技能/忍具".to_string());
+            editor.show_overwrite_confirm(&conflict_name, keys);
             invalidate(hwnd);
-            return;
         }
+        Err(error) => {
+            editor.show_message(&error.to_string());
+            invalidate(hwnd);
+        }
+    }
+}
+
+fn save_editor_keys(hwnd: HWND, keys: Vec<crate::bindings::KeyToken>, overwrite: bool) {
+    let Some(overlay) = overlay_mut(hwnd) else {
+        return;
     };
-    match bindings::save_ui_binding(&overlay.cfg_path, &editor.snapshot, editor.uid, keys) {
+    let Some(editor) = overlay.editor.as_mut() else {
+        return;
+    };
+    let result = if overwrite {
+        bindings::save_ui_binding_overwrite(&overlay.cfg_path, &editor.snapshot, editor.uid, keys)
+    } else {
+        bindings::save_ui_binding(&overlay.cfg_path, &editor.snapshot, editor.uid, keys)
+    };
+    match result {
         Ok(()) => {
             bindings::request_reload();
             log::warn!(
-                "ui: saved uid={} name={} mode={:?}",
+                "ui: saved uid={} name={} mode={:?} overwrite={overwrite}",
                 editor.uid,
                 editor.name,
                 editor.mode
