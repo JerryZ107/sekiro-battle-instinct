@@ -91,14 +91,14 @@ See [GitHub Releases](https://github.com/JerryZ107/sekiro-battle-instinct/releas
 
 ## 3. Credits
 
-- **dec32**: original author of Battle Instinct — this MOD is based on their code and architecture
-- **Katalash**: original author of ModEngine — their DLL and configuration are bundled with the release
-- The param package comes from the local **Sekiro: Resurrection** installation and is bundled only as a Paper Doll Drift param override
-- **Tmsrise**: Sekiro Weapon Wheel
-- **ReaperAnon**: Sekiro Hotkey System
-- **Yuzheng Wu**: testing and improvements to the original input feel
+- **[dec32](https://github.com/dec32)**: [Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) original author — this MOD is based on their code and architecture
+- **[Katalash](https://github.com/katalash)**: [ModEngine](https://github.com/katalash/ModEngine) original author — DLL and config are bundled in the release
+- Param package taken from the local **Sekiro: Resurrection** installation, bundled only as the Paper Doll Drift param override
+- [Tmsrise](https://github.com/tmsrise): [Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
+- [ReaperAnon](https://github.com/ReaperAnon): [Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
+- [Yuzheng Wu](https://github.com/Persona-woo): input-feel testing and improvements on the original
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components and files.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components.
 
 ## Disclaimer
 

@@ -91,12 +91,12 @@
 
 ## 三、感谢
 
-- **dec32**：Battle Instinct 原作者——本 MOD 基于其代码与架构
-- **Katalash**：ModEngine 原作者——发行包内附带其 DLL 与配置
+- **[dec32](https://github.com/dec32)**：[Battle Instinct](https://github.com/dec32/sekiro-battle-instinct) 原作者——本 MOD 基于其代码与架构
+- **[Katalash](https://github.com/katalash)**：[ModEngine](https://github.com/katalash/ModEngine) 原作者——发行包内附带其 DLL 与配置
 - 参数包来自本机安装的 **Sekiro: Resurrection**，仅作为纸人漂流 param 覆盖文件随包提供
-- **Tmsrise**：Sekiro Weapon Wheel
-- **ReaperAnon**：Sekiro Hotkey System
-- **Yuzheng Wu**：原版输入手感测试与改进
+- [Tmsrise](https://github.com/tmsrise)：[Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
+- [ReaperAnon](https://github.com/ReaperAnon)：[Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
+- [Yuzheng Wu](https://github.com/Persona-woo)：原版输入手感测试与改进
 
 第三方组件与打包文件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
