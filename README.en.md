@@ -1,10 +1,8 @@
 # Paper Jutsu
 
-<h3>所谓纸人术，乃是生死间淬炼之本能，于战斗中不断磨砺的獠牙。<br>An instinct tempered between life and death. A fang honed in battle.</h3>
+<h4>所谓纸人术，乃是生死间淬炼之本能，于战斗中不断磨砺的獠牙。<br>An instinct tempered between life and death. A fang honed in battle.</h4>
 
 [简体中文](README.md) | **English**
-
-![Paper Jutsu demo](demo.gif)
 
 A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings.
 
