@@ -1,4 +1,4 @@
-# 纸人术（双键搓招版）
+# 纸人术
 
 **简体中文** | [English](README.en.md)
 
@@ -79,10 +79,10 @@
 
 | 版本 | 下载链接 |
 | --- | --- |
-| 简体中文版 | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-battle-instinct/releases/download/nightly/battle-instinct_zh.zip) |
-| English version | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-battle-instinct/releases/download/nightly/battle-instinct_en.zip) |
+| 简体中文版 | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_zh.zip) |
+| English version | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_en.zip) |
 
-更多版本与更新请见 [GitHub Releases](https://github.com/JerryZ107/sekiro-battle-instinct/releases)。
+更多版本与更新请见 [GitHub Releases](https://github.com/JerryZ107/sekiro-paper-jutsu/releases)。
 
 ### 安装
 

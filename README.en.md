@@ -1,4 +1,4 @@
-# Paper Jutsu (Two-Key Combat-Arts Edition)
+# Paper Jutsu
 
 [简体中文](README.md) | **English**
 
@@ -79,10 +79,10 @@ When emblems are insufficient, the following fallback rules apply:
 
 | Edition | Download |
 | --- | --- |
-| Simplified Chinese | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-battle-instinct/releases/download/nightly/battle-instinct_zh.zip) |
-| English | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-battle-instinct/releases/download/nightly/battle-instinct_en.zip) |
+| Simplified Chinese | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_zh.zip) |
+| English | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_en.zip) |
 
-See [GitHub Releases](https://github.com/JerryZ107/sekiro-battle-instinct/releases) for all versions and updates.
+See [GitHub Releases](https://github.com/JerryZ107/sekiro-paper-jutsu/releases) for all versions and updates.
 
 ### Installation
 
