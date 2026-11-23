@@ -81,10 +81,10 @@ pub fn open() {
             let _ = SetStdHandle(STD_ERROR_HANDLE, nul);
         }
 
-        let title: Vec<u16> = "Battle Instinct — 加载中".encode_utf16().chain(Some(0)).collect();
+        let title: Vec<u16> = "纸人术 — 加载中".encode_utf16().chain(Some(0)).collect();
         let _ = SetConsoleTitleW(PCWSTR::from_raw(title.as_ptr()));
     }
-    print_line("Battle Instinct 正在加载…");
+    print_line("纸人术正在加载…");
 }
 
 pub fn print_line(msg: &str) {

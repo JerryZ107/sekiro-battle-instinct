@@ -239,7 +239,7 @@ fn modify(path: &Path) {
 
         ui::start(ui_cfg_path)?;
         MinHook::enable_all_hooks()?;
-        log::warn!("Battle Instinct hook enabled.");
+        log::warn!("Paper Jutsu hook enabled.");
         Ok::<_, anyhow::Error>(())
     })();
 

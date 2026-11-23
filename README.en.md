@@ -1,8 +1,8 @@
-# Battle Instinct (Two-Key Combat-Arts Edition)
+# Paper Jutsu (Two-Key Combat-Arts Edition)
 
 [简体中文](README.md) | **English**
 
-![Battle Instinct demo](demo.gif)
+![Paper Jutsu demo](demo.gif)
 
 A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings.
 

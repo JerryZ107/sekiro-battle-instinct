@@ -229,7 +229,7 @@ fn run_ui_thread() -> Result<()> {
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             WINDOW_CLASS,
-            w!("Battle Instinct UI Controller"),
+            w!("Paper Jutsu UI Controller"),
             WS_POPUP,
             0,
             0,

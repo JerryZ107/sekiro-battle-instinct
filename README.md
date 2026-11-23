@@ -1,8 +1,8 @@
-# Battle Instinct（战斗本能）（双键搓招版）
+# 纸人术（双键搓招版）
 
 **简体中文** | [English](README.en.md)
 
-![Battle Instinct 演示](demo.gif)
+![纸人术演示](demo.gif)
 
 基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 的个人衍生版，主打双键搓招与更自由的键位配置。
 

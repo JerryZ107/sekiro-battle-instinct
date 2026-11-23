@@ -19,7 +19,7 @@ pub fn on_early_attach(dir: PathBuf) {
     load_console::print_line("正在扫描游戏目录 MOD…");
     list_detected_mod_dlls(&dir);
     load_console::print_line("Mod Engine 正在后台加载（其调试输出不会显示在此窗口）");
-    load_console::print_line("等待 dinput8.dll 注入 Battle Instinct…");
+    load_console::print_line("等待 dinput8.dll 注入 纸人术…");
 }
 
 /// Called from `dinput8.dll` when DirectInput is first loaded.
@@ -32,7 +32,7 @@ pub fn on_dinput_attach(dir: &Path) {
         load_console::print_line("正在扫描游戏目录 MOD…");
         list_detected_mod_dlls(dir);
     }
-    load_console::print_line("Battle Instinct (dinput8.dll) 已注入，开始初始化…");
+    load_console::print_line("纸人术 (dinput8.dll) 已注入，开始初始化…");
 }
 
 pub fn list_detected_mod_dlls(dir: &Path) {
@@ -75,11 +75,11 @@ pub fn list_detected_mod_dlls(dir: &Path) {
 fn mod_dll_note(name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     if lower == "dinput8.dll" {
-        "Battle Instinct 入口"
+        "纸人术入口"
     } else if lower.contains("modengine") {
         "Mod Engine"
     } else if lower == "version.dll" {
-        "Battle Instinct 预加载"
+        "纸人术预加载"
     } else if lower.starts_with("dinput8_") {
         "链式兼容 MOD"
     } else {
