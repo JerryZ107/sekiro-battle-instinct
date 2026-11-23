@@ -82,6 +82,8 @@ When emblems are insufficient, the following fallback rules apply:
 | Simplified Chinese | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_zh.zip) |
 | English | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_en.zip) |
 
+The English release includes an English in-game key configuration UI. Set `# ui language: zh` or `# ui language: en` at the top of `battle_instinct.cfg` to switch the UI language.
+
 See [GitHub Releases](https://github.com/JerryZ107/sekiro-paper-jutsu/releases) for all versions and updates.
 
 ### Installation

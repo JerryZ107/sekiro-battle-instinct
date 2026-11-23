@@ -82,6 +82,8 @@
 | 简体中文版 | [battle-instinct_zh.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_zh.zip) |
 | English version | [battle-instinct_en.zip](https://github.com/JerryZ107/sekiro-paper-jutsu/releases/download/nightly/battle-instinct_en.zip) |
 
+英文发行包内含英文版游戏内键位配置 UI。可在 `battle_instinct.cfg` 顶部设置 `# ui language: zh` 或 `# ui language: en` 切换界面语言。
+
 更多版本与更新请见 [GitHub Releases](https://github.com/JerryZ107/sekiro-paper-jutsu/releases)。
 
 ### 安装

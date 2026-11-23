@@ -1,3 +1,4 @@
+use super::i18n;
 use crate::binding_validation::BindingValidationError;
 use crate::bindings::{BindingCategory, BindingSnapshot, BindingSource, KeyToken};
 
@@ -10,8 +11,8 @@ pub enum BindingMode {
 impl BindingMode {
     pub fn label(self) -> &'static str {
         match self {
-            BindingMode::Single => "单键触发",
-            BindingMode::Two => "双键触发",
+            BindingMode::Single => i18n::pick("单键触发", "Single-key"),
+            BindingMode::Two => i18n::pick("双键触发", "Two-key"),
         }
     }
 }
@@ -115,16 +116,16 @@ impl Editor {
 
     pub fn category_label(&self) -> &'static str {
         match self.category {
-            BindingCategory::CombatArt => "流派招式",
-            BindingCategory::Prosthetic => "义手忍具",
+            BindingCategory::CombatArt => i18n::category_label(BindingCategory::CombatArt),
+            BindingCategory::Prosthetic => i18n::category_label(BindingCategory::Prosthetic),
         }
     }
 
     pub fn source_label(&self) -> &'static str {
         match self.source {
-            BindingSource::Cfg => "来源：cfg",
-            BindingSource::UiOverride => "来源：UI 覆盖",
-            BindingSource::None => "来源：未配置",
+            BindingSource::Cfg => i18n::source_label(BindingSource::Cfg),
+            BindingSource::UiOverride => i18n::source_label(BindingSource::UiOverride),
+            BindingSource::None => i18n::source_label(BindingSource::None),
         }
     }
 
@@ -147,9 +148,13 @@ impl Editor {
         }
         if self.slots.get(1).and_then(|v| *v).is_some() {
             self.modal = Some(Modal {
-                message: "切换为单键触发后，第2键将被清空，是否继续？".into(),
-                confirm: "确认切换".into(),
-                cancel: Some("取消".into()),
+                message: i18n::pick(
+                    "切换为单键触发后，第2键将被清空，是否继续？",
+                    "Switching to single-key mode will clear the second key. Continue?",
+                )
+                .into(),
+                confirm: i18n::pick("确认切换", "Switch").into(),
+                cancel: Some(i18n::pick("取消", "Cancel").into()),
                 action: ModalAction::ApplyMode(BindingMode::Single),
             });
         } else {
@@ -188,23 +193,35 @@ impl Editor {
 
     pub fn click_key(&mut self, token: KeyToken) {
         if self.slots.iter().all(Option::is_some) {
-            self.show_message("键位已满，请点击配置区键位去除");
+            self.show_message(i18n::pick(
+                "键位已满，请点击配置区键位去除",
+                "Key slots are full. Click a slot in the configuration area to remove it.",
+            ));
             return;
         }
         if self.category == BindingCategory::CombatArt && token.is_prosthetic() {
-            self.show_message("流派招式不能使用忍具键/忍具切换键");
+            self.show_message(i18n::pick(
+                "流派招式不能使用忍具键/忍具切换键",
+                "Combat arts cannot use Use Tool or Switch Tool keys.",
+            ));
             return;
         }
         if token.is_prosthetic() && self.mode == BindingMode::Two {
             if self.slots.first().is_some_and(Option::is_none) {
-                self.show_message("忍具键/忍具切换键只能作为尾键");
+                self.show_message(i18n::pick(
+                    "忍具键/忍具切换键只能作为尾键",
+                    "Use Tool / Switch Tool can only be the second key.",
+                ));
                 return;
             }
             if self.slots.get(1).is_some_and(Option::is_none) {
                 self.slots[1] = Some(token);
                 self.check_after_edit(1);
             } else {
-                self.show_message("键位已满，请点击配置区键位去除");
+                self.show_message(i18n::pick(
+                    "键位已满，请点击配置区键位去除",
+                    "Key slots are full. Click a slot in the configuration area to remove it.",
+                ));
             }
             return;
         }
@@ -215,7 +232,10 @@ impl Editor {
             self.slots[index] = Some(token);
             self.check_after_edit(index);
         } else {
-            self.show_message("键位已满，请点击配置区键位去除");
+            self.show_message(i18n::pick(
+                "键位已满，请点击配置区键位去除",
+                "Key slots are full. Click a slot in the configuration area to remove it.",
+            ));
         }
     }
 
@@ -236,14 +256,14 @@ impl Editor {
             if let Some(slot) = self.slots.get_mut(clicked_index) {
                 *slot = None;
             }
-            self.show_message(&error.to_string());
+            self.show_message(&i18n::validation_error(error));
         }
     }
 
     pub fn show_message(&mut self, message: &str) {
         self.modal = Some(Modal {
             message: message.into(),
-            confirm: "确定".into(),
+            confirm: i18n::pick("确定", "OK").into(),
             cancel: None,
             action: ModalAction::Dismiss,
         });
@@ -251,9 +271,15 @@ impl Editor {
 
     pub fn show_overwrite_confirm(&mut self, conflict_name: &str, keys: Vec<KeyToken>) {
         self.modal = Some(Modal {
-            message: format!("当前键位已被「{conflict_name}」占用。\n覆盖后原键位将被清除，是否继续？"),
-            confirm: "覆盖原键位".into(),
-            cancel: Some("取消".into()),
+            message: if i18n::is_en() {
+                format!(
+                    "That key is already used by \"{conflict_name}\".\nThe existing binding will be cleared if you overwrite. Continue?"
+                )
+            } else {
+                format!("当前键位已被「{conflict_name}」占用。\n覆盖后原键位将被清除，是否继续？")
+            },
+            confirm: i18n::pick("覆盖原键位", "Overwrite").into(),
+            cancel: Some(i18n::pick("取消", "Cancel").into()),
             action: ModalAction::OverwriteAndSave(keys),
         });
     }
@@ -261,9 +287,13 @@ impl Editor {
     pub fn request_close(&mut self) {
         if self.is_dirty() {
             self.modal = Some(Modal {
-                message: "有未保存的键位修改，是否放弃？".into(),
-                confirm: "放弃修改".into(),
-                cancel: Some("继续编辑".into()),
+                message: i18n::pick(
+                    "有未保存的键位修改，是否放弃？",
+                    "You have unsaved key changes. Discard them?",
+                )
+                .into(),
+                confirm: i18n::pick("放弃修改", "Discard").into(),
+                cancel: Some(i18n::pick("继续编辑", "Keep Editing").into()),
                 action: ModalAction::DiscardAndClose,
             });
         }
@@ -274,9 +304,13 @@ impl Editor {
     /// using the reset path.
     pub fn request_reset(&mut self) {
         self.modal = Some(Modal {
-            message: "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请点击首键或尾键的对应键位以移除）".into(),
-            confirm: "确认重置".into(),
-            cancel: Some("取消".into()),
+            message: i18n::pick(
+                "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请点击首键或尾键的对应键位以移除）",
+                "Reset every trigger key for this combat art / prosthetic?\n\n(To change one key, click the first or second key slot to remove it first.)",
+            )
+            .into(),
+            confirm: i18n::pick("确认重置", "Reset").into(),
+            cancel: Some(i18n::pick("取消", "Cancel").into()),
             action: ModalAction::ResetAndClose,
         });
     }
@@ -321,25 +355,45 @@ pub struct Layout {
 pub fn grid_items(editor: &Editor) -> Vec<(String, Option<KeyToken>, bool)> {
     let mut out = Vec::new();
     if editor.mode == BindingMode::Single {
-        out.push(("忍具键".into(), Some(KeyToken::ProstheticUse), false));
-        out.push(("忍具切换键".into(), Some(KeyToken::ProstheticSwitch), false));
+        out.push((
+            i18n::key_label(KeyToken::ProstheticUse).into(),
+            Some(KeyToken::ProstheticUse),
+            false,
+        ));
+        out.push((
+            i18n::key_label(KeyToken::ProstheticSwitch).into(),
+            Some(KeyToken::ProstheticSwitch),
+            false,
+        ));
         return out;
     }
     for token in KeyToken::ALL_NORMAL {
-        out.push((token.label().into(), Some(token), false));
+        out.push((i18n::key_label(token).into(), Some(token), false));
     }
     match editor.category {
         BindingCategory::CombatArt => {
-            out.push(("忍具键（仅义手忍具）".into(), Some(KeyToken::ProstheticUse), true));
             out.push((
-                "忍具切换键（仅义手忍具）".into(),
+                i18n::pick("忍具键（仅义手忍具）", "Use Tool").into(),
+                Some(KeyToken::ProstheticUse),
+                true,
+            ));
+            out.push((
+                i18n::pick("忍具切换键（仅义手忍具）", "Switch Tool").into(),
                 Some(KeyToken::ProstheticSwitch),
                 true,
             ));
         }
         BindingCategory::Prosthetic => {
-            out.push(("忍具键".into(), Some(KeyToken::ProstheticUse), false));
-            out.push(("忍具切换键".into(), Some(KeyToken::ProstheticSwitch), false));
+            out.push((
+                i18n::key_label(KeyToken::ProstheticUse).into(),
+                Some(KeyToken::ProstheticUse),
+                false,
+            ));
+            out.push((
+                i18n::key_label(KeyToken::ProstheticSwitch).into(),
+                Some(KeyToken::ProstheticSwitch),
+                false,
+            ));
         }
     }
     out
@@ -498,7 +552,13 @@ mod tests {
         e.click_slot(1);
         e.click_key(KeyToken::ProstheticUse);
         assert_eq!(e.slots, vec![None, None]);
-        assert_eq!(e.modal.as_ref().unwrap().message, "忍具键/忍具切换键只能作为尾键");
+        assert_eq!(
+            e.modal.as_ref().unwrap().message,
+            i18n::pick(
+                "忍具键/忍具切换键只能作为尾键",
+                "Use Tool / Switch Tool can only be the second key.",
+            )
+        );
     }
 
     #[test]
@@ -566,7 +626,13 @@ mod tests {
     fn full_slots_show_required_message() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
         e.click_key(KeyToken::Block);
-        assert_eq!(e.modal.as_ref().unwrap().message, "键位已满，请点击配置区键位去除");
+        assert_eq!(
+            e.modal.as_ref().unwrap().message,
+            i18n::pick(
+                "键位已满，请点击配置区键位去除",
+                "Key slots are full. Click a slot in the configuration area to remove it.",
+            )
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod editor;
 mod game_overlay;
+mod i18n;
 mod render;
 
 use std::{
@@ -85,6 +86,7 @@ fn lock_state() -> std::sync::MutexGuard<'static, UiState> {
 }
 
 pub fn start(cfg_path: PathBuf) -> Result<()> {
+    i18n::set_lang(i18n::load_lang_from_cfg(&cfg_path));
     UI_STATE
         .set(Mutex::new(UiState {
             editor: None,
@@ -578,7 +580,10 @@ fn click_action(editor: &mut Editor, w: i32, h: i32, x: i32, y: i32) -> ClickAct
     for item in &l.grid {
         if item.rect.contains(x, y) {
             if item.disabled {
-                editor.show_message("当前版本暂不支持该键位");
+                editor.show_message(i18n::pick(
+                    "当前版本暂不支持该键位",
+                    "This key is not supported in this version.",
+                ));
             } else if let Some(token) = item.token {
                 editor.click_key(token);
             }
@@ -622,7 +627,7 @@ fn save_editor(state: &mut UiState) {
             return;
         };
         if !editor.complete() {
-            editor.show_message("请先完成键位配置");
+            editor.show_message(i18n::pick("请先完成键位配置", "Complete the key binding first."));
             return;
         }
 
@@ -640,12 +645,12 @@ fn save_editor(state: &mut UiState) {
                             .map(ToOwned::to_owned)
                             .unwrap_or_else(|| format!("UID {}", entry.uid))
                     })
-                    .unwrap_or_else(|| "其他技能/忍具".to_string());
+                    .unwrap_or_else(|| i18n::pick("其他技能/忍具", "another combat art / prosthetic").to_string());
                 editor.show_overwrite_confirm(&conflict_name, keys);
                 return;
             }
             Err(error) => {
-                editor.show_message(&error.to_string());
+                editor.show_message(&i18n::validation_error(error));
                 return;
             }
         }
@@ -679,7 +684,7 @@ fn save_editor_keys(state: &mut UiState, keys: Vec<KeyToken>, overwrite: bool) {
         }
         Err(error) => {
             if let Some(editor) = state.editor.as_mut() {
-                editor.show_message(&format!("保存失败：{error:#}"));
+                editor.show_message(&format!("{}: {error:#}", i18n::pick("保存失败", "Save failed"),));
             }
         }
     }
@@ -698,7 +703,7 @@ fn reset_editor_binding(state: &mut UiState) {
         }
         Err(error) => {
             if let Some(editor) = state.editor.as_mut() {
-                editor.show_message(&format!("重置失败：{error:#}"));
+                editor.show_message(&format!("{}: {error:#}", i18n::pick("重置失败", "Reset failed"),));
             }
         }
     }

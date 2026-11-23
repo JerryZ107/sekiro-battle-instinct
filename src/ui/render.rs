@@ -29,7 +29,10 @@ use windows::{
     core::{Interface, PCWSTR, s},
 };
 
-use super::editor::{BindingMode, Editor, GridItem, Rect, layout};
+use super::{
+    editor::{BindingMode, Editor, GridItem, Rect, layout},
+    i18n,
+};
 
 const UI_TEXTURE_WIDTH_LIMIT: u32 = 8192;
 
@@ -301,9 +304,9 @@ impl Renderer {
 
         for (i, rect) in l.slots.iter().copied().enumerate() {
             let label = match editor.mode {
-                BindingMode::Single => "键位（点击移除）".to_string(),
-                BindingMode::Two if i == 0 => "首键（点击移除）".to_string(),
-                BindingMode::Two => "尾键（点击移除）".to_string(),
+                BindingMode::Single => i18n::pick("键位（点击移除）", "Key (click to remove)").to_string(),
+                BindingMode::Two if i == 0 => i18n::pick("首键（点击移除）", "First key (click to remove)").to_string(),
+                BindingMode::Two => i18n::pick("尾键（点击移除）", "Second key (click to remove)").to_string(),
             };
             fill(hdc, rect, PANEL);
             frame(hdc, rect, GOLD, 1);
@@ -318,8 +321,8 @@ impl Renderer {
                 false,
             );
             let value = editor.slots[i]
-                .map(|key| key.label().to_string())
-                .unwrap_or_else(|| "（点击下方键位填入）".to_string());
+                .map(|key| i18n::key_label(key).to_string())
+                .unwrap_or_else(|| i18n::pick("（点击下方键位填入）", "(Click a key below)").to_string());
             text(
                 hdc,
                 Rect::new(rect.l + 8, rect.t + 34, rect.r - 8, rect.b - 8),
@@ -338,7 +341,10 @@ impl Renderer {
         text(
             hdc,
             l.footnote,
-            "点击下方键位填入，点击上方键位移除。重置会删除本技能/忍具的全部触发键位。",
+            i18n::pick(
+                "点击下方键位填入，点击上方键位移除。重置会删除本技能/忍具的全部触发键位。",
+                "Click a key below to assign; click a slot to remove. Reset clears all triggers.",
+            ),
             (13 * scale / 100).clamp(11, 19),
             MUTED,
             false,
@@ -351,7 +357,7 @@ impl Renderer {
         text(
             hdc,
             l.save,
-            "保存",
+            i18n::pick("保存", "Save"),
             (20 * scale / 100).clamp(15, 30),
             TEXT,
             true,
@@ -363,7 +369,7 @@ impl Renderer {
         text(
             hdc,
             l.reset,
-            "重置",
+            i18n::pick("重置", "Reset"),
             (20 * scale / 100).clamp(15, 30),
             TEXT,
             true,
@@ -375,7 +381,7 @@ impl Renderer {
         text(
             hdc,
             l.cancel,
-            "取消",
+            i18n::pick("取消", "Cancel"),
             (20 * scale / 100).clamp(15, 30),
             TEXT,
             true,
@@ -422,7 +428,7 @@ impl Renderer {
                     text(
                         hdc,
                         cancel,
-                        modal.cancel.as_deref().unwrap_or("取消"),
+                        modal.cancel.as_deref().unwrap_or(i18n::pick("取消", "Cancel")),
                         (16 * scale / 100).clamp(13, 24),
                         TEXT,
                         true,
