@@ -1,5 +1,7 @@
 # 纸人术
 
+<h3>所谓纸人术，乃是生死间淬炼之本能，于战斗中不断磨砺的獠牙。<br>An instinct tempered between life and death. A fang honed in battle.</h3>
+
 **简体中文** | [English](README.en.md)
 
 ![纸人术演示](demo.gif)
