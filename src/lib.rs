@@ -25,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     thread::{self},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::anyhow;
@@ -185,7 +185,28 @@ fn chainload(path: &Path) {
 //
 //----------------------------------------------------------------------------
 
-const HOOK_DELAY_SECS: u64 = 10;
+/// Hook targets are already mapped into the game process when dinput8.dll loads.
+/// Poll their committed pages/signature instead of always sleeping for 10 seconds.
+const HOOK_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const HOOK_READY_POLL: Duration = Duration::from_millis(20);
+
+fn wait_for_game_code() -> bool {
+    let deadline = Instant::now() + HOOK_READY_TIMEOUT;
+    loop {
+        // MinHook needs committed executable pages for its input/damage targets.
+        // The menu signature also rejects unsupported Sekiro executable builds.
+        if game_menu::code_ready()
+            && menu_probe::range_readable(game::PROCESS_INPUT, 16)
+            && menu_probe::range_readable(game::PLAYER_DAMAGE_REACTION, 16)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(HOOK_READY_POLL);
+    }
+}
 
 static PROCESS_INPUT_ORIG: OnceLock<fn(*mut game::InputHandler, usize) -> usize> = OnceLock::new();
 
@@ -197,12 +218,19 @@ struct State {
 
 fn modify(path: &Path) {
     let path = path.join("battle_instinct.cfg");
-    load_console::print_line("等待游戏初始化…");
-    for remaining in (0..HOOK_DELAY_SECS).rev() {
-        if remaining > 0 {
-            load_console::print_line(&format!("  约 {remaining} 秒后开始安装钩子"));
-        }
-        thread::sleep(Duration::from_secs(1));
+    load_console::print_line("等待游戏代码就绪…");
+    let ready_started = Instant::now();
+    if wait_for_game_code() {
+        load_console::print_line(&format!(
+            "  游戏代码已就绪（{:.3} 秒）",
+            ready_started.elapsed().as_secs_f32()
+        ));
+    } else {
+        load_console::print_line("  ✗ 游戏代码就绪超时，继续尝试安装钩子");
+        log::error!(
+            "hook targets were not readable after {} s",
+            HOOK_READY_TIMEOUT.as_secs()
+        );
     }
 
     load_console::print_line("读取配置 battle_instinct.cfg …");

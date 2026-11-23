@@ -113,6 +113,13 @@ pub struct MenuSelection {
     pub category: u32,
 }
 
+/// True once the executable's menu constructor is mapped and matches the
+/// supported Sekiro build. This lets startup install hooks as soon as the code
+/// is usable instead of relying on a fixed delay.
+pub fn code_ready() -> bool {
+    has_expected_prefix(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX)
+}
+
 pub fn install_hooks() -> Result<()> {
     if !has_expected_prefix(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX) {
         return Err(anyhow!(

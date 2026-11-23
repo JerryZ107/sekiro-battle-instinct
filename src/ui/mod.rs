@@ -52,6 +52,9 @@ const WINDOW_CLASS: PCWSTR = w!("BattleInstinctUiController");
 static UI_STATE: OnceLock<Mutex<UiState>> = OnceLock::new();
 static CONTROLLER_HWND: AtomicIsize = AtomicIsize::new(0);
 static OPEN_PENDING: AtomicBool = AtomicBool::new(false);
+/// Fast path for the Present/input hooks: no UI state lock is needed while the
+/// key editor is closed.
+static UI_OPEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct UiState {
     pub(crate) editor: Option<Editor>,
@@ -73,6 +76,11 @@ pub(crate) struct UiState {
 
 pub(crate) fn state() -> &'static Mutex<UiState> {
     UI_STATE.get().expect("UI state must be initialized before hooks")
+}
+
+#[inline]
+pub(crate) fn overlay_open() -> bool {
+    UI_OPEN.load(Ordering::Acquire)
 }
 
 fn lock_state() -> std::sync::MutexGuard<'static, UiState> {
@@ -140,7 +148,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
 
         let keyboard = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let vk = keyboard.vkCode;
-        let overlay_open = lock_state().editor.is_some();
+        let overlay_open = overlay_open();
         let hwnd = HWND(CONTROLLER_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
 
         if vk == VK_F.0 as u32 {
@@ -174,7 +182,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
 }
 
 unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && lock_state().editor.is_some() {
+    if code >= 0 && overlay_open() {
         // Never swallow clicks while another application owns the foreground.
         let foreground = unsafe { GetForegroundWindow() };
         let mut foreground_pid = 0u32;
@@ -335,6 +343,7 @@ fn open_overlay() -> Result<()> {
     state.cursor_x = panel_x + panel_w as f32 * 0.5;
     state.cursor_y = panel_y + panel_h as f32 * 0.5;
     state.editor = Some(editor);
+    UI_OPEN.store(true, Ordering::Release);
     state.ui_dirty = true;
     state.last_os_cursor = None;
     state.os_cursor_seen = false;
@@ -500,6 +509,7 @@ fn request_close_state(state: &mut UiState) {
 }
 
 fn close_overlay(state: &mut UiState) {
+    UI_OPEN.store(false, Ordering::Release);
     state.editor = None;
     state.game_hwnd = 0;
     state.last_os_cursor = None;

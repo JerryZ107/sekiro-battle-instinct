@@ -105,6 +105,13 @@ unsafe extern "system" fn present1_detour(
 }
 
 fn render_before_present(swapchain: *mut c_void) {
+    // The Present hook is installed for the entire process lifetime. Keep the
+    // closed-editor path allocation- and lock-free: no COM query or UI mutex is
+    // needed until the key editor has actually been opened.
+    if !super::overlay_open() {
+        return;
+    }
+
     let result = catch_unwind(AssertUnwindSafe(|| {
         unsafe { render_present(swapchain) };
     }));

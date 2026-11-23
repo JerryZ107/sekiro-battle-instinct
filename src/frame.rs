@@ -1,4 +1,8 @@
-use std::{cell::UnsafeCell, mem, time::Instant};
+use std::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU16, Ordering},
+    time::Instant,
+};
 
 pub const DEFAULT_FRAMERATE: u16 = 60;
 
@@ -19,36 +23,39 @@ impl Frames {
 }
 
 /// A tracker that tracks the in-game framerate.
-#[repr(transparent)]
-pub struct Framerate(UnsafeCell<FramerateInner>);
+pub struct Framerate {
+    /// Mutable sampling state. Only the game's main tick may access this.
+    inner: UnsafeCell<FramerateInner>,
+    /// Readable from any thread without creating an aliasing `&mut`.
+    cur: AtomicU16,
+}
+
+// The mutable inner state is only touched from the game's main tick. `cur` is
+// atomic so safe readers never alias the mutable sampling state.
 unsafe impl Sync for Framerate {}
 
 impl Framerate {
     const fn new() -> Framerate {
-        Framerate(UnsafeCell::new(FramerateInner::new()))
+        Framerate {
+            inner: UnsafeCell::new(FramerateInner::new()),
+            cur: AtomicU16::new(DEFAULT_FRAMERATE),
+        }
     }
 
     #[inline(always)]
     pub fn cur(&self) -> u16 {
-        unsafe { self.as_mut().cur() }
+        self.cur.load(Ordering::Relaxed).max(DEFAULT_FRAMERATE)
     }
 
     /// Safety: this function should only be hooked into the main tick of the game, but never
     /// called directly from arbitrary threads
     #[inline(always)]
     pub unsafe fn tick(&self) {
-        unsafe { self.as_mut().tick() }
-    }
-
-    #[inline(always)]
-    unsafe fn as_mut(&self) -> &mut FramerateInner {
-        unsafe { mem::transmute(self.0.get()) }
+        unsafe { (*self.inner.get()).tick(&self.cur) }
     }
 }
 
 struct FramerateInner {
-    // stores the recent framerate
-    cur: u16,
     // passing frames since `since`
     frames: u16,
     since: Option<Instant>,
@@ -63,7 +70,6 @@ impl FramerateInner {
 
     const fn new() -> FramerateInner {
         FramerateInner {
-            cur: DEFAULT_FRAMERATE,
             frames: 0,
             samples: 0,
             unlocked: false,
@@ -71,7 +77,7 @@ impl FramerateInner {
         }
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self, cur: &AtomicU16) {
         if self.is_freezed() {
             return;
         }
@@ -84,12 +90,13 @@ impl FramerateInner {
 
         let now = Instant::now();
         let elapsed = now - since;
-        self.cur = (self.frames as u128 * 1000 / elapsed.as_millis()) as u16;
+        let measured = (self.frames as u128 * 1000 / elapsed.as_millis()) as u16;
+        cur.store(measured, Ordering::Relaxed);
         self.frames = 0;
         self.since = Some(now);
         self.samples = self.samples.saturating_add(1);
 
-        if self.cur > DEFAULT_FRAMERATE + 5 {
+        if measured > DEFAULT_FRAMERATE + 5 {
             self.unlocked = true;
         }
 
@@ -97,17 +104,13 @@ impl FramerateInner {
             if self.unlocked {
                 log::debug!("Framerate is unlocked.");
             } else {
-                self.cur = DEFAULT_FRAMERATE;
+                cur.store(DEFAULT_FRAMERATE, Ordering::Relaxed);
                 log::debug!("Framerate is freezed.");
             }
         } else if self.samples < Self::SAMPLE_COUNT {
-            log::trace!("Framerate: {}", self.cur);
+            log::trace!("Framerate: {}", measured);
             return;
         }
-    }
-
-    fn cur(&self) -> u16 {
-        self.cur.max(DEFAULT_FRAMERATE)
     }
 
     fn is_freezed(&self) -> bool {
@@ -117,3 +120,18 @@ impl FramerateInner {
 
 /// The global framerate tracker
 pub static FRAMERATE: Framerate = Framerate::new();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_framerate_is_safe_to_read_from_multiple_threads() {
+        let framerate = Framerate::new();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| assert_eq!(framerate.cur(), DEFAULT_FRAMERATE));
+            }
+        });
+    }
+}

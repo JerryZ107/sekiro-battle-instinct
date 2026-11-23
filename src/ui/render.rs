@@ -118,6 +118,12 @@ struct DeviceResources {
     texture: Option<ID3D11Texture2D>,
     texture_view: Option<ID3D11ShaderResourceView>,
     texture_size: Option<(u32, u32)>,
+    /// Cached view of the current swap-chain back buffer. Recreating this COM
+    /// object every presented frame causes avoidable D3D resource churn.
+    render_target: Option<ID3D11RenderTargetView>,
+    render_target_swapchain: *mut c_void,
+    render_target_buffer: *mut c_void,
+    render_target_size: (u32, u32),
 }
 
 #[repr(C)]
@@ -537,6 +543,10 @@ impl DeviceResources {
             texture: None,
             texture_view: None,
             texture_size: None,
+            render_target: None,
+            render_target_swapchain: ptr::null_mut(),
+            render_target_buffer: ptr::null_mut(),
+            render_target_size: (0, 0),
         })
     }
 
@@ -578,7 +588,7 @@ impl DeviceResources {
     }
 
     fn draw(
-        &self,
+        &mut self,
         swapchain: &IDXGISwapChain,
         panel_x: f32,
         panel_y: f32,
@@ -589,13 +599,33 @@ impl DeviceResources {
     ) -> Result<()> {
         let back_buffer: ID3D11Texture2D =
             unsafe { swapchain.GetBuffer(0) }.map_err(|error| anyhow!("GetBuffer(0) failed: {error}"))?;
-        let mut render_target = None;
-        unsafe {
-            self.device
-                .CreateRenderTargetView(&back_buffer, None, Some(&mut render_target))
-                .map_err(|error| anyhow!("CreateRenderTargetView failed: {error}"))?;
+        let swapchain_raw = Interface::as_raw(swapchain);
+        let back_buffer_raw = Interface::as_raw(&back_buffer);
+        let render_target_size = (screen_w.max(0.0) as u32, screen_h.max(0.0) as u32);
+
+        // GetBuffer is retained as the cheap change detector (ResizeBuffers and
+        // swap-chain replacement change the returned buffer). The expensive
+        // CreateRenderTargetView is only performed when that identity changes.
+        if self.render_target.is_none()
+            || self.render_target_swapchain != swapchain_raw
+            || self.render_target_buffer != back_buffer_raw
+            || self.render_target_size != render_target_size
+        {
+            let mut render_target = None;
+            unsafe {
+                self.device
+                    .CreateRenderTargetView(&back_buffer, None, Some(&mut render_target))
+                    .map_err(|error| anyhow!("CreateRenderTargetView failed: {error}"))?;
+            }
+            self.render_target = Some(render_target.ok_or_else(|| anyhow!("CreateRenderTargetView returned no view"))?);
+            self.render_target_swapchain = swapchain_raw;
+            self.render_target_buffer = back_buffer_raw;
+            self.render_target_size = render_target_size;
         }
-        let render_target = render_target.ok_or_else(|| anyhow!("CreateRenderTargetView returned no view"))?;
+        let render_target = self
+            .render_target
+            .as_ref()
+            .ok_or_else(|| anyhow!("cached render target view is unavailable"))?;
         let texture_view = self
             .texture_view
             .as_ref()

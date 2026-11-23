@@ -306,8 +306,14 @@ impl Flow {
             return;
         }
 
+        let events = take_damage_events();
+        // Common case: no hit, no active timeout, and no per-frame debug trace.
+        // Avoid resolving the player/module pointer chain and reading stamina.
+        if events.is_empty() && !self.config.debug && self.state.timeout_left == 0 {
+            return;
+        }
+
         let Some(chr_data) = player_chr_data_module() else {
-            let _ = take_damage_events();
             return;
         };
 
@@ -319,7 +325,7 @@ impl Flow {
             }
         }
 
-        for event in take_damage_events() {
+        for event in events {
             if self.config.debug {
                 log::debug!(
                     "FLOW_EVENT hp_drop={} posture_drop={} guard={} perfect_flag={}",
