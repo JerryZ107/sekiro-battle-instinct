@@ -28,6 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::anyhow;
 use frame::FRAMERATE;
 use minhook::MinHook;
 use windows::{
@@ -195,8 +196,8 @@ fn wait_for_game_code() -> bool {
         // MinHook needs committed executable pages for its input/damage targets.
         // The menu signature also rejects unsupported Sekiro executable builds.
         if game_menu::code_ready()
-            && menu_probe::range_executable(game::PROCESS_INPUT, 16)
-            && menu_probe::range_executable(game::PLAYER_DAMAGE_REACTION, 16)
+            && menu_probe::range_readable(game::PROCESS_INPUT, 16)
+            && menu_probe::range_readable(game::PLAYER_DAMAGE_REACTION, 16)
         {
             return true;
         }
@@ -248,35 +249,17 @@ fn modify(path: &Path) {
         load_console::print_line("安装输入钩子…");
         let target = game::PROCESS_INPUT as *mut c_void;
         let detour = process_input as *mut c_void;
-        let mut process_input_hook_ready = false;
-        match MinHook::create_hook(target, detour) {
-            Ok(process_input_orig) => {
-                let process_input_orig = mem::transmute(process_input_orig);
-                match PROCESS_INPUT_ORIG.set(process_input_orig) {
-                    Ok(()) => {
-                        process_input_hook_ready = true;
-                        load_console::print_line("  ✓ 输入 Hook 已安装");
-                    }
-                    Err(_) => {
-                        log::error!("Failed to set PROCESS_INPUT_ORIG");
-                        load_console::print_line("  ✗ 输入 Hook 原始函数保存失败");
-                    }
-                }
-            }
-            Err(error) => {
-                log::error!("Failed to install process_input hook: {error:?}");
-                load_console::print_line(&format!("  ✗ 输入 Hook 安装失败（UI 继续尝试启动）: {error:?}"));
-            }
-        }
+        let process_input_orig = MinHook::create_hook(target, detour)?;
+        let process_input_orig = mem::transmute(process_input_orig);
+        PROCESS_INPUT_ORIG
+            .set(process_input_orig)
+            .map_err(|_| anyhow!("Failed to set PROCESS_INPUT_ORIG"))?;
 
         let state = State {
             modification: Mutex::new(modification),
         };
 
-        if STATE.set(state).is_err() {
-            log::error!("Failed to set STATE");
-            load_console::print_line("  ✗ 战斗状态初始化失败（UI 继续尝试启动）");
-        }
+        STATE.set(state).map_err(|_| anyhow!("Failed to set STATE"))?;
 
         load_console::print_line("安装菜单选中项 Hook…");
         if let Err(error) = game_menu::install_hooks() {
@@ -290,12 +273,8 @@ fn modify(path: &Path) {
             log::error!("ui/input hook startup failed: {error:#}");
             load_console::print_line(&format!("  ✗ 输入/UI Hook 启动失败（战斗功能继续）: {error:#}"));
         }
-        if let Err(error) = MinHook::enable_all_hooks() {
-            log::error!("Failed to enable MinHook hooks: {error:?}");
-            load_console::print_line(&format!("  ✗ 启用 Hook 失败: {error:?}"));
-        } else {
-            log::warn!("Paper Jutsu hook enabled (process_input={process_input_hook_ready}).");
-        }
+        MinHook::enable_all_hooks()?;
+        log::warn!("Paper Jutsu hook enabled.");
         Ok::<_, anyhow::Error>(())
     })();
 

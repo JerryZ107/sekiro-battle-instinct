@@ -121,9 +121,7 @@ pub fn code_ready() -> bool {
 }
 
 pub fn install_hooks() -> Result<()> {
-    if !has_expected_prefix(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX)
-        || !menu_probe::range_executable(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX.len())
-    {
+    if !has_expected_prefix(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX) {
         return Err(anyhow!(
             "unsupported Sekiro executable: menu dialog signature does not match 1.6.0.0"
         ));

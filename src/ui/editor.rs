@@ -15,13 +15,6 @@ impl BindingMode {
             BindingMode::Two => i18n::pick("双键触发", "Two-key"),
         }
     }
-
-    fn slot_count(self) -> usize {
-        match self {
-            BindingMode::Single => 1,
-            BindingMode::Two => 2,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -41,70 +34,21 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ModalButtonStyle {
-    Primary,
-    Danger,
-    Neutral,
-}
-
 #[derive(Clone, Debug)]
 pub enum ModalAction {
     Dismiss,
-    SaveAndClose,
     DiscardAndClose,
     ApplyMode(BindingMode),
-    OverwriteAndSave(Vec<Vec<KeyToken>>),
+    OverwriteAndSave(Vec<KeyToken>),
     ResetAndClose,
-    DeleteSelectedScheme,
-}
-
-#[derive(Clone, Debug)]
-pub struct ModalButton {
-    pub label: String,
-    pub action: ModalAction,
-    pub style: ModalButtonStyle,
 }
 
 #[derive(Clone, Debug)]
 pub struct Modal {
     pub message: String,
-    pub buttons: Vec<ModalButton>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SchemeDraft {
-    pub slots: Vec<Option<KeyToken>>,
-}
-
-impl SchemeDraft {
-    fn blank(mode: BindingMode) -> SchemeDraft {
-        SchemeDraft {
-            slots: vec![None; mode.slot_count()],
-        }
-    }
-
-    fn from_keys(keys: &[KeyToken]) -> SchemeDraft {
-        SchemeDraft {
-            slots: keys.iter().copied().map(Some).collect(),
-        }
-    }
-
-    pub fn mode(&self) -> BindingMode {
-        if self.slots.len() <= 1 {
-            BindingMode::Single
-        } else {
-            BindingMode::Two
-        }
-    }
-
-    pub fn complete(&self) -> bool {
-        !self.slots.is_empty() && self.slots.iter().all(Option::is_some)
-    }
-
-    pub fn keys(&self) -> Vec<KeyToken> {
-        self.slots.iter().flatten().copied().collect()
-    }
+    pub confirm: String,
+    pub cancel: Option<String>,
+    pub action: ModalAction,
 }
 
 #[derive(Clone, Debug)]
@@ -115,9 +59,9 @@ pub struct Editor {
     pub source: BindingSource,
     pub menu_uid: u32,
     pub menu_category: u32,
-    pub schemes: Vec<SchemeDraft>,
-    pub selected_index: usize,
-    original: Vec<SchemeDraft>,
+    pub mode: BindingMode,
+    pub slots: Vec<Option<KeyToken>>,
+    original: Vec<Option<KeyToken>>,
     pub modal: Option<Modal>,
     pub snapshot: BindingSnapshot,
 }
@@ -129,19 +73,20 @@ impl Editor {
             .name(uid)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("UID {uid}"));
-        let existing = snapshot.entries_for_uid(uid);
-        let source = existing
-            .first()
-            .map(|entry| entry.source)
-            .unwrap_or(BindingSource::None);
-        let mut schemes: Vec<SchemeDraft> = existing
-            .iter()
-            .map(|entry| SchemeDraft::from_keys(&entry.keys))
-            .collect();
-        if schemes.is_empty() {
-            schemes.push(SchemeDraft::blank(BindingMode::Two));
-        }
-        let original = schemes.clone();
+        let current = snapshot.current_entry(uid);
+        let source = current.map(|entry| entry.source).unwrap_or(BindingSource::None);
+        let existing = current.map(|entry| entry.keys.clone());
+        let mode = match (category, existing.as_ref().map(Vec::len)) {
+            (BindingCategory::Prosthetic, Some(1)) => BindingMode::Single,
+            _ => BindingMode::Two,
+        };
+        let slots = match (mode, existing) {
+            (BindingMode::Single, Some(keys)) => vec![keys.first().copied()],
+            (BindingMode::Two, Some(keys)) => vec![keys.get(0).copied(), keys.get(1).copied()],
+            (BindingMode::Single, None) => vec![None],
+            (BindingMode::Two, None) => vec![None, None],
+        };
+        let original = slots.clone();
         Some(Editor {
             uid,
             name,
@@ -149,8 +94,8 @@ impl Editor {
             source,
             menu_uid: 0,
             menu_category: 0,
-            schemes,
-            selected_index: 0,
+            mode,
+            slots,
             original,
             modal: None,
             snapshot,
@@ -158,54 +103,15 @@ impl Editor {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.schemes != self.original
-    }
-
-    pub fn selected_scheme(&self) -> &SchemeDraft {
-        &self.schemes[self.selected_index]
-    }
-
-    fn selected_scheme_mut(&mut self) -> &mut SchemeDraft {
-        &mut self.schemes[self.selected_index]
-    }
-
-    pub fn mode(&self) -> BindingMode {
-        self.selected_scheme().mode()
-    }
-
-    pub fn slots(&self) -> &[Option<KeyToken>] {
-        &self.selected_scheme().slots
+        self.slots != self.original
     }
 
     pub fn complete(&self) -> bool {
-        !self.schemes.is_empty() && self.schemes.iter().all(SchemeDraft::complete)
+        self.slots.iter().all(Option::is_some)
     }
 
-    #[cfg(test)]
-    pub fn selected_keys(&self) -> Vec<KeyToken> {
-        self.selected_scheme().keys()
-    }
-
-    pub fn all_keys(&self) -> Vec<Vec<KeyToken>> {
-        self.schemes.iter().map(SchemeDraft::keys).collect()
-    }
-
-    pub fn scheme_label(&self, index: usize) -> String {
-        let Some(scheme) = self.schemes.get(index) else {
-            return String::new();
-        };
-        if scheme.slots.iter().all(Option::is_none) {
-            return i18n::pick("未配置", "Unassigned").to_string();
-        }
-        scheme
-            .slots
-            .iter()
-            .map(|slot| {
-                slot.map(i18n::key_label)
-                    .unwrap_or_else(|| i18n::pick("未配置", "Unassigned"))
-            })
-            .collect::<Vec<_>>()
-            .join("-")
+    pub fn keys(&self) -> Vec<KeyToken> {
+        self.slots.iter().flatten().copied().collect()
     }
 
     pub fn category_label(&self) -> &'static str {
@@ -228,11 +134,11 @@ impl Editor {
     }
 
     pub fn mode_can_prev(&self) -> bool {
-        self.mode_is_switchable() && self.mode() == BindingMode::Two
+        self.mode_is_switchable() && self.mode == BindingMode::Two
     }
 
     pub fn mode_can_next(&self) -> bool {
-        self.mode_is_switchable() && self.mode() == BindingMode::Single
+        self.mode_is_switchable() && self.mode == BindingMode::Single
     }
 
     /// `<`: move to the previous legal mode. Combat arts are fixed at Two.
@@ -240,25 +146,16 @@ impl Editor {
         if !self.mode_can_prev() {
             return;
         }
-        if self.selected_scheme().slots.get(1).and_then(|v| *v).is_some() {
+        if self.slots.get(1).and_then(|v| *v).is_some() {
             self.modal = Some(Modal {
                 message: i18n::pick(
                     "切换为单键触发后，第2键将被清空，是否继续？",
                     "Switching to single-key mode will clear the second key. Continue?",
                 )
                 .into(),
-                buttons: vec![
-                    ModalButton {
-                        label: i18n::pick("确认切换", "Switch").into(),
-                        action: ModalAction::ApplyMode(BindingMode::Single),
-                        style: ModalButtonStyle::Primary,
-                    },
-                    ModalButton {
-                        label: i18n::pick("取消", "Cancel").into(),
-                        action: ModalAction::Dismiss,
-                        style: ModalButtonStyle::Neutral,
-                    },
-                ],
+                confirm: i18n::pick("确认切换", "Switch").into(),
+                cancel: Some(i18n::pick("取消", "Cancel").into()),
+                action: ModalAction::ApplyMode(BindingMode::Single),
             });
         } else {
             self.apply_mode(BindingMode::Single);
@@ -273,67 +170,21 @@ impl Editor {
     }
 
     pub fn apply_mode(&mut self, mode: BindingMode) {
-        if mode == self.mode() {
+        if mode == self.mode {
             return;
         }
-        self.selected_scheme_mut().slots.resize(mode.slot_count(), None);
-    }
-
-    pub fn select_scheme(&mut self, index: usize) {
-        if index < self.schemes.len() {
-            self.selected_index = index;
-        }
-    }
-
-    pub fn add_scheme(&mut self) {
-        let mode = if self.category == BindingCategory::CombatArt {
-            BindingMode::Two
-        } else {
-            self.mode()
-        };
-        self.schemes.push(SchemeDraft::blank(mode));
-        self.selected_index = self.schemes.len() - 1;
-    }
-
-    pub fn request_delete_scheme(&mut self) {
-        let label = self.scheme_label(self.selected_index);
-        self.modal = Some(Modal {
-            message: if i18n::is_en() {
-                format!("Delete the selected scheme \"{label}\"?")
-            } else {
-                format!("确定删除选中的方案「{label}」吗？")
+        self.mode = mode;
+        self.slots.resize(
+            match mode {
+                BindingMode::Single => 1,
+                BindingMode::Two => 2,
             },
-            buttons: vec![
-                ModalButton {
-                    label: i18n::pick("确认删除", "Delete").into(),
-                    action: ModalAction::DeleteSelectedScheme,
-                    style: ModalButtonStyle::Danger,
-                },
-                ModalButton {
-                    label: i18n::pick("取消", "Cancel").into(),
-                    action: ModalAction::Dismiss,
-                    style: ModalButtonStyle::Neutral,
-                },
-            ],
-        });
-    }
-
-    pub fn delete_selected_scheme(&mut self) {
-        if self.schemes.is_empty() {
-            return;
-        }
-        let mode = self.mode();
-        self.schemes.remove(self.selected_index);
-        if self.schemes.is_empty() {
-            self.schemes.push(SchemeDraft::blank(mode));
-            self.selected_index = 0;
-        } else if self.selected_index >= self.schemes.len() {
-            self.selected_index = self.schemes.len() - 1;
-        }
+            None,
+        );
     }
 
     pub fn click_slot(&mut self, index: usize) {
-        if let Some(slot) = self.selected_scheme_mut().slots.get_mut(index) {
+        if let Some(slot) = self.slots.get_mut(index) {
             if slot.is_some() {
                 *slot = None;
             }
@@ -341,82 +192,68 @@ impl Editor {
     }
 
     pub fn click_key(&mut self, token: KeyToken) {
-        let mode = self.mode();
-        if self.selected_scheme().slots.iter().all(Option::is_some) {
+        if self.slots.iter().all(Option::is_some) {
             self.show_message(i18n::pick(
-                "键位已满，请点击配置区键位去移除。",
+                "键位已满，请点击配置区键位去除",
                 "Key slots are full. Click a slot in the configuration area to remove it.",
             ));
             return;
         }
         if self.category == BindingCategory::CombatArt && token.is_prosthetic() {
             self.show_message(i18n::pick(
-                "流派招式不能使用忍具键/忍具切换键。",
+                "流派招式不能使用忍具键/忍具切换键",
                 "Combat arts cannot use Use Tool or Switch Tool keys.",
             ));
             return;
         }
-        if token.is_prosthetic() && mode == BindingMode::Two {
-            if self.selected_scheme().slots.first().is_some_and(Option::is_none) {
+        if token.is_prosthetic() && self.mode == BindingMode::Two {
+            if self.slots.first().is_some_and(Option::is_none) {
                 self.show_message(i18n::pick(
-                    "忍具键/忍具切换键只能作为尾键。",
+                    "忍具键/忍具切换键只能作为尾键",
                     "Use Tool / Switch Tool can only be the second key.",
                 ));
                 return;
             }
-            if self.selected_scheme().slots.get(1).is_some_and(Option::is_none) {
-                self.selected_scheme_mut().slots[1] = Some(token);
+            if self.slots.get(1).is_some_and(Option::is_none) {
+                self.slots[1] = Some(token);
                 self.check_after_edit(1);
             } else {
                 self.show_message(i18n::pick(
-                    "键位已满，请点击配置区键位去移除。",
+                    "键位已满，请点击配置区键位去除",
                     "Key slots are full. Click a slot in the configuration area to remove it.",
                 ));
             }
             return;
         }
-        if mode == BindingMode::Single && !token.is_prosthetic() {
+        if self.mode == BindingMode::Single && !token.is_prosthetic() {
             return;
         }
-        if let Some(index) = self.selected_scheme().slots.iter().position(Option::is_none) {
-            self.selected_scheme_mut().slots[index] = Some(token);
+        if let Some(index) = self.slots.iter().position(Option::is_none) {
+            self.slots[index] = Some(token);
             self.check_after_edit(index);
         } else {
             self.show_message(i18n::pick(
-                "键位已满，请点击配置区键位去移除。",
+                "键位已满，请点击配置区键位去除",
                 "Key slots are full. Click a slot in the configuration area to remove it.",
             ));
         }
     }
 
-    /// Validate the selected scheme after an edit. Invalid shapes roll back
-    /// only the slot that was just clicked. Cross-UID conflicts are intentionally
-    /// deferred to save so the overwrite/cancel dialog can handle them.
+    /// Validate a completed draft. Invalid input and occupied sequences are
+    /// distinct typed errors. The rollback removes only the slot that was just
+    /// clicked, never an unrelated earlier slot.
     fn check_after_edit(&mut self, clicked_index: usize) {
-        let selected = self.selected_index;
-        let scheme = &self.schemes[selected];
-        if !scheme.complete() {
+        if !self.complete() {
             return;
         }
-        let keys = scheme.keys();
-        let duplicate = self
-            .schemes
-            .iter()
-            .enumerate()
-            .any(|(index, other)| index != selected && other.complete() && other.keys() == keys);
-        if duplicate {
-            if let Some(slot) = self.schemes[selected].slots.get_mut(clicked_index) {
-                *slot = None;
-            }
-            self.show_message(&i18n::validation_error(BindingValidationError::DuplicateScheme));
-            return;
-        }
-
+        let keys = self.keys();
         if let Err(error) = self.snapshot.validate_candidate(self.uid, &keys) {
+            // Occupied key sequences are a save-time decision. Keep the draft
+            // intact so the save button can offer overwrite/cancel.
             if error == BindingValidationError::Occupied {
                 return;
             }
-            if let Some(slot) = self.schemes[selected].slots.get_mut(clicked_index) {
+            if let Some(slot) = self.slots.get_mut(clicked_index) {
                 *slot = None;
             }
             self.show_message(&i18n::validation_error(error));
@@ -426,35 +263,24 @@ impl Editor {
     pub fn show_message(&mut self, message: &str) {
         self.modal = Some(Modal {
             message: message.into(),
-            buttons: vec![ModalButton {
-                label: i18n::pick("确定", "OK").into(),
-                action: ModalAction::Dismiss,
-                style: ModalButtonStyle::Primary,
-            }],
+            confirm: i18n::pick("确定", "OK").into(),
+            cancel: None,
+            action: ModalAction::Dismiss,
         });
     }
 
-    pub fn show_overwrite_confirm(&mut self, conflict_names: &str, schemes: Vec<Vec<KeyToken>>) {
+    pub fn show_overwrite_confirm(&mut self, conflict_name: &str, keys: Vec<KeyToken>) {
         self.modal = Some(Modal {
             message: if i18n::is_en() {
                 format!(
-                    "The following keys are already used by \"{conflict_names}\".\nThe conflicting scheme(s) will be removed if you overwrite. Continue?"
+                    "That key is already used by \"{conflict_name}\".\nThe existing binding will be cleared if you overwrite. Continue?"
                 )
             } else {
-                format!("当前键位已被「{conflict_names}」占用。\n覆盖后仅会清除冲突的方案，是否继续？")
+                format!("当前键位已被「{conflict_name}」占用。\n覆盖后原键位将被清除，是否继续？")
             },
-            buttons: vec![
-                ModalButton {
-                    label: i18n::pick("覆盖原键位", "Overwrite").into(),
-                    action: ModalAction::OverwriteAndSave(schemes),
-                    style: ModalButtonStyle::Primary,
-                },
-                ModalButton {
-                    label: i18n::pick("取消", "Cancel").into(),
-                    action: ModalAction::Dismiss,
-                    style: ModalButtonStyle::Neutral,
-                },
-            ],
+            confirm: i18n::pick("覆盖原键位", "Overwrite").into(),
+            cancel: Some(i18n::pick("取消", "Cancel").into()),
+            action: ModalAction::OverwriteAndSave(keys),
         });
     }
 
@@ -462,27 +288,13 @@ impl Editor {
         if self.is_dirty() {
             self.modal = Some(Modal {
                 message: i18n::pick(
-                    "有未保存的键位修改，是否保存后退出？",
-                    "You have unsaved changes. Save before closing?",
+                    "有未保存的键位修改，是否放弃？",
+                    "You have unsaved key changes. Discard them?",
                 )
                 .into(),
-                buttons: vec![
-                    ModalButton {
-                        label: i18n::pick("是", "Yes").into(),
-                        action: ModalAction::SaveAndClose,
-                        style: ModalButtonStyle::Primary,
-                    },
-                    ModalButton {
-                        label: i18n::pick("否", "No").into(),
-                        action: ModalAction::DiscardAndClose,
-                        style: ModalButtonStyle::Danger,
-                    },
-                    ModalButton {
-                        label: i18n::pick("取消", "Cancel").into(),
-                        action: ModalAction::Dismiss,
-                        style: ModalButtonStyle::Neutral,
-                    },
-                ],
+                confirm: i18n::pick("放弃修改", "Discard").into(),
+                cancel: Some(i18n::pick("继续编辑", "Keep Editing").into()),
+                action: ModalAction::DiscardAndClose,
             });
         }
     }
@@ -493,29 +305,19 @@ impl Editor {
     pub fn request_reset(&mut self) {
         self.modal = Some(Modal {
             message: i18n::pick(
-                "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请先点击首键或尾键对应槽位以移除。）",
+                "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请点击首键或尾键的对应键位以移除）",
                 "Reset every trigger key for this combat art / prosthetic?\n\n(To change one key, click the first or second key slot to remove it first.)",
             )
             .into(),
-            buttons: vec![
-                ModalButton {
-                    label: i18n::pick("确认重置", "Reset").into(),
-                    action: ModalAction::ResetAndClose,
-                    style: ModalButtonStyle::Danger,
-                },
-                ModalButton {
-                    label: i18n::pick("取消", "Cancel").into(),
-                    action: ModalAction::Dismiss,
-                    style: ModalButtonStyle::Neutral,
-                },
-            ],
+            confirm: i18n::pick("确认重置", "Reset").into(),
+            cancel: Some(i18n::pick("取消", "Cancel").into()),
+            action: ModalAction::ResetAndClose,
         });
     }
 
-    pub fn take_modal_action(&mut self, button_index: usize) -> Option<ModalAction> {
-        let action = self.modal.as_ref()?.buttons.get(button_index)?.action.clone();
-        self.modal = None;
-        Some(action)
+    pub fn modal_confirm(&mut self) -> Option<ModalAction> {
+        let modal = self.modal.take()?;
+        Some(modal.action)
     }
 
     pub fn modal_cancel(&mut self) {
@@ -539,10 +341,6 @@ pub struct Layout {
     pub mode: Rect,
     pub mode_left: Rect,
     pub mode_right: Rect,
-    pub scheme_title: Rect,
-    pub scheme_buttons: Vec<Rect>,
-    pub add_scheme: Rect,
-    pub delete_scheme: Rect,
     pub slots: Vec<Rect>,
     pub grid: Vec<GridItem>,
     pub save: Rect,
@@ -550,12 +348,13 @@ pub struct Layout {
     pub cancel: Rect,
     pub footnote: Rect,
     pub modal_panel: Option<Rect>,
-    pub modal_buttons: Vec<Rect>,
+    pub modal_confirm: Option<Rect>,
+    pub modal_cancel: Option<Rect>,
 }
 
 pub fn grid_items(editor: &Editor) -> Vec<(String, Option<KeyToken>, bool)> {
     let mut out = Vec::new();
-    if editor.mode() == BindingMode::Single {
+    if editor.mode == BindingMode::Single {
         out.push((
             i18n::key_label(KeyToken::ProstheticUse).into(),
             Some(KeyToken::ProstheticUse),
@@ -611,40 +410,10 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
     let arrow_w = 42;
     let mode_left = Rect::new(content_l, mode.t, content_l + arrow_w, mode.b);
     let mode_right = Rect::new(content_r - arrow_w, mode.t, content_r, mode.b);
-
-    let scheme_title = Rect::new(content_l, 142, content_r, 166);
-    let scheme_top = 172;
-    let scheme_gap = 6;
-    let scheme_btn_h = 32;
-    let scheme_cols = 2usize;
-    let scheme_rows = (editor.schemes.len() + scheme_cols - 1) / scheme_cols;
-    let scheme_rows = scheme_rows.max(1);
-    let scheme_w = (content_r - content_l - scheme_gap) / 2;
-    let mut scheme_buttons = Vec::with_capacity(editor.schemes.len());
-    for index in 0..editor.schemes.len() {
-        let col = index % scheme_cols;
-        let row = index / scheme_cols;
-        let l = content_l + col as i32 * (scheme_w + scheme_gap);
-        let t = scheme_top + row as i32 * (scheme_btn_h + scheme_gap);
-        scheme_buttons.push(Rect::new(l, t, l + scheme_w, t + scheme_btn_h));
-    }
-    let scheme_bottom = scheme_top + scheme_rows as i32 * (scheme_btn_h + scheme_gap);
-
-    let actions_top = scheme_bottom + 2;
-    let action_gap = 8;
-    let action_w = (content_r - content_l - action_gap) / 2;
-    let add_scheme = Rect::new(content_l, actions_top, content_l + action_w, actions_top + 32);
-    let delete_scheme = Rect::new(
-        content_l + action_w + action_gap,
-        actions_top,
-        content_r,
-        actions_top + 32,
-    );
-
-    let slots_top = actions_top + 42;
-    let slots_h = 82;
+    let slots_top = 146;
+    let slots_h = 96;
     let slot_gap = 10;
-    let n = editor.slots().len() as i32;
+    let n = editor.slots.len() as i32;
     let mut slots = Vec::with_capacity(n as usize);
     if n == 1 {
         slots.push(Rect::new(
@@ -664,13 +433,13 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
         ));
     }
 
-    let grid_top = slots_top + slots_h + 12;
-    let gap = 6;
+    let grid_top = 294;
+    let gap = 8;
     let items = grid_items(editor);
     let cols = 4usize;
     let rows = (items.len() + cols - 1) / cols;
     let cell_w = (content_r - content_l - gap * (cols as i32 - 1)) / cols as i32;
-    let cell_h = 40;
+    let cell_h = 44;
     let mut grid = Vec::with_capacity(items.len());
     for (i, (label, token, disabled)) in items.into_iter().enumerate() {
         let col = (i % cols) as i32;
@@ -685,43 +454,39 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
         });
     }
     let grid_bottom = grid_top + rows as i32 * (cell_h + gap);
-    let footnote = Rect::new(content_l, grid_bottom + 8, content_r, grid_bottom + 30);
-
+    let footnote = Rect::new(content_l, grid_bottom + 10, content_r, grid_bottom + 34);
     let button_y = h - 56;
-    let button_gap = 8;
-    let button_w = (content_r - content_l - button_gap * 2) / 3;
+    let button_w = (content_r - content_l - gap * 2) / 3;
     let save = Rect::new(content_l, button_y, content_l + button_w, h - 18);
     let reset = Rect::new(
-        content_l + button_w + button_gap,
+        content_l + button_w + gap,
         button_y,
-        content_l + button_w * 2 + button_gap,
+        content_l + button_w * 2 + gap,
         h - 18,
     );
-    let cancel = Rect::new(content_l + button_w * 2 + button_gap * 2, button_y, content_r, h - 18);
+    let cancel = Rect::new(content_l + button_w * 2 + gap * 2, button_y, content_r, h - 18);
 
     let mut modal_panel = None;
-    let mut modal_buttons = Vec::new();
-    if let Some(modal) = editor.modal.as_ref() {
-        let button_count = modal.buttons.len().max(1) as i32;
-        let mw = (w - 80).min(640).max(380);
-        let mh = if button_count >= 3 { 210 } else { 180 };
+    let mut modal_confirm = None;
+    let mut modal_cancel = None;
+    if editor.modal.is_some() {
+        let mw = (w - 80).min(560).max(360);
+        let mh = 180;
         let ml = (w - mw) / 2;
         let mt = (h - mh) / 2;
         let mp = Rect::new(ml, mt, ml + mw, mt + mh);
         modal_panel = Some(mp);
-
-        let by = mt + mh - 56;
-        if button_count == 1 {
-            modal_buttons.push(Rect::new(ml + mw / 2 - 70, by, ml + mw / 2 + 70, mt + mh - 20));
+        if editor.modal.as_ref().and_then(|m| m.cancel.as_ref()).is_some() {
+            let bw = (mw - 50) / 2;
+            modal_confirm = Some(Rect::new(ml + 20, mt + mh - 56, ml + 20 + bw, mt + mh - 20));
+            modal_cancel = Some(Rect::new(ml + 30 + bw, mt + mh - 56, ml + 30 + bw + bw, mt + mh - 20));
         } else {
-            let margin = 20;
-            let btn_gap = 8;
-            let total_w = mw - margin * 2;
-            let bw = (total_w - btn_gap * (button_count - 1)) / button_count;
-            for index in 0..button_count {
-                let l = ml + margin + index * (bw + btn_gap);
-                modal_buttons.push(Rect::new(l, by, l + bw, mt + mh - 20));
-            }
+            modal_confirm = Some(Rect::new(
+                ml + mw / 2 - 70,
+                mt + mh - 56,
+                ml + mw / 2 + 70,
+                mt + mh - 20,
+            ));
         }
     }
 
@@ -732,10 +497,6 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
         mode,
         mode_left,
         mode_right,
-        scheme_title,
-        scheme_buttons,
-        add_scheme,
-        delete_scheme,
         slots,
         grid,
         save,
@@ -743,7 +504,8 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
         cancel,
         footnote,
         modal_panel,
-        modal_buttons,
+        modal_confirm,
+        modal_cancel,
     }
 }
 
@@ -753,112 +515,34 @@ mod tests {
     use crate::bindings::{BindingEntry, BindingSnapshot};
     use std::collections::HashMap;
 
-    fn snapshot_with(uid: u32, schemes: Vec<Vec<KeyToken>>) -> BindingSnapshot {
+    fn editor(uid: u32, keys: Vec<KeyToken>) -> Editor {
         let mut names = HashMap::new();
         names.insert(uid, "测试技能".to_string());
-        BindingSnapshot {
-            entries: schemes
-                .into_iter()
-                .map(|keys| BindingEntry {
-                    uid,
-                    keys,
-                    source: BindingSource::Cfg,
-                })
-                .collect(),
+        let snapshot = BindingSnapshot {
+            entries: vec![BindingEntry {
+                uid,
+                keys,
+                source: crate::bindings::BindingSource::Cfg,
+            }],
             names,
-        }
-    }
-
-    fn editor(uid: u32, keys: Vec<KeyToken>) -> Editor {
-        Editor::new(uid, snapshot_with(uid, vec![keys])).unwrap()
-    }
-
-    fn editor_multi(uid: u32, schemes: Vec<Vec<KeyToken>>) -> Editor {
-        Editor::new(uid, snapshot_with(uid, schemes)).unwrap()
+        };
+        Editor::new(uid, snapshot).unwrap()
     }
 
     #[test]
     fn editor_prefills_existing_cfg_binding() {
         let e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
-        assert_eq!(e.slots(), &[Some(KeyToken::Interact), Some(KeyToken::Attack)]);
+        assert_eq!(e.slots, vec![Some(KeyToken::Interact), Some(KeyToken::Attack)]);
         assert_eq!(e.source, BindingSource::Cfg);
-        assert_eq!(e.selected_index, 0);
-    }
-
-    #[test]
-    fn editor_loads_all_schemes_and_selects_first() {
-        let e = editor_multi(
-            7100,
-            vec![
-                vec![KeyToken::Interact, KeyToken::Attack],
-                vec![KeyToken::Block, KeyToken::Attack],
-            ],
-        );
-        assert_eq!(e.schemes.len(), 2);
-        assert_eq!(e.selected_index, 0);
-        assert_eq!(e.scheme_label(0), "交互-攻击");
-        assert_eq!(e.scheme_label(1), "防御-攻击");
-    }
-
-    #[test]
-    fn selecting_a_scheme_does_not_mark_dirty() {
-        let mut e = editor_multi(
-            7100,
-            vec![
-                vec![KeyToken::Interact, KeyToken::Attack],
-                vec![KeyToken::Block, KeyToken::Attack],
-            ],
-        );
-        e.select_scheme(1);
-        assert_eq!(e.selected_index, 1);
-        assert!(!e.is_dirty());
-        assert_eq!(e.slots(), &[Some(KeyToken::Block), Some(KeyToken::Attack)]);
-    }
-
-    #[test]
-    fn adding_scheme_selects_blank_scheme_and_marks_dirty() {
-        let mut e = editor_multi(70500, vec![vec![KeyToken::ProstheticUse]]);
-        e.add_scheme();
-        assert_eq!(e.schemes.len(), 2);
-        assert_eq!(e.selected_index, 1);
-        assert_eq!(e.mode(), BindingMode::Single);
-        assert_eq!(e.slots(), &[None]);
-        assert!(e.is_dirty());
-    }
-
-    #[test]
-    fn deleting_last_scheme_keeps_one_blank_scheme() {
-        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
-        e.delete_selected_scheme();
-        assert_eq!(e.schemes.len(), 1);
-        assert_eq!(e.selected_index, 0);
-        assert_eq!(e.mode(), BindingMode::Two);
-        assert_eq!(e.slots(), &[None, None]);
-        assert!(e.is_dirty());
-    }
-
-    #[test]
-    fn deleting_selected_scheme_selects_nearest_remaining() {
-        let mut e = editor_multi(
-            7100,
-            vec![
-                vec![KeyToken::Interact, KeyToken::Attack],
-                vec![KeyToken::Block, KeyToken::Attack],
-            ],
-        );
-        e.select_scheme(1);
-        e.delete_selected_scheme();
-        assert_eq!(e.schemes.len(), 1);
-        assert_eq!(e.selected_index, 0);
     }
 
     #[test]
     fn removing_a_slot_keeps_other_slots() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
         e.click_slot(0);
-        assert_eq!(e.slots(), &[None, Some(KeyToken::Attack)]);
+        assert_eq!(e.slots, vec![None, Some(KeyToken::Attack)]);
         e.click_key(KeyToken::Block);
-        assert_eq!(e.slots(), &[Some(KeyToken::Block), Some(KeyToken::Attack)]);
+        assert_eq!(e.slots, vec![Some(KeyToken::Block), Some(KeyToken::Attack)]);
     }
 
     #[test]
@@ -867,11 +551,11 @@ mod tests {
         e.click_slot(0);
         e.click_slot(1);
         e.click_key(KeyToken::ProstheticUse);
-        assert_eq!(e.slots(), &[None, None]);
+        assert_eq!(e.slots, vec![None, None]);
         assert_eq!(
             e.modal.as_ref().unwrap().message,
             i18n::pick(
-                "忍具键/忍具切换键只能作为尾键。",
+                "忍具键/忍具切换键只能作为尾键",
                 "Use Tool / Switch Tool can only be the second key.",
             )
         );
@@ -881,20 +565,20 @@ mod tests {
     fn mode_switch_is_directional_and_requires_confirmation() {
         let mut e = editor(70500, vec![KeyToken::Up, KeyToken::ProstheticUse]);
         e.mode_next();
-        assert_eq!(e.mode(), BindingMode::Two);
+        assert_eq!(e.mode, BindingMode::Two);
         e.mode_prev();
-        assert_eq!(e.mode(), BindingMode::Two);
+        assert_eq!(e.mode, BindingMode::Two);
         assert!(e.modal.is_some());
-        match e.take_modal_action(0) {
+        match e.modal_confirm() {
             Some(ModalAction::ApplyMode(mode)) => e.apply_mode(mode),
             other => panic!("unexpected modal action: {other:?}"),
         }
-        assert_eq!(e.mode(), BindingMode::Single);
-        assert_eq!(e.slots().len(), 1);
+        assert_eq!(e.mode, BindingMode::Single);
+        assert_eq!(e.slots.len(), 1);
         e.mode_prev();
-        assert_eq!(e.mode(), BindingMode::Single);
+        assert_eq!(e.mode, BindingMode::Single);
         e.mode_next();
-        assert_eq!(e.mode(), BindingMode::Two);
+        assert_eq!(e.mode, BindingMode::Two);
     }
 
     #[test]
@@ -903,7 +587,7 @@ mod tests {
         e.click_slot(1);
         e.click_key(KeyToken::Up);
         assert_eq!(e.modal.as_ref().unwrap().message, "忍具尾键不支持该键位");
-        assert_eq!(e.slots(), &[Some(KeyToken::Interact), None]);
+        assert_eq!(e.slots, vec![Some(KeyToken::Interact), None]);
     }
 
     #[test]
@@ -912,72 +596,32 @@ mod tests {
         e.snapshot.entries.push(BindingEntry {
             uid: 5200,
             keys: vec![KeyToken::Block, KeyToken::Attack],
-            source: BindingSource::Cfg,
+            source: crate::bindings::BindingSource::Cfg,
         });
         e.click_slot(0);
         e.click_key(KeyToken::Block);
         assert!(e.modal.is_none());
-        assert_eq!(e.slots(), &[Some(KeyToken::Block), Some(KeyToken::Attack)]);
+        assert_eq!(e.slots, vec![Some(KeyToken::Block), Some(KeyToken::Attack)]);
         assert_eq!(
-            e.snapshot.validate_candidate(e.uid, &e.selected_keys()).unwrap_err(),
+            e.snapshot.validate_candidate(e.uid, &e.keys()).unwrap_err(),
             BindingValidationError::Occupied
         );
     }
 
     #[test]
-    fn duplicate_scheme_inside_skill_is_rejected_immediately() {
-        let mut e = editor_multi(
-            7100,
-            vec![
-                vec![KeyToken::Interact, KeyToken::Attack],
-                vec![KeyToken::Block, KeyToken::Attack],
-            ],
-        );
-        e.select_scheme(1);
-        e.click_slot(0);
-        e.click_key(KeyToken::Interact);
-        assert_eq!(e.slots(), &[None, Some(KeyToken::Attack)]);
-        assert_eq!(e.modal.as_ref().unwrap().message, "该技能内存在重复方案");
-    }
-
-    #[test]
     fn overwrite_modal_has_confirm_and_cancel_only() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
-        e.show_overwrite_confirm("other", vec![vec![KeyToken::Interact, KeyToken::Interact]]);
+        e.show_overwrite_confirm("other", vec![KeyToken::Interact, KeyToken::Interact]);
         let modal = e.modal.as_ref().unwrap();
-        assert_eq!(modal.buttons.len(), 2);
-        assert_eq!(modal.buttons[0].label, "覆盖原键位");
-        assert_eq!(modal.buttons[1].label, "取消");
-        match &modal.buttons[0].action {
+        assert_eq!(modal.confirm, "覆盖原键位");
+        assert_eq!(modal.cancel.as_deref(), Some("取消"));
+        match &modal.action {
             ModalAction::OverwriteAndSave(keys) => {
-                assert_eq!(keys, &vec![vec![KeyToken::Interact, KeyToken::Interact]]);
+                assert_eq!(keys, &vec![KeyToken::Interact, KeyToken::Interact]);
             }
             other => panic!("unexpected modal action: {other:?}"),
         }
     }
-
-    #[test]
-    fn close_prompt_has_yes_no_cancel_actions() {
-        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
-        e.click_slot(0);
-        e.request_close();
-        let modal = e.modal.as_ref().unwrap();
-        assert_eq!(modal.buttons.len(), 3);
-        assert!(matches!(modal.buttons[0].action, ModalAction::SaveAndClose));
-        assert!(matches!(modal.buttons[1].action, ModalAction::DiscardAndClose));
-        assert!(matches!(modal.buttons[2].action, ModalAction::Dismiss));
-    }
-
-    #[test]
-    fn delete_prompt_has_confirm_and_cancel_actions() {
-        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
-        e.request_delete_scheme();
-        let modal = e.modal.as_ref().unwrap();
-        assert_eq!(modal.buttons.len(), 2);
-        assert!(matches!(modal.buttons[0].action, ModalAction::DeleteSelectedScheme));
-        assert!(matches!(modal.buttons[1].action, ModalAction::Dismiss));
-    }
-
     #[test]
     fn full_slots_show_required_message() {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
@@ -985,7 +629,7 @@ mod tests {
         assert_eq!(
             e.modal.as_ref().unwrap().message,
             i18n::pick(
-                "键位已满，请点击配置区键位去移除。",
+                "键位已满，请点击配置区键位去除",
                 "Key slots are full. Click a slot in the configuration area to remove it.",
             )
         );
@@ -1009,7 +653,7 @@ mod tests {
         assert!(
             !items
                 .iter()
-                .any(|(_, _, disabled)| *disabled && items.iter().any(|(label, _, _)| label.contains("暂不支持")))
+                .any(|(_, _, disabled)| *disabled && items.iter().any(|(label, _, _)| label.contains("暂未支持")))
         );
     }
 
@@ -1018,10 +662,10 @@ mod tests {
         let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
         e.request_reset();
         let modal = e.modal.as_ref().unwrap();
-        assert!(modal.message.contains("若要更换键位"));
-        assert_eq!(modal.buttons[0].label, "确认重置");
-        assert_eq!(modal.buttons[1].label, "取消");
-        assert!(matches!(modal.buttons[0].action, ModalAction::ResetAndClose));
+        assert!(modal.message.contains("若要更换键位，请点击首键或尾键的对应键位以移除"));
+        assert_eq!(modal.confirm, "确认重置");
+        assert_eq!(modal.cancel.as_deref(), Some("取消"));
+        assert!(matches!(modal.action, ModalAction::ResetAndClose));
     }
 
     #[test]
@@ -1032,31 +676,5 @@ mod tests {
         assert!(l.reset.r <= l.cancel.l);
         assert_eq!(l.save.t, l.reset.t);
         assert_eq!(l.reset.t, l.cancel.t);
-    }
-
-    #[test]
-    fn schemes_use_two_columns_and_wrap_to_new_rows() {
-        let e = editor_multi(
-            7100,
-            vec![
-                vec![KeyToken::Interact, KeyToken::Attack],
-                vec![KeyToken::Block, KeyToken::Attack],
-                vec![KeyToken::Jump, KeyToken::Attack],
-            ],
-        );
-        let l = layout(&e, 760, 760);
-        assert_eq!(l.scheme_buttons.len(), 3);
-        assert_eq!(l.scheme_buttons[0].t, l.scheme_buttons[1].t);
-        assert!(l.scheme_buttons[0].r <= l.scheme_buttons[1].l);
-        assert!(l.scheme_buttons[2].t > l.scheme_buttons[0].t);
-        assert!(l.scheme_buttons[2].b <= l.add_scheme.t);
-    }
-
-    #[test]
-    fn scheme_actions_are_above_first_and_second_key_slots() {
-        let e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
-        let l = layout(&e, 760, 760);
-        assert!(l.add_scheme.b <= l.slots[0].t);
-        assert!(l.delete_scheme.b <= l.slots[0].t);
     }
 }

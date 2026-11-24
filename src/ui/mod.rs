@@ -385,7 +385,7 @@ fn open_overlay() -> Result<()> {
     if state.frame_height <= 0 {
         state.frame_height = client_height;
     }
-    let (panel_w, panel_h, panel_x, panel_y) = render::panel_geometry(&editor, client_width, client_height);
+    let (panel_w, panel_h, panel_x, panel_y) = render::panel_geometry(client_width, client_height);
     state.cursor_x = panel_x + panel_w as f32 * 0.5;
     state.cursor_y = panel_y + panel_h as f32 * 0.5;
     state.editor = Some(editor);
@@ -544,14 +544,8 @@ fn request_close() {
 
 fn request_close_state(state: &mut UiState) {
     let close = if let Some(editor) = state.editor.as_mut() {
-        if editor.modal.is_some() {
-            // Esc / F while a dialog is open only dismisses that dialog.
-            editor.modal_cancel();
-            false
-        } else {
-            editor.request_close();
-            editor.modal.is_none()
-        }
+        editor.request_close();
+        editor.modal.is_none()
     } else {
         false
     };
@@ -574,11 +568,8 @@ fn handle_click_cursor() {
     if state.editor.is_none() || state.game_hwnd == 0 {
         return;
     }
-    let Some(editor) = state.editor.as_ref() else {
-        return;
-    };
     let (panel_w, panel_h, panel_x, panel_y) =
-        render::panel_geometry(editor, state.frame_width.max(1), state.frame_height.max(1));
+        render::panel_geometry(state.frame_width.max(1), state.frame_height.max(1));
     let local_x = state.cursor_x.round() as i32 - panel_x as i32;
     let local_y = state.cursor_y.round() as i32 - panel_y as i32;
     if local_x < 0 || local_y < 0 || local_x >= panel_w || local_y >= panel_h {
@@ -592,7 +583,7 @@ enum ClickAction {
     None,
     Close,
     Save,
-    SaveSchemes(Vec<Vec<KeyToken>>, bool),
+    SaveKeys(Vec<KeyToken>, bool),
     ResetNow,
     Cancel,
 }
@@ -602,44 +593,29 @@ fn click_action(editor: &mut Editor, w: i32, h: i32, x: i32, y: i32) -> ClickAct
 
     if let Some(panel) = l.modal_panel {
         if panel.contains(x, y) {
-            for (index, button) in l.modal_buttons.iter().copied().enumerate() {
-                if button.contains(x, y) {
-                    return match editor.take_modal_action(index) {
+            if let Some(confirm) = l.modal_confirm {
+                if confirm.contains(x, y) {
+                    return match editor.modal_confirm() {
                         Some(ModalAction::Dismiss) | None => ClickAction::None,
-                        Some(ModalAction::SaveAndClose) => ClickAction::Save,
                         Some(ModalAction::DiscardAndClose) => ClickAction::Close,
                         Some(ModalAction::ApplyMode(mode)) => {
                             editor.apply_mode(mode);
                             ClickAction::None
                         }
-                        Some(ModalAction::OverwriteAndSave(schemes)) => ClickAction::SaveSchemes(schemes, true),
+                        Some(ModalAction::OverwriteAndSave(keys)) => ClickAction::SaveKeys(keys, true),
                         Some(ModalAction::ResetAndClose) => ClickAction::ResetNow,
-                        Some(ModalAction::DeleteSelectedScheme) => {
-                            editor.delete_selected_scheme();
-                            ClickAction::None
-                        }
                     };
+                }
+            }
+            if let Some(cancel) = l.modal_cancel {
+                if cancel.contains(x, y) {
+                    editor.modal_cancel();
                 }
             }
         }
         return ClickAction::None;
     }
     if editor.modal.is_some() {
-        return ClickAction::None;
-    }
-
-    for (index, rect) in l.scheme_buttons.iter().copied().enumerate() {
-        if rect.contains(x, y) {
-            editor.select_scheme(index);
-            return ClickAction::None;
-        }
-    }
-    if l.add_scheme.contains(x, y) {
-        editor.add_scheme();
-        return ClickAction::None;
-    }
-    if l.delete_scheme.contains(x, y) {
-        editor.request_delete_scheme();
         return ClickAction::None;
     }
 
@@ -695,47 +671,38 @@ fn handle_click(state: &mut UiState, x: i32, y: i32, w: i32, h: i32) {
         ClickAction::None => {}
         ClickAction::Close => close_overlay(state),
         ClickAction::Save => save_editor(state),
-        ClickAction::SaveSchemes(schemes, overwrite) => save_editor_schemes(state, schemes, overwrite),
+        ClickAction::SaveKeys(keys, overwrite) => save_editor_keys(state, keys, overwrite),
         ClickAction::ResetNow => reset_editor_binding(state),
         ClickAction::Cancel => request_close_state(state),
     }
 }
 
 fn save_editor(state: &mut UiState) {
-    let schemes = {
+    let keys = {
         let Some(editor) = state.editor.as_mut() else {
             return;
         };
         if !editor.complete() {
-            editor.show_message(i18n::pick(
-                "请先完成所有方案的键位配置",
-                "Complete every scheme before saving.",
-            ));
+            editor.show_message(i18n::pick("请先完成键位配置", "Complete the key binding first."));
             return;
         }
 
-        let schemes = editor.all_keys();
-        match editor.snapshot.validate_scheme_set(editor.uid, &schemes) {
-            Ok(()) => schemes,
+        let keys = editor.keys();
+        match editor.snapshot.validate_candidate(editor.uid, &keys) {
+            Ok(()) => keys,
             Err(BindingValidationError::Occupied) => {
-                let conflicts = editor.snapshot.conflicting_entries(editor.uid, &schemes);
-                let mut names = Vec::new();
-                for entry in conflicts {
-                    let name = editor
-                        .snapshot
-                        .name(entry.uid)
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| format!("UID {}", entry.uid));
-                    if !names.contains(&name) {
-                        names.push(name);
-                    }
-                }
-                let conflict_names = if names.is_empty() {
-                    i18n::pick("其他技能/忍具", "another combat art / prosthetic").to_string()
-                } else {
-                    names.join("、")
-                };
-                editor.show_overwrite_confirm(&conflict_names, schemes);
+                let conflict_name = editor
+                    .snapshot
+                    .conflicting_entry(editor.uid, &keys)
+                    .map(|entry| {
+                        editor
+                            .snapshot
+                            .name(entry.uid)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| format!("UID {}", entry.uid))
+                    })
+                    .unwrap_or_else(|| i18n::pick("其他技能/忍具", "another combat art / prosthetic").to_string());
+                editor.show_overwrite_confirm(&conflict_name, keys);
                 return;
             }
             Err(error) => {
@@ -745,30 +712,30 @@ fn save_editor(state: &mut UiState) {
         }
     };
 
-    save_editor_schemes(state, schemes, false);
+    save_editor_keys(state, keys, false);
 }
 
-fn save_editor_schemes(state: &mut UiState, schemes: Vec<Vec<KeyToken>>, overwrite: bool) {
+fn save_editor_keys(state: &mut UiState, keys: Vec<KeyToken>, overwrite: bool) {
     let result = {
         let Some(editor) = state.editor.as_ref() else {
             return;
         };
         if overwrite {
-            bindings::save_ui_schemes_overwrite(&state.cfg_path, &editor.snapshot, editor.uid, schemes)
+            bindings::save_ui_binding_overwrite(&state.cfg_path, &editor.snapshot, editor.uid, keys)
         } else {
-            bindings::save_ui_schemes(&state.cfg_path, &editor.snapshot, editor.uid, schemes)
+            bindings::save_ui_binding(&state.cfg_path, &editor.snapshot, editor.uid, keys)
         }
     };
 
     match result {
         Ok(()) => {
-            let (uid, name, mode, scheme_count) = state
+            let (uid, name, mode) = state
                 .editor
                 .as_ref()
-                .map(|editor| (editor.uid, editor.name.clone(), editor.mode(), editor.schemes.len()))
-                .unwrap_or((0, String::new(), editor::BindingMode::Two, 0));
+                .map(|editor| (editor.uid, editor.name.clone(), editor.mode))
+                .unwrap_or((0, String::new(), editor::BindingMode::Two));
             bindings::request_reload();
-            log::warn!("ui: saved uid={uid} name={name} mode={mode:?} schemes={scheme_count} overwrite={overwrite}");
+            log::warn!("ui: saved uid={uid} name={name} mode={mode:?} overwrite={overwrite}");
             close_overlay(state);
         }
         Err(error) => {

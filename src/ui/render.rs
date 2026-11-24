@@ -30,7 +30,7 @@ use windows::{
 };
 
 use super::{
-    editor::{BindingMode, Editor, GridItem, ModalButtonStyle, Rect, layout},
+    editor::{BindingMode, Editor, GridItem, Rect, layout},
     i18n,
 };
 
@@ -186,7 +186,7 @@ impl Renderer {
             return Ok(());
         }
 
-        let (panel_w, panel_h, panel_x, panel_y) = panel_geometry(editor, frame_width as i32, frame_height as i32);
+        let (panel_w, panel_h, panel_x, panel_y) = panel_geometry(frame_width as i32, frame_height as i32);
         if panel_w <= 0 || panel_h <= 0 {
             return Ok(());
         }
@@ -282,7 +282,7 @@ impl Renderer {
         text(
             hdc,
             l.mode,
-            editor.mode().label(),
+            editor.mode.label(),
             (20 * scale / 100).clamp(16, 30),
             TEXT,
             true,
@@ -312,66 +312,8 @@ impl Renderer {
             );
         }
 
-        text(
-            hdc,
-            l.scheme_title,
-            i18n::pick("搓招方案", "Key schemes"),
-            (16 * scale / 100).clamp(12, 23),
-            MUTED,
-            false,
-            false,
-            false,
-        );
-        for (index, rect) in l.scheme_buttons.iter().copied().enumerate() {
-            let selected = index == editor.selected_index;
-            fill(hdc, rect, if selected { PANEL_2 } else { PANEL });
-            frame(
-                hdc,
-                rect,
-                if selected { GOLD_BRIGHT } else { GOLD },
-                if selected { 2 } else { 1 },
-            );
-            text(
-                hdc,
-                rect,
-                &editor.scheme_label(index),
-                (15 * scale / 100).clamp(12, 22),
-                if selected { TEXT } else { MUTED },
-                selected,
-                true,
-                false,
-            );
-        }
-
-        fill(hdc, l.add_scheme, GREEN);
-        frame(hdc, l.add_scheme, GOLD, 1);
-        text(
-            hdc,
-            l.add_scheme,
-            i18n::pick("添加方案", "Add scheme"),
-            (15 * scale / 100).clamp(12, 22),
-            TEXT,
-            true,
-            true,
-            false,
-        );
-        fill(hdc, l.delete_scheme, RED);
-        frame(hdc, l.delete_scheme, GOLD, 1);
-        text(
-            hdc,
-            l.delete_scheme,
-            i18n::pick("删除选中方案", "Delete selected"),
-            (15 * scale / 100).clamp(12, 22),
-            TEXT,
-            true,
-            true,
-            false,
-        );
-
-        let mode = editor.mode();
-        let slots = editor.slots();
         for (i, rect) in l.slots.iter().copied().enumerate() {
-            let label = match mode {
+            let label = match editor.mode {
                 BindingMode::Single => i18n::pick("键位（点击移除）", "Key (click to remove)").to_string(),
                 BindingMode::Two if i == 0 => i18n::pick("首键（点击移除）", "First key (click to remove)").to_string(),
                 BindingMode::Two => i18n::pick("尾键（点击移除）", "Second key (click to remove)").to_string(),
@@ -380,30 +322,23 @@ impl Renderer {
             frame(hdc, rect, GOLD, 1);
             text(
                 hdc,
-                Rect::new(rect.l + 8, rect.t + 8, rect.r - 8, rect.t + 30),
+                Rect::new(rect.l + 8, rect.t + 8, rect.r - 8, rect.t + 32),
                 &label,
-                (14 * scale / 100).clamp(11, 21),
+                (15 * scale / 100).clamp(12, 22),
                 MUTED,
                 false,
                 false,
                 false,
             );
-            let value = slots
-                .get(i)
-                .copied()
-                .flatten()
+            let value = editor.slots[i]
                 .map(|key| i18n::key_label(key).to_string())
                 .unwrap_or_else(|| i18n::pick("（点击下方键位填入）", "(Click a key below)").to_string());
             text(
                 hdc,
-                Rect::new(rect.l + 8, rect.t + 32, rect.r - 8, rect.b - 6),
+                Rect::new(rect.l + 8, rect.t + 34, rect.r - 8, rect.b - 8),
                 &value,
-                (19 * scale / 100).clamp(14, 29),
-                if slots.get(i).copied().flatten().is_some() {
-                    TEXT
-                } else {
-                    MUTED
-                },
+                (21 * scale / 100).clamp(15, 31),
+                if editor.slots[i].is_some() { TEXT } else { MUTED },
                 true,
                 false,
                 false,
@@ -417,10 +352,10 @@ impl Renderer {
             hdc,
             l.footnote,
             i18n::pick(
-                "点击方案切换；添加/删除只修改本技能方案，保存后全部生效。重置会清空全部触发键位。",
-                "Click a scheme to select it. Add/delete edits this skill only; save applies all schemes. Reset clears every trigger.",
+                "点击下方键位填入，点击上方键位移除。重置会删除本技能/忍具的全部触发键位。",
+                "Click a key below to assign; click a slot to remove. Reset clears all triggers.",
             ),
-            (12 * scale / 100).clamp(10, 18),
+            (13 * scale / 100).clamp(11, 19),
             MUTED,
             false,
             true,
@@ -472,9 +407,9 @@ impl Renderer {
                     hdc,
                     Rect::new(
                         modal_panel.l + 16,
-                        modal_panel.t + 16,
+                        modal_panel.t + 18,
                         modal_panel.r - 16,
-                        modal_panel.b - 68,
+                        modal_panel.b - 70,
                     ),
                     &modal.message,
                     (18 * scale / 100).clamp(14, 27),
@@ -483,21 +418,27 @@ impl Renderer {
                     true,
                     true,
                 );
-                for (index, rect) in l.modal_buttons.iter().copied().enumerate() {
-                    let Some(button) = modal.buttons.get(index) else {
-                        continue;
-                    };
-                    let bg = match button.style {
-                        ModalButtonStyle::Primary => GREEN,
-                        ModalButtonStyle::Danger => RED,
-                        ModalButtonStyle::Neutral => PANEL_2,
-                    };
-                    fill(hdc, rect, bg);
-                    frame(hdc, rect, GOLD, 1);
+                if let Some(confirm) = l.modal_confirm {
+                    fill(hdc, confirm, GREEN);
+                    frame(hdc, confirm, GOLD, 1);
                     text(
                         hdc,
-                        rect,
-                        &button.label,
+                        confirm,
+                        &modal.confirm,
+                        (16 * scale / 100).clamp(13, 24),
+                        TEXT,
+                        true,
+                        true,
+                        false,
+                    );
+                }
+                if let Some(cancel) = l.modal_cancel {
+                    fill(hdc, cancel, RED);
+                    frame(hdc, cancel, GOLD, 1);
+                    text(
+                        hdc,
+                        cancel,
+                        modal.cancel.as_deref().unwrap_or(i18n::pick("取消", "Cancel")),
                         (16 * scale / 100).clamp(13, 24),
                         TEXT,
                         true,
@@ -512,6 +453,7 @@ impl Renderer {
         Ok(())
     }
 }
+
 impl DeviceResources {
     fn new(device: ID3D11Device, swapchain_raw: *mut c_void) -> Result<Self> {
         let context =
@@ -998,15 +940,12 @@ fn scale_for(_w: i32, h: i32) -> i32 {
     ((h as f32 / 760.0) * 100.0).round().clamp(75.0, 135.0) as i32
 }
 
-pub(crate) fn panel_geometry(editor: &Editor, frame_w: i32, frame_h: i32) -> (i32, i32, f32, f32) {
+pub(crate) fn panel_geometry(frame_w: i32, frame_h: i32) -> (i32, i32, f32, f32) {
     let margin = 24;
     let max_w = (frame_w - margin).max(1);
     let max_h = (frame_h - margin).max(1);
     let w = ((frame_w as f32 * 0.43).round() as i32).clamp(560.min(max_w), max_w);
-    let scheme_rows = editor.schemes.len().div_ceil(2).max(1) as i32;
-    let extra_scheme_height = (scheme_rows - 1) * 38;
-    let base_h = (frame_h as f32 * 0.74).round() as i32;
-    let h = (base_h + extra_scheme_height).clamp(620.min(max_h), max_h);
+    let h = ((frame_h as f32 * 0.74).round() as i32).clamp(620.min(max_h), max_h);
     let desired_x = frame_w - w - (frame_w as f32 * 0.015).round() as i32;
     let x = desired_x.clamp(0, (frame_w - w).max(0));
     let desired_y = (frame_h as f32 * 0.145).round() as i32;

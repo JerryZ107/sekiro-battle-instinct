@@ -1,4 +1,4 @@
-use std::{collections::HashSet, error::Error, fmt};
+use std::{error::Error, fmt};
 
 use crate::bindings::{BindingCategory, BindingEntry, KeyToken, category_for_uid};
 
@@ -10,8 +10,6 @@ pub enum BindingValidationError {
     ProstheticSingleKey,
     ProstheticKeyAsFirst,
     UnsupportedProstheticTail,
-    DuplicateScheme,
-    EmptySchemeSet,
     Occupied,
 }
 
@@ -24,8 +22,6 @@ impl fmt::Display for BindingValidationError {
             Self::ProstheticSingleKey => write!(f, "单键忍具只能使用忍具键/忍具切换键"),
             Self::ProstheticKeyAsFirst => write!(f, "忍具键/忍具切换键只能作为尾键"),
             Self::UnsupportedProstheticTail => write!(f, "忍具尾键不支持该键位"),
-            Self::DuplicateScheme => write!(f, "该技能内存在重复方案"),
-            Self::EmptySchemeSet => write!(f, "至少需要保留一个键位方案"),
             Self::Occupied => write!(f, "当前键位已被占用"),
         }
     }
@@ -33,9 +29,7 @@ impl fmt::Display for BindingValidationError {
 
 impl Error for BindingValidationError {}
 
-/// Validate the shape of one trigger sequence for a UID. This does not check
-/// conflicts with other skills or other schemes.
-pub fn validate_scheme(uid: u32, keys: &[KeyToken]) -> Result<(), BindingValidationError> {
+pub fn validate_candidate(entries: &[BindingEntry], uid: u32, keys: &[KeyToken]) -> Result<(), BindingValidationError> {
     let category = category_for_uid(uid).ok_or(BindingValidationError::InvalidUid(uid))?;
     match category {
         BindingCategory::CombatArt => {
@@ -58,38 +52,9 @@ pub fn validate_scheme(uid: u32, keys: &[KeyToken]) -> Result<(), BindingValidat
             }
         }
     }
-    Ok(())
-}
 
-/// Validate a single candidate scheme. Other schemes for the same UID are not
-/// considered conflicts; only the shape and other UIDs are checked here.
-pub fn validate_candidate(entries: &[BindingEntry], uid: u32, keys: &[KeyToken]) -> Result<(), BindingValidationError> {
-    validate_scheme(uid, keys)?;
     if entries.iter().any(|entry| entry.uid != uid && entry.keys == keys) {
         return Err(BindingValidationError::Occupied);
-    }
-    Ok(())
-}
-
-/// Validate a complete scheme set before it is persisted or applied.
-pub fn validate_scheme_set(
-    entries: &[BindingEntry],
-    uid: u32,
-    schemes: &[Vec<KeyToken>],
-) -> Result<(), BindingValidationError> {
-    if schemes.is_empty() {
-        return Err(BindingValidationError::EmptySchemeSet);
-    }
-
-    let mut seen = HashSet::new();
-    for keys in schemes {
-        validate_scheme(uid, keys)?;
-        if !seen.insert(keys.clone()) {
-            return Err(BindingValidationError::DuplicateScheme);
-        }
-        if entries.iter().any(|entry| entry.uid != uid && entry.keys == *keys) {
-            return Err(BindingValidationError::Occupied);
-        }
     }
     Ok(())
 }
@@ -157,26 +122,5 @@ mod tests {
         assert!(validate_candidate(&[], 7100, &[KeyToken::Jump, KeyToken::Crouch]).is_ok());
         assert!(validate_candidate(&[], 70500, &[KeyToken::Sprint, KeyToken::ProstheticUse]).is_ok());
         assert!(validate_candidate(&[], 70500, &[KeyToken::Crouch, KeyToken::Jump]).is_ok());
-    }
-
-    #[test]
-    fn scheme_set_rejects_duplicate_schemes_for_same_uid() {
-        let schemes = vec![
-            vec![KeyToken::Interact, KeyToken::Attack],
-            vec![KeyToken::Interact, KeyToken::Attack],
-        ];
-        assert_eq!(
-            validate_scheme_set(&[], 7100, &schemes).unwrap_err(),
-            BindingValidationError::DuplicateScheme
-        );
-    }
-
-    #[test]
-    fn scheme_set_allows_multiple_distinct_schemes_for_same_uid() {
-        let schemes = vec![
-            vec![KeyToken::Interact, KeyToken::Attack],
-            vec![KeyToken::Block, KeyToken::Attack],
-        ];
-        assert!(validate_scheme_set(&[], 7100, &schemes).is_ok());
     }
 }
