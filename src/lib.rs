@@ -10,6 +10,7 @@ mod flow;
 mod frame;
 mod game;
 mod game_menu;
+mod hook_util;
 mod input;
 mod load_console;
 mod logger;
@@ -189,14 +190,18 @@ fn chainload(path: &Path) {
 const HOOK_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const HOOK_READY_POLL: Duration = Duration::from_millis(20);
 
+fn hook_target_ready(address: usize, signature: &[u8]) -> bool {
+    menu_probe::range_executable(address, signature.len()) && menu_probe::has_expected_prefix(address, signature)
+}
+
 fn wait_for_game_code() -> bool {
     let deadline = Instant::now() + HOOK_READY_TIMEOUT;
     loop {
         // MinHook needs committed executable pages for its input/damage targets.
         // The menu signature also rejects unsupported Sekiro executable builds.
         if game_menu::code_ready()
-            && menu_probe::range_executable(game::PROCESS_INPUT, 16)
-            && menu_probe::range_executable(game::PLAYER_DAMAGE_REACTION, 16)
+            && hook_target_ready(game::PROCESS_INPUT, &game::PROCESS_INPUT_PREFIX)
+            && hook_target_ready(game::PLAYER_DAMAGE_REACTION, &game::PLAYER_DAMAGE_REACTION_PREFIX)
         {
             return true;
         }
@@ -235,6 +240,7 @@ fn modify(path: &Path) {
     load_console::print_line("读取配置 battle_instinct.cfg …");
     let result = (|| unsafe {
         let ui_cfg_path = path.clone();
+        menu_probe::start_menu_monitor();
         let modification = Mod::new(path)?;
 
         load_console::print_line("安装伤害事件钩子…");
@@ -249,7 +255,7 @@ fn modify(path: &Path) {
         let target = game::PROCESS_INPUT as *mut c_void;
         let detour = process_input as *mut c_void;
         let mut process_input_hook_ready = false;
-        match MinHook::create_hook(target, detour) {
+        match hook_util::create_hook_with_retry(target, detour, "process_input", true) {
             Ok(process_input_orig) => {
                 let process_input_orig = mem::transmute(process_input_orig);
                 match PROCESS_INPUT_ORIG.set(process_input_orig) {

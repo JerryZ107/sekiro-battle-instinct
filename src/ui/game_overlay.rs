@@ -9,7 +9,6 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use minhook::MinHook;
 use windows::{
     Win32::{
         Foundation::{BOOL, HWND},
@@ -30,6 +29,7 @@ use windows::{
 };
 
 use super::render::Renderer;
+use crate::hook_util;
 
 type PresentFn = unsafe extern "system" fn(*mut c_void, u32, u32) -> HRESULT;
 type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void) -> HRESULT;
@@ -50,8 +50,12 @@ pub fn install() -> Result<()> {
         return Err(anyhow!("DXGI Present vtable entry is null"));
     }
 
-    let trampoline = unsafe { MinHook::create_hook(present_addr as *mut c_void, present_detour as *mut c_void) }
-        .map_err(|status| anyhow!("MinHook create_hook(IDXGISwapChain::Present) failed: {status:?}"))?;
+    let trampoline = hook_util::create_hook_with_retry(
+        present_addr as *mut c_void,
+        present_detour as *mut c_void,
+        "IDXGISwapChain::Present",
+        true,
+    )?;
     let original: PresentFn = unsafe { mem::transmute(trampoline) };
     PRESENT_ORIG
         .set(original)
@@ -64,7 +68,12 @@ pub fn install() -> Result<()> {
         let vtable1 = unsafe { *(raw1 as *const *const usize) };
         let present1_addr = unsafe { *vtable1.add(22) };
         if present1_addr != 0 {
-            match unsafe { MinHook::create_hook(present1_addr as *mut c_void, present1_detour as *mut c_void) } {
+            match hook_util::create_hook_with_retry(
+                present1_addr as *mut c_void,
+                present1_detour as *mut c_void,
+                "IDXGISwapChain::Present1",
+                false,
+            ) {
                 Ok(trampoline) => {
                     let original1: Present1Fn = unsafe { mem::transmute(trampoline) };
                     if PRESENT1_ORIG.set(original1).is_ok() {
@@ -156,7 +165,7 @@ unsafe fn render_present(swapchain: *mut c_void) {
     if state.editor.is_none() {
         return;
     }
-    if !crate::menu_probe::menu_open() {
+    if !crate::menu_probe::menu_open_cached() {
         super::close_overlay_for_gameplay(&mut state);
         return;
     }

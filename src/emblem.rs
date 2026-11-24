@@ -94,7 +94,7 @@ impl Emblem {
 
         // Cap skills are learned from the pause menu. Refresh once when the
         // menu closes instead of polling the inventory on a timer.
-        let menu_open = menu_probe::menu_open();
+        let menu_open = menu_probe::menu_open_cached();
         if self.menu_was_open && !menu_open {
             self.needs_scan = true;
         }

@@ -336,6 +336,18 @@ impl Mod {
         if !self.swapout_countdown.is_done() || self.art_fire_busy() {
             return None;
         }
+
+        // Every instant-art matcher needs either an attack edge or a direction
+        // edge. Skipping the scan when neither exists keeps this hot path cheap
+        // even when many multi-scheme instant bindings are configured.
+        let direction_edge = (combo_up && !self.combo_dirs_last[0])
+            || (combo_right && !self.combo_dirs_last[1])
+            || (combo_down && !self.combo_dirs_last[2])
+            || (combo_left && !self.combo_dirs_last[3]);
+        if !attacked_just_now && !direction_edge {
+            return None;
+        }
+
         // Find the match without allocating a temporary Vec on every input tick.
         let matched = self.config.instant_arts.iter().find_map(|(&combo, &uid)| {
             self.instant_combo_matches(
