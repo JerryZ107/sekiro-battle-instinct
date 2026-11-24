@@ -2,7 +2,10 @@ use std::{ffi::c_void, sync::OnceLock};
 
 use windows::Win32::System::{
     LibraryLoader::GetModuleHandleW,
-    Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery},
+    Memory::{
+        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
+    },
 };
 
 // RVA from fromsoftware-rs / Sekiro 1.6.0.0. This is only used to gate the
@@ -36,6 +39,38 @@ pub fn menu_open() -> bool {
     read_i32(menu_man + MENU_FLAGS_OFFSET + MENU_MODE_FLAG * 4)
         .map(|value| value > 0)
         .unwrap_or(false)
+}
+
+/// Returns true only when the range is committed and executable. MinHook (and
+/// the game loader) requires target pages to have reached their final
+/// executable protection; readable is not enough because protected game code
+/// can still be unpacking while the first pages are readable.
+pub(crate) fn range_executable(addr: usize, len: usize) -> bool {
+    let mut off = 0usize;
+    while off < len {
+        let mut mbi = MEMORY_BASIC_INFORMATION::default();
+        let written = unsafe {
+            VirtualQuery(
+                Some((addr + off) as *const c_void),
+                &mut mbi,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        };
+        if written == 0 || mbi.State != MEM_COMMIT {
+            return false;
+        }
+        let protect = mbi.Protect.0;
+        if protect & PAGE_GUARD.0 != 0 || protect & PAGE_NOACCESS.0 != 0 {
+            return false;
+        }
+        let executable =
+            (PAGE_EXECUTE.0 | PAGE_EXECUTE_READ.0 | PAGE_EXECUTE_READWRITE.0 | PAGE_EXECUTE_WRITECOPY.0) & protect != 0;
+        if !executable {
+            return false;
+        }
+        off = off.saturating_add(mbi.RegionSize.max(1));
+    }
+    true
 }
 
 pub(crate) fn range_readable(addr: usize, len: usize) -> bool {

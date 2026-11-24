@@ -72,6 +72,8 @@ impl Lang {
             (Lang::Zh, BindingValidationError::ProstheticSingleKey) => "单键忍具只能使用忍具键/忍具切换键".to_string(),
             (Lang::Zh, BindingValidationError::ProstheticKeyAsFirst) => "忍具键/忍具切换键只能作为尾键".to_string(),
             (Lang::Zh, BindingValidationError::UnsupportedProstheticTail) => "忍具尾键不支持该键位".to_string(),
+            (Lang::Zh, BindingValidationError::DuplicateScheme) => "该技能内存在重复方案".to_string(),
+            (Lang::Zh, BindingValidationError::EmptySchemeSet) => "至少需要保留一个键位方案".to_string(),
             (Lang::Zh, BindingValidationError::Occupied) => "当前键位已被占用".to_string(),
             (Lang::En, BindingValidationError::InvalidUid(uid)) => format!("Invalid skill UID: {uid}"),
             (Lang::En, BindingValidationError::ArtNeedsTwoNormalKeys) => {
@@ -87,6 +89,10 @@ impl Lang {
             (Lang::En, BindingValidationError::UnsupportedProstheticTail) => {
                 "This key cannot be used as the second prosthetic key.".to_string()
             }
+            (Lang::En, BindingValidationError::DuplicateScheme) => {
+                "This skill already has the same scheme.".to_string()
+            }
+            (Lang::En, BindingValidationError::EmptySchemeSet) => "At least one scheme is required.".to_string(),
             (Lang::En, BindingValidationError::Occupied) => "That key is already in use.".to_string(),
         }
     }
@@ -173,11 +179,41 @@ mod tests {
 
     #[test]
     fn parses_ui_language_comments() {
-        assert_eq!(parse_lang("# ui language: en\n"), Some(Lang::En));
-        assert_eq!(parse_lang("# UI Language: en-US\n"), Some(Lang::En));
-        assert_eq!(parse_lang("# 界面语言: zh\n"), Some(Lang::Zh));
-        assert_eq!(parse_lang("# ui language: english\n"), Some(Lang::En));
-        assert_eq!(parse_lang("# ui language: unknown\n"), None);
+        assert_eq!(
+            parse_lang(
+                "# ui language: en
+"
+            ),
+            Some(Lang::En)
+        );
+        assert_eq!(
+            parse_lang(
+                "# UI Language: en-US
+"
+            ),
+            Some(Lang::En)
+        );
+        assert_eq!(
+            parse_lang(
+                "# 界面语言: zh
+"
+            ),
+            Some(Lang::Zh)
+        );
+        assert_eq!(
+            parse_lang(
+                "# ui language: english
+"
+            ),
+            Some(Lang::En)
+        );
+        assert_eq!(
+            parse_lang(
+                "# ui language: unknown
+"
+            ),
+            None
+        );
     }
 
     #[test]
