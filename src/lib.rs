@@ -262,10 +262,17 @@ fn modify(path: &Path) {
         STATE.set(state).map_err(|_| anyhow!("Failed to set STATE"))?;
 
         load_console::print_line("安装菜单选中项 Hook…");
-        game_menu::install_hooks()?;
-        load_console::print_line("  ✔ 菜单选中项 Hook 已安装");
+        if let Err(error) = game_menu::install_hooks() {
+            log::error!("menu hook install failed: {error:#}");
+            load_console::print_line(&format!("  ✗ 菜单选中项 Hook 安装失败（战斗功能继续）: {error:#}"));
+        } else {
+            load_console::print_line("  ✔ 菜单选中项 Hook 已安装");
+        }
 
-        ui::start(ui_cfg_path)?;
+        if let Err(error) = ui::start(ui_cfg_path) {
+            log::error!("ui/input hook startup failed: {error:#}");
+            load_console::print_line(&format!("  ✗ 输入/UI Hook 启动失败（战斗功能继续）: {error:#}"));
+        }
         MinHook::enable_all_hooks()?;
         log::warn!("Paper Jutsu hook enabled.");
         Ok::<_, anyhow::Error>(())

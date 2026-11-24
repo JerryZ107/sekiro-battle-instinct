@@ -15,7 +15,7 @@
 
 use std::{fs, path::Path};
 
-use crate::game;
+use crate::{game, menu_probe};
 
 /// Fixed acceptance rule: initial cap 20, +2 for each of the five skills.
 const BASE_CAP: u32 = 20;
@@ -36,6 +36,9 @@ pub struct Emblem {
     enabled: bool,
     last_i: Option<u32>,
     warned_bad_cap: bool,
+    last_inventory: Option<usize>,
+    menu_was_open: bool,
+    needs_scan: bool,
 }
 
 impl Emblem {
@@ -44,6 +47,9 @@ impl Emblem {
             enabled: true,
             last_i: None,
             warned_bad_cap: false,
+            last_inventory: None,
+            menu_was_open: false,
+            needs_scan: true,
         };
         if let Ok(text) = fs::read_to_string(cfg.as_ref()) {
             emblem.load(&text);
@@ -75,7 +81,32 @@ impl Emblem {
         if !self.enabled {
             return;
         }
+
+        let Some(inventory) = inventory_identity() else {
+            self.last_inventory = None;
+            self.needs_scan = true;
+            return;
+        };
+        if self.last_inventory != Some(inventory) {
+            self.last_inventory = Some(inventory);
+            self.needs_scan = true;
+        }
+
+        // Cap skills are learned from the pause menu. Refresh once when the
+        // menu closes instead of polling the inventory on a timer.
+        let menu_open = menu_probe::menu_open();
+        if self.menu_was_open && !menu_open {
+            self.needs_scan = true;
+        }
+        self.menu_was_open = menu_open;
+
+        if !self.needs_scan {
+            return;
+        }
+        self.needs_scan = false;
+
         let Some(player) = player_data() else {
+            self.needs_scan = true;
             return;
         };
         self.apply(player as *mut u8);
@@ -133,7 +164,7 @@ fn count_found(found: &[bool; SKILL_COUNT]) -> u32 {
 /// A learned skill adds `650000/650100/650200/650300/650400` as an item; an
 /// unlearned skill has no entry. This is a direct possession check, not an
 /// inference from the emblem cap.
-fn detect_cap_skills() -> Option<[bool; SKILL_COUNT]> {
+fn inventory_identity() -> Option<usize> {
     unsafe {
         let game_data = game::game_data();
         if game_data.is_null() {
@@ -147,8 +178,15 @@ fn detect_cap_skills() -> Option<[bool; SKILL_COUNT]> {
         if inventory.is_null() {
             return None;
         }
+        Some(inventory as usize)
+    }
+}
 
-        let base = (inventory as *const u8).add(0x10);
+fn detect_cap_skills() -> Option<[bool; SKILL_COUNT]> {
+    unsafe {
+        let inventory = inventory_identity()? as *const u8;
+
+        let base = inventory.add(0x10);
         let scan_len = if range_readable(base as usize, INVENTORY_SCAN_LEN) {
             INVENTORY_SCAN_LEN
         } else if range_readable(base as usize, 0x1000) {

@@ -103,6 +103,7 @@ struct DamageEvent {
 }
 
 static DAMAGE_EVENTS: OnceLock<Mutex<Vec<DamageEvent>>> = OnceLock::new();
+static DAMAGE_EVENTS_PENDING: AtomicBool = AtomicBool::new(false);
 static DAMAGE_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn damage_events() -> &'static Mutex<Vec<DamageEvent>> {
@@ -112,14 +113,23 @@ fn damage_events() -> &'static Mutex<Vec<DamageEvent>> {
 fn push_damage_event(event: DamageEvent) {
     if let Ok(mut events) = damage_events().lock() {
         events.push(event);
+        DAMAGE_EVENTS_PENDING.store(true, Ordering::Release);
     }
 }
 
 fn take_damage_events() -> Vec<DamageEvent> {
-    damage_events()
-        .lock()
-        .map(|mut events| mem::take(&mut *events))
-        .unwrap_or_default()
+    if !DAMAGE_EVENTS_PENDING.load(Ordering::Acquire) {
+        return Vec::new();
+    }
+    let Ok(mut events) = damage_events().lock() else {
+        DAMAGE_EVENTS_PENDING.store(false, Ordering::Release);
+        return Vec::new();
+    };
+    let taken = mem::take(&mut *events);
+    // Keep the flag update inside the mutex so a producer cannot publish an
+    // event between `take` and clearing the flag.
+    DAMAGE_EVENTS_PENDING.store(false, Ordering::Release);
+    taken
 }
 
 type DamageHookFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, u8, u8) -> usize;
@@ -570,6 +580,20 @@ mod tests {
         }
         assert_eq!(state.tick_timeout(), Some(1));
         assert_eq!(state.stacks, 0);
+    }
+
+    #[test]
+    fn damage_event_queue_uses_pending_fast_path() {
+        assert!(take_damage_events().is_empty());
+        push_damage_event(DamageEvent {
+            hp_drop: 1,
+            posture_drop: 0,
+            guard_reaction: false,
+            perfect_deflect: false,
+        });
+        let events = take_damage_events();
+        assert_eq!(events.len(), 1);
+        assert!(take_damage_events().is_empty());
     }
 
     /// The shipped cfgs write these keys *uncommented* (`flow: on`);

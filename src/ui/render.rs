@@ -109,6 +109,9 @@ impl Drop for DibSurface {
 struct DeviceResources {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
+    /// The swap chain whose device produced these resources. Keeping this
+    /// identity lets the overlay avoid `GetDevice` on every presented frame.
+    swapchain_raw: *mut c_void,
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
     rasterizer: ID3D11RasterizerState,
@@ -196,14 +199,15 @@ impl Renderer {
             self.draw_ui(editor, panel_w, panel_h)?;
         }
 
-        let device: ID3D11Device =
-            unsafe { swapchain.GetDevice() }.map_err(|error| anyhow!("IDXGISwapChain::GetDevice failed: {error}"))?;
+        let swapchain_raw = Interface::as_raw(swapchain);
         let device_changed = self
             .resources
             .as_ref()
-            .is_none_or(|resources| Interface::as_raw(&resources.device) != Interface::as_raw(&device));
+            .is_none_or(|resources| resources.swapchain_raw != swapchain_raw);
         if device_changed {
-            self.resources = Some(DeviceResources::new(device)?);
+            let device: ID3D11Device = unsafe { swapchain.GetDevice() }
+                .map_err(|error| anyhow!("IDXGISwapChain::GetDevice failed: {error}"))?;
+            self.resources = Some(DeviceResources::new(device, swapchain_raw)?);
         }
 
         let resources = self
@@ -451,7 +455,7 @@ impl Renderer {
 }
 
 impl DeviceResources {
-    fn new(device: ID3D11Device) -> Result<Self> {
+    fn new(device: ID3D11Device, swapchain_raw: *mut c_void) -> Result<Self> {
         let context =
             unsafe { device.GetImmediateContext() }.map_err(|error| anyhow!("GetImmediateContext failed: {error}"))?;
 
@@ -534,6 +538,7 @@ impl DeviceResources {
         Ok(Self {
             device,
             context,
+            swapchain_raw,
             vertex_shader: vertex_shader.ok_or_else(|| anyhow!("vertex shader was not created"))?,
             pixel_shader: pixel_shader.ok_or_else(|| anyhow!("pixel shader was not created"))?,
             rasterizer: rasterizer.ok_or_else(|| anyhow!("rasterizer state was not created"))?,

@@ -51,6 +51,11 @@ const SHADOWFALL: UID = 7600;
 const MORTAL_DRAW: UID = 5700;
 const EMPOWERED_MORTAL_DRAW: UID = 7300;
 
+/// Availability only changes after acquiring an item, loading a save, or a
+/// config reload. A one-second refresh is responsive without polling the game
+/// inventory several times per second.
+const AVAILABILITY_REFRESH_FRAMES: u8 = 60;
+
 // action bitfields
 const ATTACK: u64 = 0x1;
 const BLOCK: u64 = 0x4;
@@ -86,6 +91,9 @@ pub struct Mod {
     base_config: Config,
     availability_signature: Option<u64>,
     availability_tick: u8,
+    /// Sorted, deduplicated UIDs to check. Rebuilt only when the base config
+    /// changes instead of allocating/sorting on every availability refresh.
+    availability_uids: Vec<UID>,
     emblem: Emblem,
     flow: Flow,
     art_combo: ArtComboWindow,
@@ -160,6 +168,7 @@ impl Mod {
         let cfg_path = path.as_ref().to_path_buf();
         let base_config = bindings::load_effective_config(&cfg_path)?;
         let config = base_config.clone();
+        let availability_uids = collect_availability_uids(&base_config);
         let emblem = Emblem::new(&cfg_path);
         let flow = Flow::new(&cfg_path);
         paper_guard::init(&cfg_path);
@@ -170,6 +179,7 @@ impl Mod {
             base_config,
             availability_signature: None,
             availability_tick: 0,
+            availability_uids,
             emblem,
             flow,
             gamepad: Gamepad::new()?,
@@ -225,13 +235,13 @@ impl Mod {
     fn refresh_available_bindings(&mut self, force: bool) {
         if !force {
             self.availability_tick = self.availability_tick.saturating_add(1);
-            if self.availability_signature.is_some() && self.availability_tick < 15 {
+            if self.availability_signature.is_some() && self.availability_tick < AVAILABILITY_REFRESH_FRAMES {
                 return;
             }
         }
         self.availability_tick = 0;
 
-        let Some(signature) = availability_signature(&self.base_config) else {
+        let Some(signature) = availability_signature(&self.availability_uids) else {
             return;
         };
         if !force && self.availability_signature == Some(signature) {
@@ -773,6 +783,7 @@ impl Mod {
             match bindings::load_effective_config(&self.cfg_path) {
                 Ok(config) => {
                     self.base_config = config;
+                    self.availability_uids = collect_availability_uids(&self.base_config);
                     self.availability_signature = None;
                     self.refresh_available_bindings(true);
                     log::warn!("keybinds: runtime config reloaded");
@@ -1215,11 +1226,7 @@ impl Mod {
     }
 }
 
-fn availability_signature(config: &Config) -> Option<u64> {
-    if !inventory_ready() {
-        return None;
-    }
-
+fn collect_availability_uids(config: &Config) -> Vec<UID> {
     let mut uids: Vec<UID> = Vec::new();
     uids.extend(config.arts.values().copied());
     uids.extend(config.instant_arts.values().copied());
@@ -1228,9 +1235,16 @@ fn availability_signature(config: &Config) -> Option<u64> {
     uids.extend(config.tool_on_q);
     uids.sort_unstable();
     uids.dedup();
+    uids
+}
+
+fn availability_signature(uids: &[UID]) -> Option<u64> {
+    if !inventory_ready() {
+        return None;
+    }
 
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for uid in uids {
+    for &uid in uids {
         hash ^= uid as u64;
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         hash ^= u64::from(is_uid_available(uid));
@@ -1593,6 +1607,28 @@ mod availability_tests {
         filter_config_by_availability_with(&mut config, |uid| uid == ICHIMONJI_DOUBLE || uid == ICHIMONJI);
 
         assert_eq!(config.arts.get(&combo), Some(&ICHIMONJI_DOUBLE));
+    }
+
+    #[test]
+    fn availability_uid_cache_is_sorted_and_deduplicated() {
+        let mut config = Config::default();
+        let combo = ArtCombo::pair(ArtToken::Block, ArtToken::Attack);
+        config.arts.insert(combo, 7100);
+        config.instant_arts.insert(ArtCombo::empty(), 5500);
+        config.tools.insert(
+            ToolCombo {
+                first: ToolFirst::Interact,
+                tail: ToolTail::Use,
+            },
+            78300,
+        );
+        config.tool_on_t = Some(70500);
+        config.tool_on_q = Some(70500);
+
+        let uids = collect_availability_uids(&config);
+        assert!(uids.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(uids.iter().filter(|&&uid| uid == 70500).count(), 1);
+        assert_eq!(uids, vec![5500, 7100, 70500, 78300]);
     }
 
     #[test]

@@ -18,7 +18,12 @@
 //
 //----------------------------------------------------------------------------
 
-use std::{ffi::c_void, fs, path::Path, sync::OnceLock};
+use std::{
+    ffi::c_void,
+    fs,
+    path::Path,
+    sync::{Mutex, OnceLock},
+};
 
 use crate::game;
 use windows::Win32::System::Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery};
@@ -27,6 +32,7 @@ const NORMAL_EMBLEM_GOODS_ID: u32 = 1000;
 const TEMP_EMBLEM_GOODS_ID: u32 = 1001;
 const INVENTORY_ENTRY_SIZE: usize = 16;
 const INVENTORY_SCAN_LEN: usize = 0x2000;
+const MAX_EMBLEM_LOCATIONS: usize = 8;
 
 const PLAYER_CURRENT_HP_OFFSET: usize = 0x18;
 const PLAYER_MAX_HP_OFFSET: usize = 0x1c;
@@ -66,10 +72,21 @@ pub struct PendingHit {
     hp_before: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct EmblemStock {
     temp: u16,
     normal: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct EmblemLocations {
+    base: usize,
+    temp: [usize; MAX_EMBLEM_LOCATIONS],
+    normal: [usize; MAX_EMBLEM_LOCATIONS],
+    temp_count: u8,
+    normal_count: u8,
+    overflow: bool,
+    valid: bool,
 }
 
 impl EmblemStock {
@@ -81,6 +98,10 @@ impl EmblemStock {
 struct PaperGuard {
     enabled: bool,
     debug: bool,
+    /// Persistent offsets of the two paper-doll goods rows. The cache is
+    /// validated against the live inventory before each hit and refreshed only
+    /// when the base address or row structure changed.
+    locations: Mutex<EmblemLocations>,
 }
 
 impl PaperGuard {
@@ -88,6 +109,7 @@ impl PaperGuard {
         let mut guard = PaperGuard {
             enabled: true,
             debug: false,
+            locations: Mutex::new(EmblemLocations::default()),
         };
         if let Ok(text) = fs::read_to_string(path) {
             for line in text.lines() {
@@ -107,6 +129,59 @@ impl PaperGuard {
         }
         log::warn!("paper guard settings: enabled={} debug={}", guard.enabled, guard.debug);
         guard
+    }
+
+    fn read_stock(&self) -> EmblemStock {
+        let Ok(mut locations) = self.locations.lock() else {
+            return EmblemStock::default();
+        };
+        let Some(base) = inventory_base() else {
+            locations.valid = false;
+            return EmblemStock::default();
+        };
+        if !validate_locations(base, &locations) {
+            return refresh_locations(base, &mut locations);
+        }
+        stock_from_locations(base, &locations).unwrap_or_default()
+    }
+
+    fn refresh_stock(&self) -> EmblemStock {
+        let Ok(mut locations) = self.locations.lock() else {
+            return EmblemStock::default();
+        };
+        let Some(base) = inventory_base() else {
+            locations.valid = false;
+            return EmblemStock::default();
+        };
+        refresh_locations(base, &mut locations)
+    }
+
+    fn spend_emblems(&self, cost: u16) -> u16 {
+        if cost == 0 {
+            return 0;
+        }
+        let Ok(mut locations) = self.locations.lock() else {
+            return 0;
+        };
+        let Some(base) = inventory_base() else {
+            locations.valid = false;
+            return 0;
+        };
+        if !validate_locations(base, &locations) {
+            let _ = refresh_locations(base, &mut locations);
+        }
+
+        let mut spent = spend_from_locations(base, &locations, cost).unwrap_or(0);
+        if spent < cost {
+            // The cached structure was stale, or a newly added row pushed the
+            // stock above the cached total. Re-locate once and spend the rest.
+            let _ = refresh_locations(base, &mut locations);
+            let remaining = cost - spent;
+            spent = spent.saturating_add(
+                spend_from_locations(base, &locations, remaining).unwrap_or_else(|| spend_emblems_scan(remaining)),
+            );
+        }
+        spent
     }
 }
 
@@ -148,10 +223,21 @@ pub fn prepare_damage(damage_info: *mut c_void, hp_before: i32) -> Option<Pendin
         return None;
     }
 
-    let stock = read_emblem_stock();
-    let total_emblems = stock.total();
+    let mut stock = guard.read_stock();
     let tier = tier_for_damage(raw_damage, max_hp);
-    let Some(plan) = plan_for(tier, total_emblems) else {
+    let mut plan = plan_for(tier, stock.total());
+    if plan.is_none() {
+        // Pickups can add a new inventory row without changing the base
+        // address. If the cached total is insufficient, re-scan once so a
+        // newly acquired paper-doll stack is not ignored.
+        let refreshed = guard.refresh_stock();
+        if refreshed != stock {
+            stock = refreshed;
+            plan = plan_for(tier, stock.total());
+        }
+    }
+    let total_emblems = stock.total();
+    let Some(plan) = plan else {
         if guard.debug {
             log::info!(
                 "PAPER_SKIP tier={tier:?} raw={raw_damage} maxHp={max_hp} temp={} normal={} total={total_emblems}",
@@ -223,9 +309,9 @@ pub fn finish_damage(pending: Option<PendingHit>, chr_data: *mut u8, hp_after: i
         }
     }
 
-    let spent = spend_emblems(pending.cost);
+    let spent = guard.spend_emblems(pending.cost);
     if guard.debug {
-        let after = read_emblem_stock();
+        let after = guard.read_stock();
         log::info!(
             "PAPER_HIT tier={:?} raw={} maxHp={} total={} cost={} percent={} reduced={} hp={}->{} actualDrop={} expectedDrop={} fallback={} spent={} temp={}->{} normal={}->{}",
             pending.tier,
@@ -286,11 +372,48 @@ fn reduce_damage(raw_damage: i32, percent: u16) -> i32 {
     (raw - mitigated).clamp(0, raw) as i32
 }
 
-fn read_emblem_stock() -> EmblemStock {
+fn validate_locations(base: *mut u8, locations: &EmblemLocations) -> bool {
+    if !locations.valid || locations.base != base as usize {
+        return false;
+    }
+    if !range_readable(base as usize, INVENTORY_SCAN_LEN) {
+        return false;
+    }
+    for &off in &locations.temp[..locations.temp_count as usize] {
+        let item_id = unsafe { read_u32(base, off + 4) } & 0x00ff_ffff;
+        if item_id != TEMP_EMBLEM_GOODS_ID {
+            return false;
+        }
+    }
+    for &off in &locations.normal[..locations.normal_count as usize] {
+        let item_id = unsafe { read_u32(base, off + 4) } & 0x00ff_ffff;
+        if item_id != NORMAL_EMBLEM_GOODS_ID {
+            return false;
+        }
+    }
+    true
+}
+
+fn stock_from_locations(base: *mut u8, locations: &EmblemLocations) -> Option<EmblemStock> {
+    if !validate_locations(base, locations) {
+        return None;
+    }
     let mut stock = EmblemStock::default();
-    let Some(base) = inventory_base() else {
-        return stock;
+    for &off in &locations.temp[..locations.temp_count as usize] {
+        stock.temp = stock.temp.saturating_add(unsafe { read_u16(base, off + 8) });
+    }
+    for &off in &locations.normal[..locations.normal_count as usize] {
+        stock.normal = stock.normal.saturating_add(unsafe { read_u16(base, off + 8) });
+    }
+    Some(stock)
+}
+
+fn refresh_locations(base: *mut u8, locations: &mut EmblemLocations) -> EmblemStock {
+    *locations = EmblemLocations {
+        base: base as usize,
+        ..EmblemLocations::default()
     };
+    let mut stock = EmblemStock::default();
     if !range_readable(base as usize, INVENTORY_SCAN_LEN) {
         return stock;
     }
@@ -299,17 +422,70 @@ fn read_emblem_stock() -> EmblemStock {
         let item_id = unsafe { read_u32(base, off + 4) } & 0x00ff_ffff;
         let quantity = unsafe { read_u16(base, off + 8) };
         match item_id {
-            TEMP_EMBLEM_GOODS_ID => stock.temp = stock.temp.saturating_add(quantity),
-            NORMAL_EMBLEM_GOODS_ID => stock.normal = stock.normal.saturating_add(quantity),
+            TEMP_EMBLEM_GOODS_ID => {
+                stock.temp = stock.temp.saturating_add(quantity);
+                let index = locations.temp_count as usize;
+                if index < MAX_EMBLEM_LOCATIONS {
+                    locations.temp[index] = off;
+                    locations.temp_count += 1;
+                } else {
+                    locations.overflow = true;
+                }
+            }
+            NORMAL_EMBLEM_GOODS_ID => {
+                stock.normal = stock.normal.saturating_add(quantity);
+                let index = locations.normal_count as usize;
+                if index < MAX_EMBLEM_LOCATIONS {
+                    locations.normal[index] = off;
+                    locations.normal_count += 1;
+                } else {
+                    locations.overflow = true;
+                }
+            }
             _ => {}
         }
     }
+    locations.valid = !locations.overflow;
     stock
 }
 
-/// Spend temporary paper dolls first, then normal ones. Returns the number
-/// actually spent.
-fn spend_emblems(cost: u16) -> u16 {
+/// Spend from validated cached locations. Returns `None` without modifying
+/// anything if the cached row layout no longer matches the inventory.
+fn spend_from_locations(base: *mut u8, locations: &EmblemLocations, cost: u16) -> Option<u16> {
+    if !validate_locations(base, locations) {
+        return None;
+    }
+
+    let mut remaining = cost;
+    let mut spent = 0u16;
+    for (id, offsets, count) in [
+        (TEMP_EMBLEM_GOODS_ID, &locations.temp, locations.temp_count),
+        (NORMAL_EMBLEM_GOODS_ID, &locations.normal, locations.normal_count),
+    ] {
+        for &off in &offsets[..count as usize] {
+            if remaining == 0 {
+                return Some(spent);
+            }
+            // Validate the whole row set before mutating anything.
+            let item_id = unsafe { read_u32(base, off + 4) } & 0x00ff_ffff;
+            if item_id != id {
+                return None;
+            }
+            let quantity = unsafe { read_u16(base, off + 8) };
+            if quantity == 0 {
+                continue;
+            }
+            let take = quantity.min(remaining);
+            let left = quantity - take;
+            unsafe { write_u16(base, off + 8, left) };
+            remaining -= take;
+            spent = spent.saturating_add(take);
+        }
+    }
+    Some(spent)
+}
+
+fn spend_emblems_scan(cost: u16) -> u16 {
     if cost == 0 {
         return 0;
     }

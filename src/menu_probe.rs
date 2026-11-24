@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, sync::OnceLock};
 
 use windows::Win32::System::{
     LibraryLoader::GetModuleHandleW,
@@ -13,7 +13,8 @@ const MENU_FLAGS_OFFSET: usize = 0x1c;
 const MENU_MODE_FLAG: usize = 9;
 
 fn game_base() -> usize {
-    unsafe { GetModuleHandleW(None).map(|h| h.0 as usize).unwrap_or(0) }
+    static BASE: OnceLock<usize> = OnceLock::new();
+    *BASE.get_or_init(|| unsafe { GetModuleHandleW(None).map(|h| h.0 as usize).unwrap_or(0) })
 }
 
 fn read_i32(addr: usize) -> Option<i32> {

@@ -24,12 +24,12 @@ use windows::{
             WindowsAndMessaging::{
                 CallNextHookEx, ClipCursor, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
                 GetClientRect, GetClipCursor, GetCursor, GetCursorPos, GetForegroundWindow, GetMessageW,
-                GetWindowThreadProcessId, HCURSOR, IDC_ARROW, KBDLLHOOKSTRUCT, LoadCursorW, PostMessageW,
-                PostQuitMessage, RegisterClassW, SetCursor, SetCursorPos, SetWindowsHookExW, ShowCursor,
-                TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_DESTROY, WM_KEYDOWN,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WM_SYSKEYDOWN, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_NOACTIVATE,
-                WS_EX_TOOLWINDOW, WS_POPUP,
+                GetWindowThreadProcessId, HCURSOR, IDC_ARROW, KBDLLHOOKSTRUCT, LoadCursorW, MB_ICONWARNING, MB_OK,
+                MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, SetCursor, SetCursorPos, SetWindowsHookExW,
+                ShowCursor, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_DESTROY,
+                WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEWHEEL,
+                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
+                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -39,7 +39,7 @@ use windows::{
 use crate::{
     binding_validation::BindingValidationError,
     bindings::{self, BindingSnapshot, KeyToken},
-    game_menu, menu_probe,
+    device, game_menu, menu_probe,
 };
 
 use self::editor::{Editor, ModalAction, layout};
@@ -55,6 +55,32 @@ static OPEN_PENDING: AtomicBool = AtomicBool::new(false);
 /// Fast path for the Present/input hooks: no UI state lock is needed while the
 /// key editor is closed.
 static UI_OPEN: AtomicBool = AtomicBool::new(false);
+/// Rendering hook availability is independent from keyboard capture: gameplay
+/// key tracking still needs the UI message pump if DXGI hooking fails.
+static OVERLAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
+static HOOK_FAILURE_NOTIFIED: AtomicBool = AtomicBool::new(false);
+
+/// Log the failure and show at most one modal warning per game process. Other
+/// combat/gameplay hooks keep running; only the input/UI features are affected.
+fn notify_hook_failure(detail: &str) {
+    log::error!("ui: {detail}");
+    if HOOK_FAILURE_NOTIFIED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let text = format!(
+        "键位编辑或部分组合键功能不可用。\n\n{detail}\n\n其他战斗功能仍会继续运行，详情见 battle_instinct.log。"
+    );
+    let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "Paper Jutsu".encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR::from_raw(text.as_ptr()),
+            PCWSTR::from_raw(title.as_ptr()),
+            MB_OK | MB_ICONWARNING,
+        );
+    }
+}
 
 pub(crate) struct UiState {
     pub(crate) editor: Option<Editor>,
@@ -116,43 +142,76 @@ pub fn start(cfg_path: PathBuf) -> Result<()> {
         .map_err(|_| anyhow!("UI state was already initialized"))?;
 
     // Must happen before MinHook::enable_all_hooks() in lib.rs. A graphics
-    // hook failure disables only this optional UI, never the combat/gameplay mod.
-    if let Err(error) = game_overlay::install() {
-        log::error!("ui: in-game overlay unavailable: {error:#}");
-        return Ok(());
-    }
+    // hook failure disables only the optional overlay; the keyboard capture and
+    // controller message pump must still start for gameplay key tracking.
+    let overlay_available = match game_overlay::install() {
+        Ok(()) => true,
+        Err(error) => {
+            notify_hook_failure(&format!("DXGI overlay hook 安装失败: {error:#}"));
+            false
+        }
+    };
+    OVERLAY_AVAILABLE.store(overlay_available, Ordering::Release);
 
-    thread::Builder::new()
-        .name("battle-instinct-ui".into())
-        .spawn(|| {
-            if let Err(error) = run_ui_thread() {
-                log::error!("ui: thread stopped: {error:#}");
-            }
-        })
-        .context("spawn battle-instinct-ui thread")?;
+    if let Err(error) = thread::Builder::new().name("battle-instinct-ui".into()).spawn(|| {
+        if let Err(error) = run_ui_thread() {
+            device::set_keyboard_capture_active(false);
+            OVERLAY_AVAILABLE.store(false, Ordering::Release);
+            notify_hook_failure(&format!("输入 Hook 线程停止: {error:#}"));
+        }
+    }) {
+        notify_hook_failure(&format!("无法创建输入 Hook 线程: {error:#}"));
+        return Err(error.into());
+    }
     Ok(())
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
-        // The overlay hotkey is only valid while the game owns the foreground
-        // window. A background F press must never read stale menu memory.
-        let foreground = unsafe { GetForegroundWindow() };
-        let mut foreground_pid = 0u32;
-        unsafe {
-            let _ = GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
-        }
-        if foreground_pid != unsafe { GetCurrentProcessId() } {
-            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-        }
-
+    if code >= 0 {
+        let message = wparam.0 as u32;
         let keyboard = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let vk = keyboard.vkCode;
-        let overlay_open = overlay_open();
-        let hwnd = HWND(CONTROLLER_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+        let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+        let up = matches!(message, WM_KEYUP | WM_SYSKEYUP);
+        if down || up {
+            device::record_key_event(vk as u16, down);
+        }
 
-        if vk == VK_F.0 as u32 {
-            if overlay_open {
+        if down {
+            // The overlay hotkey is only valid while the game owns the foreground
+            // window. A background F press must never read stale menu memory.
+            let foreground = unsafe { GetForegroundWindow() };
+            let mut foreground_pid = 0u32;
+            unsafe {
+                let _ = GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
+            }
+            if foreground_pid != unsafe { GetCurrentProcessId() } {
+                return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+            }
+
+            let overlay_open = overlay_open();
+            let hwnd = HWND(CONTROLLER_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+
+            if vk == VK_F.0 as u32 {
+                if overlay_open {
+                    if !hwnd.0.is_null() {
+                        unsafe {
+                            let _ = PostMessageW(hwnd, WM_APP_CLOSE, WPARAM(0), LPARAM(0));
+                        }
+                    }
+                    return LRESULT(1);
+                }
+                if OVERLAY_AVAILABLE.load(Ordering::Acquire) && menu_probe::menu_open() && current_row_is_bind_target()
+                {
+                    if !hwnd.0.is_null() && !OPEN_PENDING.swap(true, Ordering::AcqRel) {
+                        let posted = unsafe { PostMessageW(hwnd, WM_APP_OPEN, WPARAM(0), LPARAM(0)) };
+                        if posted.is_err() {
+                            OPEN_PENDING.store(false, Ordering::Release);
+                        }
+                    }
+                    return LRESULT(1);
+                }
+            } else if vk == VK_ESCAPE.0 as u32 && overlay_open {
                 if !hwnd.0.is_null() {
                     unsafe {
                         let _ = PostMessageW(hwnd, WM_APP_CLOSE, WPARAM(0), LPARAM(0));
@@ -160,22 +219,6 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
                 }
                 return LRESULT(1);
             }
-            if menu_probe::menu_open() && current_row_is_bind_target() {
-                if !hwnd.0.is_null() && !OPEN_PENDING.swap(true, Ordering::AcqRel) {
-                    let posted = unsafe { PostMessageW(hwnd, WM_APP_OPEN, WPARAM(0), LPARAM(0)) };
-                    if posted.is_err() {
-                        OPEN_PENDING.store(false, Ordering::Release);
-                    }
-                }
-                return LRESULT(1);
-            }
-        } else if vk == VK_ESCAPE.0 as u32 && overlay_open {
-            if !hwnd.0.is_null() {
-                unsafe {
-                    let _ = PostMessageW(hwnd, WM_APP_CLOSE, WPARAM(0), LPARAM(0));
-                }
-            }
-            return LRESULT(1);
         }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
@@ -257,9 +300,11 @@ fn run_ui_thread() -> Result<()> {
 
         let keyboard =
             SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0).context("install keyboard hook")?;
+        device::set_keyboard_capture_active(true);
         let mouse = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) {
             Ok(hook) => hook,
             Err(error) => {
+                device::set_keyboard_capture_active(false);
                 let _ = UnhookWindowsHookEx(keyboard);
                 return Err(anyhow!("install mouse hook: {error}"));
             }
@@ -271,6 +316,7 @@ fn run_ui_thread() -> Result<()> {
             DispatchMessageW(&msg);
         }
 
+        device::set_keyboard_capture_active(false);
         let _ = UnhookWindowsHookEx(mouse);
         let _ = UnhookWindowsHookEx(keyboard);
         CONTROLLER_HWND.store(0, Ordering::Release);
