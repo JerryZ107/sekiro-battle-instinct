@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, fmt, num::NonZero};
 
 //----------------------------------------------------------------------------
 //
@@ -60,9 +60,9 @@ pub struct InventoryData {
 #[repr(C)]
 pub struct InputHandler {
     _0: [u8;16],
-    /// Primary action bitfield (ATTACK/BLOCK/JUMP/DODGE/USE_PROSTHETIC/…).
+    /// Primary action bitfield (ATTACK/BLOCK/JUMP/DODGE/USE_PROSTHETIC/鈥?.
     pub action: u64,
-    /// Neighboring words — used when probing undocumented binds (e.g. switch prosthetic).
+    /// Neighboring words 鈥?used when probing undocumented binds (e.g. switch prosthetic).
     pub action_b: u64,
     pub action_c: u64,
 }
@@ -107,5 +107,112 @@ forward! {
     fn get_item_id(inventory: *const c_void, uid: *const u32) -> u32;
 
     @[SET_SLOT]
-    fn set_slot(equip_slot: usize, equip_data: *const EquipData, ignore_equip_lock: bool);
+    fn set_slot_raw(equip_slot: usize, equip_data: *const EquipData, ignore_equip_lock: bool);
+}
+
+//----------------------------------------------------------------------------
+//
+//  UID / ItemID primitives, shared by every feature module
+//
+//----------------------------------------------------------------------------
+
+/// UIDs are consistent through different save files.
+pub type UID = u32;
+
+pub const COMBAT_ART_SLOT: u8 = 1;
+
+/// When players obtain skills (combat arts/prosthetic tools), the skill becomes
+/// an item in the inventory. Thus a skill has two IDs: its original UID and its
+/// ID as an inventory item. Putting random items into item slots can cause
+/// severe bugs such as losing Kusabimaru permanently, so the conversion is
+/// centralised here and never guessed by feature code.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ItemID(NonZero<u32>);
+
+impl ItemID {
+    #[inline(always)]
+    pub fn new(value: u32) -> Option<ItemID> {
+        NonZero::<u32>::new(value).map(ItemID)
+    }
+
+    #[inline(always)]
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl fmt::Display for ItemID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.get().fmt(f)
+    }
+}
+
+pub trait ID: fmt::Display + Clone + Copy {
+    fn get_item_id(self) -> Option<ItemID>;
+}
+
+impl ID for ItemID {
+    #[inline(always)]
+    fn get_item_id(self) -> Option<ItemID> {
+        Some(self)
+    }
+}
+
+impl ID for UID {
+    #[inline(always)]
+    fn get_item_id(self) -> Option<ItemID> {
+        let inventory = inventory_data()?;
+        let inventory = unsafe { &(*inventory).inventory as *const c_void };
+        let item_id = get_item_id(inventory, &self);
+        ItemID::new(item_id).filter(|it| it.get() < 0xFFFF)
+    }
+}
+
+/// Place an item into a game equip slot. The caller must already have resolved
+/// a real inventory item id; `ItemID` enforces that at the type level.
+pub fn set_slot(item: impl ID, slot_index: usize) -> bool {
+    let Some(item_id) = item.get_item_id() else {
+        return false;
+    };
+    let equip_data = EquipData::new(item_id.get());
+    set_slot_raw(slot_index, &equip_data, true);
+    true
+}
+
+//----------------------------------------------------------------------------
+//
+//  Shared pointer-chain helpers
+//
+//  Keep these in one place, like dec32/sekiro-battle-instinct's game.rs. The
+//  inventory scanner and the paper guard must resolve exactly the same chain;
+//  duplicating it invites one copy to read a stale or wrong pointer.
+//
+//----------------------------------------------------------------------------
+
+#[inline]
+pub fn player_data() -> Option<*const PlayerData> {
+    unsafe {
+        let game_data = game_data();
+        if game_data.is_null() {
+            return None;
+        }
+        let player = (*game_data).player_data;
+        if player.is_null() { None } else { Some(player) }
+    }
+}
+
+#[inline]
+pub fn inventory_data() -> Option<*const InventoryData> {
+    unsafe {
+        let player = player_data()?;
+        let inventory = (*player).inventory_data;
+        if inventory.is_null() { None } else { Some(inventory) }
+    }
+}
+
+/// Start of the runtime inventory rows (`InventoryData + 0x10`).
+#[inline]
+pub fn inventory_base() -> Option<usize> {
+    inventory_data().map(|inventory| unsafe { (inventory as *const u8).add(0x10) as usize })
 }

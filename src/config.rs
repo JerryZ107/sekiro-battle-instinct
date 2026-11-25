@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, io, path::Path};
 
 use crate::{
-    core::UID,
+    game::UID,
     input::{ArtCombo, ArtToken},
 };
 

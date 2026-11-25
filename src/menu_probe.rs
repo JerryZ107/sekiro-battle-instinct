@@ -159,25 +159,11 @@ pub(crate) fn has_expected_prefix(addr: usize, expected: &[u8]) -> bool {
     bytes == expected
 }
 
+/// Cheap readability probe for game data. This is the same approach used by
+/// kargoshakar/SekiroImGuiCustom's `IsValidReadPtr`: one `ReadProcessMemory`
+/// probe at each end of the range instead of a `VirtualQuery` walk. Callers on
+/// the frame path should still cache the result; the menu monitor already does
+/// so through its background thread.
 pub(crate) fn range_readable(addr: usize, len: usize) -> bool {
-    let mut off = 0usize;
-    while off < len {
-        let mut mbi = MEMORY_BASIC_INFORMATION::default();
-        let written = unsafe {
-            VirtualQuery(
-                Some((addr + off) as *const c_void),
-                &mut mbi,
-                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
-            )
-        };
-        if written == 0 || mbi.State != MEM_COMMIT {
-            return false;
-        }
-        let protect = mbi.Protect.0;
-        if protect & PAGE_GUARD.0 != 0 || protect & PAGE_NOACCESS.0 != 0 {
-            return false;
-        }
-        off = off.saturating_add(mbi.RegionSize.max(1));
-    }
-    true
+    crate::memory::is_valid_read_ptr(addr, len)
 }

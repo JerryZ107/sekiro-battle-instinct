@@ -1,3 +1,4 @@
+mod action;
 mod binding_validation;
 mod bindings;
 mod boot;
@@ -5,18 +6,18 @@ mod cfg_meta;
 mod config;
 mod core;
 mod device;
-mod emblem;
-mod flow;
+mod features;
 mod frame;
 mod frame_perf;
 mod game;
 mod game_menu;
 mod hook_util;
 mod input;
+mod inventory;
 mod load_console;
 mod logger;
+mod memory;
 mod menu_probe;
-mod paper_guard;
 mod ui;
 
 use core::Mod;
@@ -291,7 +292,7 @@ fn modify(path: &Path) {
             log::warn!("diagnostic: player damage reaction hook disabled by marker file");
             frame_perf::mark(frame_perf::EventId::DamageHookDisabled);
             load_console::print_line("  伤害事件钩子已跳过（诊断模式）");
-        } else if let Err(e) = flow::install_damage_hook() {
+        } else if let Err(e) = features::flow::install_damage_hook() {
             log::error!("Failed to install damage reaction hook: {e:?}");
             load_console::print_line(&format!("  伤害事件钩子安装失败: {e}"));
         } else {
