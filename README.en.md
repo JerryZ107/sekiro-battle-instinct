@@ -4,7 +4,7 @@
 
 [简体中文](README.md) | **English**
 
-A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings.
+A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings. The in-game UI architecture is inspired by [kargoshakar/SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom).
 
 ## 1. MOD Overview
 

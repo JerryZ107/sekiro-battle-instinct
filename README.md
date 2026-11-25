@@ -6,7 +6,7 @@
 
 ![纸人术演示](demo.gif)
 
-基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 的个人衍生版，主打纸人替伤与更自由的键位配置。
+基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 的个人衍生版，主打纸人替伤与更自由的键位配置；内置 UI 架构借鉴自 [kargoshakar/SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom)。
 
 ## 一、MOD 介绍
 
