@@ -2,7 +2,7 @@ use std::{
     ffi::c_void,
     sync::{
         Once, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::Duration,
@@ -23,10 +23,13 @@ const MENU_MAN_PTR: usize = 0x3d67408;
 const MENU_FLAGS_OFFSET: usize = 0x1c;
 const MENU_MODE_FLAG: usize = 9;
 const MENU_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const MENU_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 static MENU_MONITOR_STARTED: Once = Once::new();
 static MENU_OPEN_CACHED: AtomicBool = AtomicBool::new(false);
 static MENU_CACHE_READY: AtomicBool = AtomicBool::new(false);
+static MENU_WAS_OPEN: AtomicBool = AtomicBool::new(false);
+static MENU_CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 fn game_base() -> usize {
     static BASE: OnceLock<usize> = OnceLock::new();
@@ -50,9 +53,31 @@ pub fn start_menu_monitor() {
             .spawn(|| {
                 loop {
                     let open = menu_open();
+                    let was_open = MENU_WAS_OPEN.swap(open, Ordering::AcqRel);
                     MENU_OPEN_CACHED.store(open, Ordering::Release);
+                    if was_open != open {
+                        crate::frame_perf::reset_tick_clock();
+                        crate::frame_perf::mark(if open {
+                            crate::frame_perf::EventId::MenuOpen
+                        } else {
+                            crate::frame_perf::EventId::MenuClose
+                        });
+                    }
+                    if was_open && !open {
+                        // Consumers that need to rescan inventory only need an
+                        // edge, not a per-frame menu probe. Keeping this as a
+                        // generation counter lets several consumers observe the
+                        // same close event without racing each other.
+                        MENU_CLOSE_GENERATION.fetch_add(1, Ordering::AcqRel);
+                    }
                     MENU_CACHE_READY.store(true, Ordering::Release);
-                    thread::sleep(MENU_POLL_INTERVAL);
+                    // Poll slowly during gameplay and faster only while the
+                    // pause menu is actually open.
+                    thread::sleep(if open {
+                        MENU_POLL_INTERVAL
+                    } else {
+                        MENU_IDLE_POLL_INTERVAL
+                    });
                 }
             });
         if let Err(error) = result {
@@ -70,6 +95,14 @@ pub fn menu_open_cached() -> bool {
     } else {
         menu_open()
     }
+}
+
+/// Monotonically increasing counter for open -> closed transitions. The
+/// gameplay thread can poll one atomic instead of repeatedly querying the
+/// pause-menu memory and calling `VirtualQuery`.
+#[inline]
+pub fn menu_close_generation() -> u64 {
+    MENU_CLOSE_GENERATION.load(Ordering::Acquire)
 }
 
 pub fn menu_open() -> bool {

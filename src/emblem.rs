@@ -37,7 +37,7 @@ pub struct Emblem {
     last_i: Option<u32>,
     warned_bad_cap: bool,
     last_inventory: Option<usize>,
-    menu_was_open: bool,
+    menu_close_generation: u64,
     needs_scan: bool,
 }
 
@@ -48,7 +48,7 @@ impl Emblem {
             last_i: None,
             warned_bad_cap: false,
             last_inventory: None,
-            menu_was_open: false,
+            menu_close_generation: menu_probe::menu_close_generation(),
             needs_scan: true,
         };
         if let Ok(text) = fs::read_to_string(cfg.as_ref()) {
@@ -92,18 +92,19 @@ impl Emblem {
             self.needs_scan = true;
         }
 
-        // Cap skills are learned from the pause menu. Refresh once when the
-        // menu closes instead of polling the inventory on a timer.
-        let menu_open = menu_probe::menu_open_cached();
-        if self.menu_was_open && !menu_open {
+        // Cap skills are learned from the pause menu. Refresh once on the
+        // open -> closed edge instead of polling the menu every frame.
+        let menu_generation = menu_probe::menu_close_generation();
+        if self.menu_close_generation != menu_generation {
+            self.menu_close_generation = menu_generation;
             self.needs_scan = true;
         }
-        self.menu_was_open = menu_open;
 
         if !self.needs_scan {
             return;
         }
         self.needs_scan = false;
+        crate::frame_perf::mark(crate::frame_perf::EventId::EmblemScan);
 
         let Some(player) = player_data() else {
             self.needs_scan = true;

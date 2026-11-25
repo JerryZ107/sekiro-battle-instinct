@@ -1,28 +1,33 @@
 use std::{ffi::c_void, mem::size_of, ptr, slice};
 
 use anyhow::{Result, anyhow};
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::{
     Win32::{
         Foundation::{BOOL, COLORREF, RECT},
         Graphics::{
-            Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, Fxc::D3DCompile, ID3DBlob},
+            Direct3D::{
+                D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, Fxc::D3DCompile,
+                ID3DBlob,
+            },
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE, D3D11_BUFFER_DESC, D3D11_COMPARISON_ALWAYS,
                 D3D11_CPU_ACCESS_WRITE, D3D11_CULL_NONE, D3D11_DEPTH_STENCIL_DESC, D3D11_DEPTH_WRITE_MASK_ZERO,
                 D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_MAP_WRITE_DISCARD, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_RASTERIZER_DESC, D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE_ADDRESS_CLAMP,
-                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DYNAMIC, D3D11_USAGE_IMMUTABLE, D3D11_VIEWPORT, ID3D11BlendState,
-                ID3D11Buffer, ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext,
-                ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState, ID3D11RenderTargetView,
-                ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
+                D3D11_RASTERIZER_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION, D3D11_TEXTURE_ADDRESS_CLAMP,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DYNAMIC, D3D11_VIEWPORT, ID3D11BlendState, ID3D11Buffer,
+                ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11Device, ID3D11Device1, ID3D11DeviceContext,
+                ID3D11DeviceContext1, ID3D11InputLayout, ID3D11Multithread, ID3D11PixelShader, ID3D11RasterizerState,
+                ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
+                ID3D11VertexShader, ID3DDeviceContextState,
             },
             Dxgi::{Common::DXGI_FORMAT_B8G8R8A8_UNORM, IDXGISwapChain},
             Gdi::{
-                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateCompatibleDC,
-                CreateDIBSection, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS,
-                DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DeleteDC, DeleteObject,
-                DrawTextW, FillRect, GdiFlush, HBITMAP, HDC, HGDIOBJ, OUT_DEFAULT_PRECIS, SelectObject, SetBkMode,
-                SetTextColor, TRANSPARENT,
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+                CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
+                DIB_RGB_COLORS, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, DeleteDC,
+                DeleteObject, DrawTextW, FillRect, GdiFlush, HBITMAP, HDC, HGDIOBJ, OUT_DEFAULT_PRECIS, SRCCOPY,
+                SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
             },
         },
     },
@@ -35,8 +40,15 @@ use super::{
 };
 
 const UI_TEXTURE_WIDTH_LIMIT: u32 = 8192;
+/// Diagnostics can force the save/restore fallback if a driver misbehaves
+/// with D3D11.1 context-state objects.
+static CONTEXT_STATE_FAST_PATH: AtomicBool = AtomicBool::new(true);
 
-struct DibSurface {
+pub(crate) fn set_context_state_fast_path_enabled(enabled: bool) {
+    CONTEXT_STATE_FAST_PATH.store(enabled, Ordering::Release);
+}
+
+pub(crate) struct DibSurface {
     dc: HDC,
     bitmap: HBITMAP,
     old_bitmap: HGDIOBJ,
@@ -109,6 +121,18 @@ impl Drop for DibSurface {
 struct DeviceResources {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
+    /// Serializes immediate-context access between the paint worker (Map /
+    /// Unmap uploads) and the Present thread (Draw + state save/restore).
+    multithread: ID3D11Multithread,
+    /// D3D11.1 state-object fast path. When available, one swap saves the
+    /// game's entire pipeline state and another restores it, avoiding ~15
+    /// Get*/Set* calls on every overlay frame.
+    device_context1: Option<ID3D11DeviceContext1>,
+    device_state: Option<ID3DDeviceContextState>,
+    /// Whether the game already had multithread protection enabled before we
+    /// touched the device. We only override this while the editor is open.
+    multithread_was_protected: bool,
+    multithread_forced: bool,
     /// The swap chain whose device produced these resources. Keeping this
     /// identity lets the overlay avoid `GetDevice` on every presented frame.
     swapchain_raw: *mut c_void,
@@ -118,9 +142,14 @@ struct DeviceResources {
     depth_stencil: ID3D11DepthStencilState,
     sampler: ID3D11SamplerState,
     constant_buffer: ID3D11Buffer,
-    texture: Option<ID3D11Texture2D>,
-    texture_view: Option<ID3D11ShaderResourceView>,
+    shader_params: Option<ShaderParams>,
+    /// Two dynamic textures alternate so the worker never Maps the texture the
+    /// GPU may still be reading from the previous drawn frame.
+    textures: [Option<ID3D11Texture2D>; TEXTURE_BUFFER_COUNT],
+    texture_views: [Option<ID3D11ShaderResourceView>; TEXTURE_BUFFER_COUNT],
     texture_size: Option<(u32, u32)>,
+    active_texture: usize,
+    next_texture: usize,
     /// Cached view of the current swap-chain back buffer. Recreating this COM
     /// object every presented frame causes avoidable D3D resource churn.
     render_target: Option<ID3D11RenderTargetView>,
@@ -130,15 +159,40 @@ struct DeviceResources {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq)]
 struct ShaderParams {
     panel: [f32; 4],
     screen: [f32; 4],
 }
 
+const MAX_RENDER_TARGETS: usize = 8;
+const MAX_VIEWPORTS: usize = 16;
+const TEXTURE_BUFFER_COUNT: usize = 2;
+
+/// RAII wrapper around the D3D11 multithread critical section. The handle is
+/// cloned locally so the guard does not borrow `DeviceResources` and therefore
+/// does not conflict with `&mut self` operations in the draw path.
+struct D3DGuard {
+    multithread: ID3D11Multithread,
+}
+
+impl D3DGuard {
+    fn new(multithread: ID3D11Multithread) -> Self {
+        unsafe { multithread.Enter() };
+        Self { multithread }
+    }
+}
+
+impl Drop for D3DGuard {
+    fn drop(&mut self) {
+        unsafe { self.multithread.Leave() };
+    }
+}
+
 struct SavedState {
-    render_target: Option<ID3D11RenderTargetView>,
+    render_targets: [Option<ID3D11RenderTargetView>; MAX_RENDER_TARGETS],
     depth_stencil_view: Option<ID3D11DepthStencilView>,
-    viewport: D3D11_VIEWPORT,
+    viewports: [D3D11_VIEWPORT; MAX_VIEWPORTS],
     viewport_count: u32,
     blend: Option<ID3D11BlendState>,
     blend_factor: [f32; 4],
@@ -155,80 +209,107 @@ struct SavedState {
     constant_buffer: Option<ID3D11Buffer>,
 }
 
-/// Software-rendered UI texture plus a tiny D3D11 textured-quad renderer.
-/// GDI is only used to paint into a CPU DIB; the game's own D3D11 device is
-/// used for the final overlay draw, so this path also works when the game's
-/// device was not created with BGRA support (which rules out Direct2D).
+/// D3D11 overlay renderer. The CPU-side DIB painter lives in `UiPainter` so
+/// the expensive GDI work can run on the paint worker thread while this type
+/// only owns the game device resources and the final textured-quad draw.
 pub struct Renderer {
-    dib: Option<DibSurface>,
     resources: Option<DeviceResources>,
 }
 
 unsafe impl Send for Renderer {}
 
 impl Renderer {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            dib: None,
-            resources: None,
-        })
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self { resources: None })
     }
 
-    pub fn paint(
-        &mut self,
-        swapchain: &IDXGISwapChain,
-        editor: &Editor,
-        frame_width: u32,
-        frame_height: u32,
-        redraw_ui: bool,
-    ) -> Result<()> {
-        if frame_width == 0 || frame_height == 0 {
-            return Ok(());
-        }
-
-        let (panel_w, panel_h, panel_x, panel_y) = panel_geometry(editor, frame_width as i32, frame_height as i32);
-        if panel_w <= 0 || panel_h <= 0 {
-            return Ok(());
-        }
-
-        let size_changed = self
-            .dib
-            .as_ref()
-            .is_none_or(|dib| dib.width != panel_w || dib.height != panel_h);
-        if redraw_ui || size_changed {
-            self.draw_ui(editor, panel_w, panel_h)?;
-        }
-
+    /// Make sure the renderer is bound to the current swap chain's device.
+    /// Present thread only; called once per swap-chain identity.
+    pub(crate) fn ensure_resources(&mut self, swapchain: &IDXGISwapChain) -> Result<()> {
         let swapchain_raw = Interface::as_raw(swapchain);
-        let device_changed = self
+        if self
             .resources
             .as_ref()
-            .is_none_or(|resources| resources.swapchain_raw != swapchain_raw);
-        if device_changed {
+            .is_none_or(|resources| resources.swapchain_raw != swapchain_raw)
+        {
             let device: ID3D11Device = unsafe { swapchain.GetDevice() }
                 .map_err(|error| anyhow!("IDXGISwapChain::GetDevice failed: {error}"))?;
             self.resources = Some(DeviceResources::new(device, swapchain_raw)?);
+            log::warn!("ui: D3D11 overlay resources initialized");
         }
+        Ok(())
+    }
 
-        let resources = self
-            .resources
+    /// Upload a freshly painted CPU DIB. Called by the paint worker while it
+    /// holds the renderer mutex; D3D11 immediate-context access is serialized
+    /// by `ID3D11Multithread`.
+    /// Enable D3D's internal critical section only while the editor is open.
+    /// Leaving it on for the whole session would add a lock to every gameplay
+    /// context call, defeating the purpose of the dynamic Present hook.
+    pub(crate) fn set_multithread_protected(&mut self, enabled: bool) {
+        if let Some(resources) = self.resources.as_mut() {
+            resources.set_multithread_protected(enabled);
+            if !enabled {
+                // Releasing the cached RTV lets the game call ResizeBuffers
+                // after the editor closes without our reference blocking it.
+                resources.release_render_target();
+            }
+        }
+    }
+
+    pub(crate) fn update_texture(&mut self, dib: &DibSurface, size: (u32, u32)) -> Result<()> {
+        self.resources
             .as_mut()
-            .ok_or_else(|| anyhow!("D3D11 device resources are unavailable"))?;
-        let size = (panel_w as u32, panel_h as u32);
-        if redraw_ui || size_changed || resources.texture_size != Some(size) {
-            let dib = self.dib.as_ref().ok_or_else(|| anyhow!("UI DIB is unavailable"))?;
-            resources.update_texture(dib, size)?;
-        }
+            .ok_or_else(|| anyhow!("D3D11 device resources are not initialized"))?
+            .update_texture(dib, size)
+    }
 
-        resources.draw(
-            swapchain,
-            panel_x,
-            panel_y,
-            panel_w as f32,
-            panel_h as f32,
-            frame_width as f32,
-            frame_height as f32,
-        )
+    /// Draw the last uploaded texture. Called from the Present detour through
+    /// a non-blocking `try_lock`; no GDI, no texture upload, no UI-state lock.
+    pub(crate) fn draw(
+        &mut self,
+        swapchain: &IDXGISwapChain,
+        panel_x: f32,
+        panel_y: f32,
+        panel_w: f32,
+        panel_h: f32,
+        screen_w: f32,
+        screen_h: f32,
+    ) -> Result<()> {
+        self.resources
+            .as_mut()
+            .ok_or_else(|| anyhow!("D3D11 device resources are not initialized"))?
+            .draw(swapchain, panel_x, panel_y, panel_w, panel_h, screen_w, screen_h)
+    }
+}
+
+/// CPU-only GDI painter for the overlay. Owned exclusively by the paint
+/// worker thread; it never touches D3D11.
+pub(crate) struct UiPainter {
+    dib: Option<DibSurface>,
+}
+
+unsafe impl Send for UiPainter {}
+
+impl UiPainter {
+    pub(crate) fn new() -> Self {
+        Self { dib: None }
+    }
+
+    pub(crate) fn paint(&mut self, editor: &Editor, width: i32, height: i32) -> Result<()> {
+        self.draw_ui(editor, width, height)
+    }
+
+    pub(crate) fn dib(&self) -> Option<&DibSurface> {
+        self.dib.as_ref()
+    }
+
+    /// Blit the cached panel DIB into an external window's paint DC.
+    pub(crate) fn blit_to(&self, hdc: HDC) -> bool {
+        let Some(dib) = self.dib.as_ref() else {
+            return false;
+        };
+        unsafe { BitBlt(hdc, 0, 0, dib.width, dib.height, dib.dc, 0, 0, SRCCOPY).is_ok() }
     }
 
     fn draw_ui(&mut self, editor: &Editor, width: i32, height: i32) -> Result<()> {
@@ -512,10 +593,55 @@ impl Renderer {
         Ok(())
     }
 }
+
 impl DeviceResources {
     fn new(device: ID3D11Device, swapchain_raw: *mut c_void) -> Result<Self> {
         let context =
             unsafe { device.GetImmediateContext() }.map_err(|error| anyhow!("GetImmediateContext failed: {error}"))?;
+        let multithread = device
+            .cast::<ID3D11Multithread>()
+            .map_err(|error| anyhow!("ID3D11Multithread query failed: {error}"))?;
+        // Do not change the game's global D3D setting here. It is enabled
+        // only for the duration of an editor session, then restored.
+        let multithread_was_protected = unsafe { multithread.GetMultithreadProtected().as_bool() };
+
+        let device_context1 = if CONTEXT_STATE_FAST_PATH.load(Ordering::Acquire) {
+            context.cast::<ID3D11DeviceContext1>().ok()
+        } else {
+            None
+        };
+        let device_state = if device_context1.is_some() {
+            match device.cast::<ID3D11Device1>() {
+                Ok(device1) => {
+                    let mut state = None;
+                    let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
+                    match unsafe {
+                        device1.CreateDeviceContextState(
+                            0,
+                            &levels,
+                            D3D11_SDK_VERSION,
+                            &ID3D11Device::IID,
+                            None,
+                            Some(&mut state),
+                        )
+                    } {
+                        Ok(()) => {
+                            if state.is_some() {
+                                log::warn!("ui: D3D11.1 context-state fast path enabled");
+                            }
+                            state
+                        }
+                        Err(error) => {
+                            log::warn!("ui: CreateDeviceContextState failed ({error}); using save/restore fallback");
+                            None
+                        }
+                    }
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
 
         let (vs_bytecode, ps_bytecode) = unsafe { compile_shaders() }?;
         let mut vertex_shader = None;
@@ -596,6 +722,11 @@ impl DeviceResources {
         Ok(Self {
             device,
             context,
+            multithread,
+            multithread_was_protected,
+            multithread_forced: false,
+            device_context1,
+            device_state,
             swapchain_raw,
             vertex_shader: vertex_shader.ok_or_else(|| anyhow!("vertex shader was not created"))?,
             pixel_shader: pixel_shader.ok_or_else(|| anyhow!("pixel shader was not created"))?,
@@ -603,9 +734,12 @@ impl DeviceResources {
             depth_stencil: depth_stencil.ok_or_else(|| anyhow!("depth-stencil state was not created"))?,
             sampler: sampler.ok_or_else(|| anyhow!("sampler state was not created"))?,
             constant_buffer: constant_buffer.ok_or_else(|| anyhow!("constant buffer was not created"))?,
-            texture: None,
-            texture_view: None,
+            shader_params: None,
+            textures: std::array::from_fn(|_| None),
+            texture_views: std::array::from_fn(|_| None),
             texture_size: None,
+            active_texture: 0,
+            next_texture: 0,
             render_target: None,
             render_target_swapchain: ptr::null_mut(),
             render_target_buffer: ptr::null_mut(),
@@ -613,7 +747,30 @@ impl DeviceResources {
         })
     }
 
-    fn update_texture(&mut self, dib: &DibSurface, size: (u32, u32)) -> Result<()> {
+    fn release_render_target(&mut self) {
+        self.render_target = None;
+        self.render_target_swapchain = ptr::null_mut();
+        self.render_target_buffer = ptr::null_mut();
+        self.render_target_size = (0, 0);
+    }
+
+    fn set_multithread_protected(&mut self, enabled: bool) {
+        if enabled {
+            if !self.multithread_was_protected && !self.multithread_forced {
+                unsafe {
+                    let _ = self.multithread.SetMultithreadProtected(BOOL(1));
+                }
+                self.multithread_forced = true;
+            }
+        } else if self.multithread_forced {
+            unsafe {
+                let _ = self.multithread.SetMultithreadProtected(BOOL(0));
+            }
+            self.multithread_forced = false;
+        }
+    }
+
+    fn create_texture(&self, size: (u32, u32)) -> Result<(ID3D11Texture2D, ID3D11ShaderResourceView)> {
         let desc = D3D11_TEXTURE2D_DESC {
             Width: size.0,
             Height: size.1,
@@ -621,20 +778,15 @@ impl DeviceResources {
             ArraySize: 1,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
             SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_IMMUTABLE,
+            Usage: D3D11_USAGE_DYNAMIC,
             BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            CPUAccessFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
             MiscFlags: 0,
-        };
-        let data = D3D11_SUBRESOURCE_DATA {
-            pSysMem: dib.bits as *const c_void,
-            SysMemPitch: dib.pitch,
-            SysMemSlicePitch: dib.pitch * dib.height as u32,
         };
         let mut texture = None;
         unsafe {
             self.device
-                .CreateTexture2D(&desc, Some(&data), Some(&mut texture))
+                .CreateTexture2D(&desc, None, Some(&mut texture))
                 .map_err(|error| anyhow!("CreateTexture2D failed: {error}"))?;
         }
         let texture = texture.ok_or_else(|| anyhow!("CreateTexture2D returned no texture"))?;
@@ -644,9 +796,57 @@ impl DeviceResources {
                 .CreateShaderResourceView(&texture, None, Some(&mut view))
                 .map_err(|error| anyhow!("CreateShaderResourceView failed: {error}"))?;
         }
-        self.texture = Some(texture);
-        self.texture_view = Some(view.ok_or_else(|| anyhow!("CreateShaderResourceView returned no view"))?);
-        self.texture_size = Some(size);
+        Ok((
+            texture,
+            view.ok_or_else(|| anyhow!("CreateShaderResourceView returned no view"))?,
+        ))
+    }
+
+    fn update_texture(&mut self, dib: &DibSurface, size: (u32, u32)) -> Result<()> {
+        // Keep a small ring of DYNAMIC textures. Rebuilding an IMMUTABLE
+        // texture on every dirty UI frame allocates a new resource and SRV on
+        // the Present thread; alternating buffers also avoids mapping the
+        // texture the GPU may still be sampling.
+        if self.texture_size != Some(size) || self.textures.iter().any(Option::is_none) {
+            let mut textures = std::array::from_fn(|_| None);
+            let mut views = std::array::from_fn(|_| None);
+            for index in 0..TEXTURE_BUFFER_COUNT {
+                let (texture, view) = self.create_texture(size)?;
+                textures[index] = Some(texture);
+                views[index] = Some(view);
+            }
+            self.textures = textures;
+            self.texture_views = views;
+            self.texture_size = Some(size);
+            self.active_texture = 0;
+            self.next_texture = 0;
+        }
+
+        let index = self.next_texture % TEXTURE_BUFFER_COUNT;
+        let texture = self.textures[index]
+            .as_ref()
+            .ok_or_else(|| anyhow!("UI texture is unavailable"))?
+            .clone();
+        let _guard = D3DGuard::new(self.multithread.clone());
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.context
+                .Map(&texture, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                .map_err(|error| anyhow!("Map UI texture failed: {error}"))?;
+        }
+        let row_bytes = size.0 as usize * 4;
+        for row in 0..size.1 as usize {
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    (dib.bits as *const u8).add(row * dib.pitch as usize),
+                    (mapped.pData as *mut u8).add(row * mapped.RowPitch as usize),
+                    row_bytes,
+                );
+            }
+        }
+        unsafe { self.context.Unmap(&texture, 0) };
+        self.active_texture = index;
+        self.next_texture = (index + 1) % TEXTURE_BUFFER_COUNT;
         Ok(())
     }
 
@@ -660,20 +860,20 @@ impl DeviceResources {
         screen_w: f32,
         screen_h: f32,
     ) -> Result<()> {
-        let back_buffer: ID3D11Texture2D =
-            unsafe { swapchain.GetBuffer(0) }.map_err(|error| anyhow!("GetBuffer(0) failed: {error}"))?;
+        let _guard = D3DGuard::new(self.multithread.clone());
         let swapchain_raw = Interface::as_raw(swapchain);
-        let back_buffer_raw = Interface::as_raw(&back_buffer);
         let render_target_size = (screen_w.max(0.0) as u32, screen_h.max(0.0) as u32);
 
-        // GetBuffer is retained as the cheap change detector (ResizeBuffers and
-        // swap-chain replacement change the returned buffer). The expensive
-        // CreateRenderTargetView is only performed when that identity changes.
+        // GetBuffer(0) is not free: it performs COM work on the swap chain and
+        // can serialize a busy render thread. Re-query only when the swap chain
+        // or its size changes; otherwise reuse the cached RTV.
         if self.render_target.is_none()
             || self.render_target_swapchain != swapchain_raw
-            || self.render_target_buffer != back_buffer_raw
             || self.render_target_size != render_target_size
         {
+            let back_buffer: ID3D11Texture2D =
+                unsafe { swapchain.GetBuffer(0) }.map_err(|error| anyhow!("GetBuffer(0) failed: {error}"))?;
+            let back_buffer_raw = Interface::as_raw(&back_buffer);
             let mut render_target = None;
             unsafe {
                 self.device
@@ -690,12 +890,27 @@ impl DeviceResources {
             .as_ref()
             .ok_or_else(|| anyhow!("cached render target view is unavailable"))?;
         let texture_view = self
-            .texture_view
-            .as_ref()
+            .texture_views
+            .get(self.active_texture)
+            .and_then(Option::as_ref)
             .ok_or_else(|| anyhow!("UI texture view is unavailable"))?;
 
-        let saved = self.save_state();
-        let result = (|| -> Result<()> {
+        // Preferred path: swap in a D3D11.1 context-state object, draw, then
+        // swap the game's complete state back. This replaces the expensive
+        // save_state/restore_state pair with two state-object swaps.
+        let mut state_swap = None;
+        if let (Some(context1), Some(state)) = (self.device_context1.clone(), self.device_state.clone()) {
+            let mut previous = None;
+            unsafe { context1.SwapDeviceContextState(&state, Some(&mut previous)) };
+            state_swap = Some((context1, previous));
+        }
+        let saved = if state_swap.is_some() {
+            None
+        } else {
+            Some(self.save_state())
+        };
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
             unsafe {
                 self.context
                     .OMSetRenderTargets(Some(&[Some(render_target.clone())]), None::<&ID3D11DepthStencilView>);
@@ -720,12 +935,15 @@ impl DeviceResources {
                     panel: [panel_x, panel_y, panel_w, panel_h],
                     screen: [screen_w, screen_h, 0.0, 0.0],
                 };
-                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                self.context
-                    .Map(&self.constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
-                    .map_err(|error| anyhow!("Map constant buffer failed: {error}"))?;
-                ptr::copy_nonoverlapping(&params, mapped.pData as *mut ShaderParams, 1);
-                self.context.Unmap(&self.constant_buffer, 0);
+                if self.shader_params != Some(params) {
+                    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                    self.context
+                        .Map(&self.constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
+                        .map_err(|error| anyhow!("Map constant buffer failed: {error}"))?;
+                    ptr::copy_nonoverlapping(&params, mapped.pData as *mut ShaderParams, 1);
+                    self.context.Unmap(&self.constant_buffer, 0);
+                    self.shader_params = Some(params);
+                }
                 self.context
                     .VSSetConstantBuffers(0, Some(&[Some(self.constant_buffer.clone())]));
                 self.context
@@ -734,22 +952,44 @@ impl DeviceResources {
                 self.context.Draw(4, 0);
             }
             Ok(())
-        })();
+        }))
+        .unwrap_or_else(|_| Err(anyhow!("panic while drawing in-game overlay")));
 
-        self.restore_state(saved);
+        if let Some((context1, previous)) = state_swap {
+            // Do not let the cached overlay state object keep a reference to
+            // the swap-chain back buffer; that would make ResizeBuffers fail.
+            unsafe {
+                self.context.OMSetRenderTargets(None, None::<&ID3D11DepthStencilView>);
+            }
+            if let Some(previous) = previous {
+                let mut next = None;
+                unsafe { context1.SwapDeviceContextState(&previous, Some(&mut next)) };
+                if next.is_some() {
+                    self.device_state = next;
+                }
+            } else {
+                log::error!("ui: context-state swap did not return game state; disabling fast path");
+                self.device_state = None;
+                self.device_context1 = None;
+            }
+        } else if let Some(saved) = saved {
+            self.restore_state(saved);
+        }
         result
     }
 
     fn save_state(&self) -> SavedState {
         unsafe {
-            let mut render_targets = [None];
+            let mut render_targets: [Option<ID3D11RenderTargetView>; MAX_RENDER_TARGETS] =
+                std::array::from_fn(|_| None);
             let mut depth_stencil_view = None;
             self.context
                 .OMGetRenderTargets(Some(&mut render_targets), Some(&mut depth_stencil_view as *mut _));
 
-            let mut viewport = D3D11_VIEWPORT::default();
-            let mut viewport_count = 1;
-            self.context.RSGetViewports(&mut viewport_count, Some(&mut viewport));
+            let mut viewports = [D3D11_VIEWPORT::default(); MAX_VIEWPORTS];
+            let mut viewport_count = MAX_VIEWPORTS as u32;
+            self.context
+                .RSGetViewports(&mut viewport_count, Some(viewports.as_mut_ptr()));
 
             let mut blend = None;
             let mut blend_factor = [0.0f32; 4];
@@ -782,9 +1022,9 @@ impl DeviceResources {
             self.context.VSGetConstantBuffers(0, Some(&mut constant_buffer));
 
             SavedState {
-                render_target: render_targets[0].take(),
+                render_targets,
                 depth_stencil_view,
-                viewport,
+                viewports,
                 viewport_count,
                 blend,
                 blend_factor,
@@ -806,9 +1046,10 @@ impl DeviceResources {
     fn restore_state(&self, saved: SavedState) {
         unsafe {
             self.context
-                .OMSetRenderTargets(Some(&[saved.render_target]), saved.depth_stencil_view.as_ref());
+                .OMSetRenderTargets(Some(&saved.render_targets), saved.depth_stencil_view.as_ref());
             if saved.viewport_count > 0 {
-                self.context.RSSetViewports(Some(&[saved.viewport]));
+                let count = (saved.viewport_count as usize).min(MAX_VIEWPORTS);
+                self.context.RSSetViewports(Some(&saved.viewports[..count]));
             }
             self.context
                 .OMSetBlendState(saved.blend.as_ref(), Some(&saved.blend_factor), saved.sample_mask);
