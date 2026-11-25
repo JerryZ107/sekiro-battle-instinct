@@ -23,7 +23,13 @@
 //
 //----------------------------------------------------------------------------
 
-use std::{ffi::c_void, fs, path::Path, sync::OnceLock};
+use std::{
+    ffi::c_void,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use crate::{game, inventory, memory};
 
@@ -80,15 +86,18 @@ impl EmblemStock {
 struct PaperGuard {
     enabled: bool,
     debug: bool,
+    /// Last damage-info pointer whose page range was already validated.
+    last_damage_info: AtomicUsize,
 }
 
 impl PaperGuard {
-    fn load(path: &Path) -> PaperGuard {
+    fn from_text(text: &str) -> PaperGuard {
         let mut guard = PaperGuard {
             enabled: true,
             debug: false,
+            last_damage_info: AtomicUsize::new(0),
         };
-        if let Ok(text) = fs::read_to_string(path) {
+        {
             for line in text.lines() {
                 let Some((key, value)) = split_kv(line) else {
                     continue;
@@ -109,18 +118,18 @@ impl PaperGuard {
     }
 
     fn read_stock(&self) -> EmblemStock {
-        let Some(snapshot) = inventory::ensure_fresh_for_damage() else {
+        // This takes the inventory mutex only when the cache is invalidated or
+        // the one-second pickup fallback is due.
+        let _ = inventory::ensure_fresh_for_damage();
+        let Some((temp, normal)) = inventory::stock_fast() else {
             return EmblemStock::default();
         };
-        EmblemStock {
-            temp: snapshot.temp,
-            normal: snapshot.normal,
-        }
+        EmblemStock { temp, normal }
     }
 }
 
-pub fn init(cfg: impl AsRef<Path>) {
-    let guard = PaperGuard::load(cfg.as_ref());
+pub fn init_from_text(text: &str) {
+    let guard = PaperGuard::from_text(text);
     if INSTANCE.set(guard).is_err() {
         log::warn!("paper guard: init called more than once");
     }
@@ -133,8 +142,12 @@ pub fn prepare_damage(damage_info: *mut c_void, hp_before: i32) -> Option<Pendin
     if !guard.enabled || damage_info.is_null() || hp_before <= 0 {
         return None;
     }
-    if !memory::is_valid_read_ptr(damage_info as usize, DAMAGE_INFO_SCAN_LEN) {
-        return None;
+    let damage_info_addr = damage_info as usize;
+    if guard.last_damage_info.load(Ordering::Relaxed) != damage_info_addr {
+        if !memory::is_valid_read_ptr(damage_info_addr, DAMAGE_INFO_SCAN_LEN) {
+            return None;
+        }
+        guard.last_damage_info.store(damage_info_addr, Ordering::Relaxed);
     }
 
     let info = damage_info.cast::<u8>();
@@ -143,7 +156,7 @@ pub fn prepare_damage(damage_info: *mut c_void, hp_before: i32) -> Option<Pendin
         return None;
     }
 
-    let player = player_ins()?;
+    let player = game::player_ins()?;
     let player_addr = player as u64;
     let target_a = unsafe { read_u64(info, DAMAGE_INFO_TARGET_OFFSET_A) };
     let target_b = unsafe { read_u64(info, DAMAGE_INFO_TARGET_OFFSET_B) };
@@ -294,17 +307,6 @@ fn reduce_damage(raw_damage: i32, percent: u16) -> i32 {
     let raw = raw_damage.max(0) as i64;
     let mitigated = (raw * percent as i64 + 50) / 100;
     (raw - mitigated).clamp(0, raw) as i32
-}
-
-fn player_ins() -> Option<*mut u8> {
-    unsafe {
-        let world_data = *(game::WORLD_DATA as *const *const u8);
-        if world_data.is_null() {
-            return None;
-        }
-        let player = *(world_data.add(0x88) as *const *mut u8);
-        if player.is_null() { None } else { Some(player) }
-    }
 }
 
 unsafe fn read_u64(base: *const u8, offset: usize) -> u64 {

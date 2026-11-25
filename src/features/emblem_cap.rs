@@ -18,6 +18,7 @@
 //
 //----------------------------------------------------------------------------
 
+#[cfg(test)]
 use std::{fs, path::Path};
 
 use crate::{game, inventory, memory};
@@ -38,16 +39,20 @@ pub struct Emblem {
 }
 
 impl Emblem {
+    #[cfg(test)]
     pub fn new(cfg: impl AsRef<Path>) -> Emblem {
+        let text = fs::read_to_string(cfg.as_ref()).unwrap_or_default();
+        Self::from_text(&text)
+    }
+
+    pub fn from_text(text: &str) -> Emblem {
         let mut emblem = Emblem {
             enabled: true,
             last_i: None,
             last_scan_id: None,
             warned_bad_cap: false,
         };
-        if let Ok(text) = fs::read_to_string(cfg.as_ref()) {
-            emblem.load(&text);
-        }
+        emblem.load(text);
         log::warn!(
             "emblem settings: enabled={} rule=cap {} + {} * i (i from cached inventory snapshot)",
             emblem.enabled,
@@ -77,26 +82,27 @@ impl Emblem {
         }
 
         // Event-driven scan: only when the inventory object or pause-menu
-        // generation changed. On the common path this is two pointer reads and
-        // an atomic menu check.
-        let Some(snapshot) = inventory::ensure_fresh() else {
+        // generation changed. The common path uses the lock-free atomic image
+        // and never takes the inventory mutex.
+        inventory::refresh_if_needed();
+        let Some((scan_id, cap_skills)) = inventory::emblem_image() else {
             return;
         };
         // Apply the cap once per fresh inventory scan, not on every frame.
-        if self.last_scan_id == Some(snapshot.scan_id) {
+        if self.last_scan_id == Some(scan_id) {
             return;
         }
-        self.last_scan_id = Some(snapshot.scan_id);
+        self.last_scan_id = Some(scan_id);
 
         let Some(player) = game::player_data() else {
             return;
         };
 
-        self.apply(player as *mut u8, &snapshot);
+        self.apply(player as *mut u8, &cap_skills);
     }
 
-    fn apply(&mut self, player: *mut u8, snapshot: &inventory::InventorySnapshot) {
-        let i = count_found(&snapshot.cap_skills);
+    fn apply(&mut self, player: *mut u8, cap_skills: &[bool; 5]) {
+        let i = count_found(cap_skills);
         let target = BASE_CAP + PER_SKILL * i;
         let cur = unsafe { memory::read_u16(player, CAP_OFFSET) } as u32;
 
@@ -114,11 +120,11 @@ impl Emblem {
             crate::frame_perf::mark(crate::frame_perf::EventId::EmblemScan);
             log::warn!(
                 "emblem: skills A={} B={} C={} D={} E={} -> i={} cap={}",
-                snapshot.cap_skills[0] as u8,
-                snapshot.cap_skills[1] as u8,
-                snapshot.cap_skills[2] as u8,
-                snapshot.cap_skills[3] as u8,
-                snapshot.cap_skills[4] as u8,
+                cap_skills[0] as u8,
+                cap_skills[1] as u8,
+                cap_skills[2] as u8,
+                cap_skills[3] as u8,
+                cap_skills[4] as u8,
                 i,
                 target
             );

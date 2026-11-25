@@ -6,7 +6,7 @@
 //! save/restore. The cached UI texture is uploaded only when the CPU painter
 //! publishes a new generation.
 
-use std::{ffi::c_void, mem::size_of, ptr, slice};
+use std::{ffi::c_void, mem::size_of, ptr, slice, sync::OnceLock};
 
 use anyhow::{Result, anyhow};
 use windows::{
@@ -51,6 +51,19 @@ pub(crate) struct PaintFrame {
 
 unsafe impl Send for OverlayRenderer {}
 
+static SHADER_BYTECODE: OnceLock<(Vec<u8>, Vec<u8>)> = OnceLock::new();
+
+fn shader_bytecode() -> Result<&'static (Vec<u8>, Vec<u8>)> {
+    if let Some(bytecode) = SHADER_BYTECODE.get() {
+        return Ok(bytecode);
+    }
+    let compiled = unsafe { compile_shaders() }?;
+    let _ = SHADER_BYTECODE.set(compiled);
+    SHADER_BYTECODE
+        .get()
+        .ok_or_else(|| anyhow!("shader bytecode cache was not initialized"))
+}
+
 pub(crate) struct OverlayRenderer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -67,6 +80,9 @@ pub(crate) struct OverlayRenderer {
     render_target: Option<ID3D11RenderTargetView>,
     render_target_swapchain: *mut c_void,
     render_target_size: (u32, u32),
+    /// Cached swap-chain back-buffer size. Recreated only when the renderer is
+    /// recreated on ResizeBuffers.
+    screen_size: (u32, u32),
 }
 
 impl OverlayRenderer {
@@ -76,7 +92,7 @@ impl OverlayRenderer {
         let context =
             unsafe { device.GetImmediateContext() }.map_err(|error| anyhow!("GetImmediateContext failed: {error}"))?;
 
-        let (vs_bytecode, ps_bytecode) = unsafe { compile_shaders() }?;
+        let (vs_bytecode, ps_bytecode) = shader_bytecode()?;
         let mut vertex_shader = None;
         unsafe {
             device
@@ -153,6 +169,8 @@ impl OverlayRenderer {
         }
 
         let solid_view = create_solid_view(&device)?;
+        let desc = unsafe { swapchain.GetDesc() }.map_err(|error| anyhow!("GetDesc failed: {error}"))?;
+        let screen_size = (desc.BufferDesc.Width.max(1), desc.BufferDesc.Height.max(1));
 
         Ok(Self {
             device,
@@ -170,7 +188,13 @@ impl OverlayRenderer {
             render_target: None,
             render_target_swapchain: ptr::null_mut(),
             render_target_size: (0, 0),
+            screen_size,
         })
+    }
+
+    #[inline]
+    pub(crate) fn screen_size(&self) -> (u32, u32) {
+        self.screen_size
     }
 
     /// Upload a new UI snapshot. Present thread only; no other thread touches

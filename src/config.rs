@@ -1,8 +1,9 @@
 use std::{collections::HashMap, fs, io, path::Path};
 
 use crate::{
+    frame::Frames,
     game::UID,
-    input::{ArtCombo, ArtToken},
+    input::{ArtCombo, ArtToken, ComboKey, ComboTable},
 };
 
 const COMBART_ART_UID_MIN: UID = 5000;
@@ -44,29 +45,56 @@ pub enum ToolFirst {
     Switch,
 }
 
-impl ToolFirst {
-    pub fn from_art(token: ArtToken) -> ToolFirst {
-        match token {
-            ArtToken::Up => ToolFirst::Up,
-            ArtToken::Right => ToolFirst::Right,
-            ArtToken::Down => ToolFirst::Down,
-            ArtToken::Left => ToolFirst::Left,
-            ArtToken::Block => ToolFirst::Block,
-            ArtToken::Attack => ToolFirst::Attack,
-            ArtToken::Interact => ToolFirst::Interact,
-            ArtToken::Grapple => ToolFirst::Grapple,
-            ArtToken::Jump => ToolFirst::Jump,
-            ArtToken::Sprint => ToolFirst::Sprint,
-            ArtToken::Crouch => ToolFirst::Crouch,
-        }
-    }
-}
+impl ToolFirst {}
 
 /// First key (dir / r / l / e / f / q) + tail (`q` / `t`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ToolCombo {
     pub first: ToolFirst,
     pub tail: ToolTail,
+}
+
+impl ToolFirst {
+    #[inline(always)]
+    pub const fn index(self) -> u8 {
+        match self {
+            ToolFirst::Up => 1,
+            ToolFirst::Right => 2,
+            ToolFirst::Down => 3,
+            ToolFirst::Left => 4,
+            ToolFirst::Block => 5,
+            ToolFirst::Attack => 6,
+            ToolFirst::Interact => 7,
+            ToolFirst::Grapple => 8,
+            ToolFirst::Jump => 9,
+            ToolFirst::Sprint => 10,
+            ToolFirst::Crouch => 11,
+            ToolFirst::Switch => 12,
+        }
+    }
+}
+
+impl ToolTail {
+    #[inline(always)]
+    pub const fn index(self) -> u8 {
+        match self {
+            ToolTail::Switch => 1,
+            ToolTail::Use => 2,
+            ToolTail::Block => 3,
+            ToolTail::Attack => 4,
+            ToolTail::Interact => 5,
+            ToolTail::Grapple => 6,
+            ToolTail::Jump => 7,
+            ToolTail::Sprint => 8,
+            ToolTail::Crouch => 9,
+        }
+    }
+}
+
+impl ComboKey for ToolCombo {
+    fn index(self) -> usize {
+        ((self.first.index() as usize) << 4) | self.tail.index() as usize
+    }
 }
 
 /// Default `rl` (Block→Attack) combo window in seconds @60fps.
@@ -101,11 +129,11 @@ pub fn tool_multi_lock_secs_to_frames(secs: f32) -> u16 {
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Combat arts keyed by r/l/e/f + direction pairs (or empty for ∅).
-    pub arts: HashMap<ArtCombo, UID>,
+    pub arts: ComboTable<ArtCombo, UID>,
     /// Name contains `瞬发` / `instant`: block + direction edge fires immediately (e.g. `r↓`).
-    pub instant_arts: HashMap<ArtCombo, UID>,
+    pub instant_arts: ComboTable<ArtCombo, UID>,
     /// Two-key prosthetic binds: (↑↓←→|r|l|e|f|q) then (q|t).
-    pub tools: HashMap<ToolCombo, UID>,
+    pub tools: ComboTable<ToolCombo, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,
     /// Unique bare-`q` prosthetic (same fire style as bare `t`; does not become return-default).
@@ -143,21 +171,36 @@ impl Config {
         self.tools.get(&combo).copied()
     }
 
-    /// Lock frames for re-triggering the same prosthetic after releasing the tail key.
-    pub fn tool_lock_frames(&self, uid: Option<UID>) -> u16 {
+    /// The cfg fields below are stored as 60 fps frame budgets. These
+    /// accessors return them as `Frames` so callers scale them to the measured
+    /// game framerate instead of hard-coding 60 fps behaviour.
+    pub fn rl_window(&self) -> Frames {
+        Frames::standard(self.rl_combo_max_age)
+    }
+
+    pub fn tool_window(&self) -> Frames {
+        Frames::standard(self.tool_combo_max_age)
+    }
+
+    pub fn art_queue_delay(&self) -> Frames {
+        Frames::standard(self.art_queue_delay_frames)
+    }
+
+    /// Lock window for re-triggering the same prosthetic after releasing the tail key.
+    pub fn tool_lock(&self, uid: Option<UID>) -> Frames {
         let secs = uid
             .and_then(|id| self.tool_multi_lock_secs.get(&id).copied())
             .unwrap_or(DEFAULT_TOOL_MULTI_LOCK_SECS);
-        tool_multi_lock_secs_to_frames(secs)
+        Frames::standard(tool_multi_lock_secs_to_frames(secs))
     }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            arts: HashMap::new(),
-            instant_arts: HashMap::new(),
-            tools: HashMap::new(),
+            arts: ComboTable::new(),
+            instant_arts: ComboTable::new(),
+            tools: ComboTable::new(),
             tool_on_t: None,
             tool_on_q: None,
             rl_combo_max_age: rl_window_secs_to_frames(DEFAULT_RL_WINDOW_SECS),
@@ -528,19 +571,19 @@ mod test {
         use crate::config::{DEFAULT_TOOL_MULTI_LOCK_SECS, tool_multi_lock_secs_to_frames};
 
         let config = Config::from("70500 x t-0s\n75300 x ↑q-0.5s");
-        assert_eq!(config.tool_lock_frames(Some(70500)), 0);
-        assert_eq!(config.tool_lock_frames(Some(75300)), 30);
+        assert_eq!(config.tool_lock(Some(70500)).as_standard(), 0);
+        assert_eq!(config.tool_lock(Some(75300)).as_standard(), 30);
         assert_eq!(
-            config.tool_lock_frames(Some(78400)),
+            config.tool_lock(Some(78400)).as_standard(),
             tool_multi_lock_secs_to_frames(DEFAULT_TOOL_MULTI_LOCK_SECS),
         );
 
         let config = Config::from("74100 x q-多段触发时限0s");
-        assert_eq!(config.tool_lock_frames(Some(74100)), 0);
+        assert_eq!(config.tool_lock(Some(74100)).as_standard(), 0);
         assert_eq!(config.tool_multi_lock_secs.get(&74100), Some(&0.0));
 
         let config = Config::from("71200 x →q-multi-hit0s");
-        assert_eq!(config.tool_lock_frames(Some(71200)), 0);
+        assert_eq!(config.tool_lock(Some(71200)).as_standard(), 0);
     }
 
     #[test]

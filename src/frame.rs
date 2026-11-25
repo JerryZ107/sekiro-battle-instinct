@@ -7,18 +7,46 @@ use std::{
 pub const DEFAULT_FRAMERATE: u16 = 60;
 
 /// Frame count under the standard FPS as a time unit, namely, 1/60s.
-/// It can be adjusted to the current framerate
+/// It can be adjusted to the current framerate.
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Frames(u16);
+
 impl Frames {
     #[inline(always)]
     pub const fn standard(value: u16) -> Frames {
         Frames(value)
     }
+
+    /// Convert a 60 fps frame budget to `framerate` fps.
+    ///
+    /// The arithmetic is done in `u32` and saturated: a long budget such as
+    /// `240` frames at a 300 fps loading-screen rate would otherwise overflow
+    /// `u16` and silently wrap in release builds.
+    #[inline(always)]
+    pub const fn actual_at(self, framerate: u16) -> u16 {
+        let framerate = if framerate < DEFAULT_FRAMERATE {
+            DEFAULT_FRAMERATE
+        } else {
+            framerate
+        } as u32;
+        let scaled = (self.0 as u32 * framerate + DEFAULT_FRAMERATE as u32 / 2) / DEFAULT_FRAMERATE as u32;
+        if scaled > u16::MAX as u32 {
+            u16::MAX
+        } else {
+            scaled as u16
+        }
+    }
+
     #[inline(always)]
     pub fn as_actual(self) -> u16 {
-        self.0 * FRAMERATE.cur() / DEFAULT_FRAMERATE
+        self.actual_at(FRAMERATE.cur())
+    }
+
+    #[allow(unused)]
+    #[inline(always)]
+    pub const fn as_standard(self) -> u16 {
+        self.0
     }
 }
 
@@ -78,10 +106,6 @@ impl FramerateInner {
     }
 
     fn tick(&mut self, cur: &AtomicU16) {
-        if self.is_freezed() {
-            return;
-        }
-
         let since = *self.since.get_or_insert_with(Instant::now);
         self.frames += 1;
         if self.frames < Self::SAMPLE_SIZE {
@@ -89,13 +113,39 @@ impl FramerateInner {
         }
 
         let now = Instant::now();
-        let elapsed = now - since;
-        let measured = (self.frames as u128 * 1000 / elapsed.as_millis()) as u16;
-        cur.store(measured, Ordering::Relaxed);
+        let elapsed = now.saturating_duration_since(since);
         self.frames = 0;
         self.since = Some(now);
         self.samples = self.samples.saturating_add(1);
 
+        // Ignore windows that clearly contain a pause/loading gap. Without
+        // this, a menu pause would be measured as a handful of fps and could
+        // briefly shrink every frame-based window.
+        let expected = Self::SAMPLE_SIZE as f64 / cur.load(Ordering::Relaxed).max(1) as f64;
+        // The 2 s floor is important: after measuring 120/300 fps, a normal
+        // 60 fps window is ~1 s and must still be allowed to downgrade `cur`.
+        if elapsed.as_secs_f64() > (expected * 3.0).max(2.0) {
+            log::trace!("Framerate: skipped {:.3}s sampling gap", elapsed.as_secs_f64());
+            return;
+        }
+
+        // `as_secs_f64` keeps sub-millisecond precision; the old
+        // `as_millis()` path truncated to 0 and could divide by zero.
+        let measured = if elapsed.as_secs_f64() <= f64::EPSILON {
+            DEFAULT_FRAMERATE
+        } else {
+            ((Self::SAMPLE_SIZE as f64 / elapsed.as_secs_f64()).round() as u16).max(1)
+        };
+        // Treat 1..=65 fps as the normal 60 fps cap. Only a genuinely higher
+        // rate changes frame-based timings.
+        let effective = if measured > DEFAULT_FRAMERATE + 5 {
+            measured
+        } else {
+            DEFAULT_FRAMERATE
+        };
+        cur.store(effective, Ordering::Relaxed);
+
+        let was_unlocked = self.unlocked;
         if measured > DEFAULT_FRAMERATE + 5 {
             self.unlocked = true;
         }
@@ -104,17 +154,17 @@ impl FramerateInner {
             if self.unlocked {
                 log::debug!("Framerate is unlocked.");
             } else {
-                cur.store(DEFAULT_FRAMERATE, Ordering::Relaxed);
-                log::debug!("Framerate is freezed.");
+                // Normal 60 fps play. Keep sampling instead of freezing
+                // forever: an unlocker can be toggled mid-session.
+                log::debug!("Framerate is freezed at 60.");
             }
         } else if self.samples < Self::SAMPLE_COUNT {
-            log::trace!("Framerate: {}", measured);
-            return;
+            log::trace!("Framerate: {measured}");
         }
-    }
 
-    fn is_freezed(&self) -> bool {
-        self.samples >= Self::SAMPLE_COUNT && !self.unlocked
+        if !was_unlocked && self.unlocked {
+            log::debug!("Framerate became unlocked at {measured} fps.");
+        }
     }
 }
 
@@ -133,5 +183,23 @@ mod tests {
                 scope.spawn(|| assert_eq!(framerate.cur(), DEFAULT_FRAMERATE));
             }
         });
+    }
+
+    #[test]
+    fn frames_scale_to_actual_framerate() {
+        assert_eq!(Frames::standard(18).actual_at(60), 18);
+        assert_eq!(Frames::standard(18).actual_at(120), 36);
+        assert_eq!(Frames::standard(18).actual_at(144), 43);
+        assert_eq!(Frames::standard(18).actual_at(300), 90);
+        assert_eq!(Frames::standard(42).actual_at(144), 101);
+        assert_eq!(Frames::standard(240).actual_at(300), 1200);
+    }
+
+    #[test]
+    fn frame_scaling_saturates_instead_of_overflowing() {
+        assert_eq!(Frames::standard(u16::MAX).actual_at(300), u16::MAX);
+        assert_eq!(Frames::standard(0).actual_at(300), 0);
+        // Below 60 fps the mod keeps the 60 fps budget instead of shrinking it.
+        assert_eq!(Frames::standard(18).actual_at(30), 18);
     }
 }

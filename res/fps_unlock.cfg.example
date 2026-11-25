@@ -1,0 +1,14 @@
+# 纸人术 · 可选 FPS 解锁 / 帧节奏
+# 复制本文件到 sekiro.exe 同目录并改名为 fps_unlock.cfg 才会生效。
+# 不创建 fps_unlock.cfg 时，本模块完全不碰游戏内存。
+#
+# 警告：
+# - 仅支持 Sekiro 1.6.0.0；游戏更新后偏移会失效，模块会拒绝写入。
+# - 解锁 60fps 会改变游戏逻辑/动画速度，speed_fix 只是近似补偿。
+# - 如已使用其他 FPS 解锁 MOD，本模块检测到帧间隔不是 1/60 会直接退出。
+enabled = false
+limit = 120
+loading_boost = true
+vsync = auto
+speed_fix = true
+fullscreen_refresh = false

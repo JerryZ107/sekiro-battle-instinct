@@ -1,4 +1,14 @@
-use std::{ffi::c_void, fmt, num::NonZero};
+use std::{
+    ffi::c_void,
+    fmt,
+    num::NonZero,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
 //----------------------------------------------------------------------------
 //
@@ -10,6 +20,7 @@ use std::{ffi::c_void, fmt, num::NonZero};
 pub const PROCESS_INPUT: usize = 0x140B2C190;
 pub const GET_ITEM_ID: usize = 0x140C3D680;
 pub const SET_SLOT: usize = 0x140D592F0;
+pub const SET_EQUIPED_PROTHSETIC: usize = 0x140A26150;
 pub const PLAYER_DAMAGE_REACTION: usize = 0x140B6E6A0;
 
 /// First 16 bytes of the supported Sekiro 1.6.0.0 function prologues. These are
@@ -22,9 +33,21 @@ pub const PLAYER_DAMAGE_REACTION_PREFIX: [u8; 16] = [
     0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x68, 0xB8, 0x48,
 ];
 
+/// Base address of the running `sekiro.exe`. Data-patch modules use
+/// `base + RVA`; the function/object constants above are absolute for the
+/// usual 0x140000000 image base.
+pub fn module_base() -> usize {
+    static BASE: OnceLock<usize> = OnceLock::new();
+    *BASE.get_or_init(|| unsafe { GetModuleHandleW(None).map(|module| module.0 as usize).unwrap_or(0) })
+}
+
 // objects
 pub const GAME_DATA: usize = 0x143D5AAC0;
 pub const WORLD_DATA: usize = 0x143D7A1E0;
+
+// PlayerIns -> module registry -> SprjChrDataModule.
+pub const PLAYER_MODULE_REGISTRY_OFFSET: usize = 0x1ff8;
+pub const CHR_DATA_MODULE_OFFSET: usize = 0x18;
 
 //----------------------------------------------------------------------------
 //
@@ -108,6 +131,9 @@ forward! {
 
     @[SET_SLOT]
     fn set_slot_raw(equip_slot: usize, equip_data: *const EquipData, ignore_equip_lock: bool);
+
+    @[SET_EQUIPED_PROTHSETIC]
+    fn set_equipped_prosthetic(unknown: *const c_void, zero: u32, prosthetic_index: u32);
 }
 
 //----------------------------------------------------------------------------
@@ -178,6 +204,96 @@ pub fn set_slot(item: impl ID, slot_index: usize) -> bool {
     let equip_data = EquipData::new(item_id.get());
     set_slot_raw(slot_index, &equip_data, true);
     true
+}
+
+/// Resolve a chain of pointer dereferences followed by byte offsets.
+/// Mirrors dec32/sekiro-battle-instinct's `game::resolve_pointer_chain`.
+///
+/// Safety: every dereference must target readable game memory.
+pub unsafe fn resolve_pointer_chain<R, const N: usize>(root: usize, offsets: [usize; N]) -> *mut R {
+    unsafe {
+        let mut pointer = root as *mut ();
+        for offset in offsets {
+            pointer = *(pointer as *mut *mut ());
+            if pointer.is_null() {
+                return pointer as *mut R;
+            }
+            pointer = pointer.byte_add(offset);
+        }
+        pointer as *mut R
+    }
+}
+
+//----------------------------------------------------------------------------
+//
+//  Cached player / ChrData pointer chains
+//
+//----------------------------------------------------------------------------
+
+static PLAYER_CACHE_WORLD: AtomicUsize = AtomicUsize::new(0);
+static PLAYER_CACHE: AtomicUsize = AtomicUsize::new(0);
+static CHR_CACHE_PLAYER: AtomicUsize = AtomicUsize::new(0);
+static CHR_CACHE: AtomicUsize = AtomicUsize::new(0);
+
+/// Clear cached player/module pointers after a menu close/save load. The next
+/// damage event or flow tick resolves the chain again.
+pub fn invalidate_pointer_cache() {
+    PLAYER_CACHE_WORLD.store(0, Ordering::Release);
+    PLAYER_CACHE.store(0, Ordering::Release);
+    CHR_CACHE_PLAYER.store(0, Ordering::Release);
+    CHR_CACHE.store(0, Ordering::Release);
+}
+
+/// PlayerIns from `WORLD_DATA -> +0x88`.
+#[inline]
+pub fn player_ins() -> Option<*mut u8> {
+    let world_data = unsafe { *(WORLD_DATA as *const *const u8) };
+    if world_data.is_null() {
+        return None;
+    }
+    let cached_world = PLAYER_CACHE_WORLD.load(Ordering::Acquire);
+    let cached_player = PLAYER_CACHE.load(Ordering::Acquire) as *mut u8;
+    if cached_world == world_data as usize && !cached_player.is_null() {
+        return Some(cached_player);
+    }
+
+    let player = unsafe { *(world_data.add(0x88) as *const *mut u8) };
+    if player.is_null() {
+        return None;
+    }
+    PLAYER_CACHE_WORLD.store(world_data as usize, Ordering::Release);
+    PLAYER_CACHE.store(player as usize, Ordering::Release);
+    Some(player)
+}
+
+/// SprjChrDataModule from PlayerIns.
+#[inline]
+pub fn chr_data_module(player: *mut u8) -> Option<*mut u8> {
+    if player.is_null() {
+        return None;
+    }
+    let cached_player = CHR_CACHE_PLAYER.load(Ordering::Acquire);
+    let cached_module = CHR_CACHE.load(Ordering::Acquire) as *mut u8;
+    if cached_player == player as usize && !cached_module.is_null() {
+        return Some(cached_module);
+    }
+
+    let registry = unsafe { *(player.add(PLAYER_MODULE_REGISTRY_OFFSET) as *const *mut u8) };
+    if registry.is_null() {
+        return None;
+    }
+    let module = unsafe { *(registry.add(CHR_DATA_MODULE_OFFSET) as *const *mut u8) };
+    if module.is_null() {
+        return None;
+    }
+    CHR_CACHE_PLAYER.store(player as usize, Ordering::Release);
+    CHR_CACHE.store(module as usize, Ordering::Release);
+    Some(module)
+}
+
+#[inline]
+pub fn player_chr_data_module() -> Option<*mut u8> {
+    player_ins().and_then(chr_data_module)
 }
 
 //----------------------------------------------------------------------------

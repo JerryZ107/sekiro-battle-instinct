@@ -11,7 +11,7 @@ use crate::{
     config::{Config, ToolCombo, ToolFirst, ToolTail},
     frame::Frames,
     game::{self, ID, InputHandler, ItemID, UID},
-    input::ArtToken,
+    input::{ActionFrame, ArtToken},
 };
 
 pub const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
@@ -35,6 +35,11 @@ impl ProstheticSlot {
     pub fn as_slot_index(self) -> usize {
         self as usize
     }
+
+    #[inline(always)]
+    pub fn as_prosthetic_index(self) -> u32 {
+        self as u32 / 2
+    }
 }
 
 /// All prosthetic-specific state that used to be scattered across `Mod`.
@@ -53,18 +58,7 @@ pub struct ProstheticState {
     pub return_default_left: u16,
     /// Frames left where switching tools is blocked; `t` refreshes for multi-hit.
     pub tool_lock_left: u16,
-    /// Last frame's switch-prosthetic field (after observing, before swallowing).
-    pub switch_down_last: bool,
     pub tools_inited: bool,
-    /// Edge memory for prosthetic first-key directions / r l e f.
-    pub tool_keys_down: [bool; 4],
-    pub tool_block_down: bool,
-    pub tool_attack_down: bool,
-    pub tool_interact_down: bool,
-    pub tool_grapple_down: bool,
-    pub tool_jump_down: bool,
-    pub tool_sprint_down: bool,
-    pub tool_crouch_down: bool,
     pub ejection: Option<(ItemID, ProstheticSlot)>,
     pub prosthetic_delay: u8,
 }
@@ -93,6 +87,23 @@ pub fn get_active_prosthetic_slot() -> ProstheticSlot {
         2 => ProstheticSlot::S2,
         illegal_slot => unreachable!("Illegal prosthetic slot: {illegal_slot}"),
     }
+}
+
+/// Activate an already-equipped prosthetic slot through the game's native
+/// function, avoiding an inventory-row swap and the associated HUD flicker.
+pub fn activate_prosthetic_slot(slot: ProstheticSlot) -> bool {
+    use std::ffi::c_void;
+    let character_base: *const c_void =
+        unsafe { game::resolve_pointer_chain(game::WORLD_DATA, [0x88, 0x1F10, 0x10, 0xF8, 0x10, 0x18, 0x00]) };
+    if character_base.is_null() {
+        return false;
+    }
+    let unknown = unsafe { *(character_base.byte_add(0x10) as *const *const c_void) };
+    if unknown.is_null() {
+        return false;
+    }
+    game::set_equipped_prosthetic(unknown, 0, slot.as_prosthetic_index());
+    true
 }
 
 pub fn locate_prosthetic_tool(tool: impl ID) -> Option<ProstheticSlot> {
@@ -127,7 +138,15 @@ impl ProstheticState {
         }
 
         if let Some(other_slot) = locate_prosthetic_tool(uid) {
-            // Tool already in another slot: swap into the active (highlighted) slot.
+            // Tool is already equipped: activate its native slot instead of
+            // swapping inventory rows. This is the upstream approach and avoids
+            // HUD flicker plus the displaced-tool round trip.
+            if activate_prosthetic_slot(other_slot) {
+                return true;
+            }
+
+            // Fallback for a build where the native slot-activation chain is not
+            // available: preserve the old swap-into-active-slot behavior.
             let displaced = get_prosthetic_tool(active_slot);
             if equip_prosthetic(uid, active_slot) {
                 if let Some(displaced) = displaced {
@@ -164,7 +183,7 @@ impl ProstheticState {
     }
 
     pub fn refresh_tool_lock(&mut self, config: &Config) {
-        self.tool_lock_left = config.tool_lock_frames(self.cur_tool);
+        self.tool_lock_left = config.tool_lock(self.cur_tool).as_actual();
         self.return_default_left = 0;
     }
 
@@ -230,104 +249,43 @@ impl ProstheticState {
         &mut self,
         config: &Config,
         input_handler: &mut InputHandler,
-        up: bool,
-        right: bool,
-        down: bool,
-        left: bool,
-        blocking: bool,
-        attacking: bool,
-        interacting: bool,
-        grappling: bool,
-        jumping: bool,
-        sprinting: bool,
-        crouching: bool,
-        using_tool: bool,
-        used_tool_just_now: bool,
+        frame: &ActionFrame,
     ) -> bool {
         let mut armed_via_art_tail = false;
 
         // First-key edges for directions only (r/l/e/f may complete a combo as tail first).
-        for (i, (held, token)) in [
-            (up, ArtToken::Up),
-            (right, ArtToken::Right),
-            (down, ArtToken::Down),
-            (left, ArtToken::Left),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if held && !self.tool_keys_down[i] {
-                self.push_tool_first(ToolFirst::from_art(token));
+        for (token, first) in [
+            (ArtToken::Up, ToolFirst::Up),
+            (ArtToken::Right, ToolFirst::Right),
+            (ArtToken::Down, ToolFirst::Down),
+            (ArtToken::Left, ToolFirst::Left),
+        ] {
+            if frame.pressed(token) {
+                self.push_tool_first(first);
             }
-            self.tool_keys_down[i] = held;
         }
 
-        if blocking && !self.tool_block_down {
-            if self.try_complete_tool_tail(ToolTail::Block, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Block);
+        for (token, tail) in [
+            (ArtToken::Block, ToolTail::Block),
+            (ArtToken::Attack, ToolTail::Attack),
+            (ArtToken::Interact, ToolTail::Interact),
+            (ArtToken::Grapple, ToolTail::Grapple),
+            (ArtToken::Jump, ToolTail::Jump),
+            (ArtToken::Sprint, ToolTail::Sprint),
+            (ArtToken::Crouch, ToolTail::Crouch),
+        ] {
+            if frame.pressed(token) {
+                if self.try_complete_tool_tail(tail, config) {
+                    armed_via_art_tail = true;
+                } else {
+                    self.push_tool_first(first_for_tail(tail));
+                }
             }
         }
-        self.tool_block_down = blocking;
-
-        if attacking && !self.tool_attack_down {
-            if self.try_complete_tool_tail(ToolTail::Attack, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Attack);
-            }
-        }
-        self.tool_attack_down = attacking;
-
-        if interacting && !self.tool_interact_down {
-            if self.try_complete_tool_tail(ToolTail::Interact, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Interact);
-            }
-        }
-        self.tool_interact_down = interacting;
-
-        if grappling && !self.tool_grapple_down {
-            if self.try_complete_tool_tail(ToolTail::Grapple, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Grapple);
-            }
-        }
-        self.tool_grapple_down = grappling;
-
-        if jumping && !self.tool_jump_down {
-            if self.try_complete_tool_tail(ToolTail::Jump, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Jump);
-            }
-        }
-        self.tool_jump_down = jumping;
-
-        if sprinting && !self.tool_sprint_down {
-            if self.try_complete_tool_tail(ToolTail::Sprint, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Sprint);
-            }
-        }
-        self.tool_sprint_down = sprinting;
-
-        if crouching && !self.tool_crouch_down {
-            if self.try_complete_tool_tail(ToolTail::Crouch, config) {
-                armed_via_art_tail = true;
-            } else {
-                self.push_tool_first(ToolFirst::Crouch);
-            }
-        }
-        self.tool_crouch_down = crouching;
 
         if self.tool_first.is_some() {
             self.tool_first_age = self.tool_first_age.saturating_add(1);
-            if self.tool_first_age >= config.tool_combo_max_age {
+            if self.tool_first_age >= config.tool_window().as_actual() {
                 self.tool_first = None;
                 self.tool_first_age = 0;
             }
@@ -335,16 +293,14 @@ impl ProstheticState {
 
         // q is reserved as a trigger key in this MOD. Always swallow the native
         // 3-slot switch action, even when no available binding currently uses q.
-        let switch_down = input_handler.action & SWITCH_PROSTHETIC != 0;
+        let switch_down = frame.switch_prosthetic();
         if switch_down {
             input_handler.action &= !SWITCH_PROSTHETIC;
             input_handler.action_b &= !SWITCH_PROSTHETIC;
             input_handler.action_c &= !SWITCH_PROSTHETIC;
         }
-        let switch_rising = switch_down && !self.switch_down_last;
-        self.switch_down_last = switch_down;
 
-        if switch_rising {
+        if frame.switch_prosthetic_pressed() {
             if self.tool_lock_left > 0 {
                 self.refresh_tool_hold(ToolTail::Switch, config);
             } else if let Some(first) = self.tool_first {
@@ -363,7 +319,7 @@ impl ProstheticState {
             }
         }
 
-        if used_tool_just_now {
+        if frame.use_prosthetic_pressed() {
             if self.tool_lock_left > 0 {
                 self.refresh_tool_hold(ToolTail::Use, config);
             } else if let Some(first) = self.tool_first {
@@ -384,14 +340,14 @@ impl ProstheticState {
         if self.hold_tool_tail.is_some() || self.tool_min_use > 0 {
             let held = match self.hold_tool_tail {
                 Some(ToolTail::Switch) => switch_down,
-                Some(ToolTail::Use) => using_tool || used_tool_just_now,
-                Some(ToolTail::Block) => blocking,
-                Some(ToolTail::Attack) => attacking,
-                Some(ToolTail::Interact) => interacting,
-                Some(ToolTail::Grapple) => grappling,
-                Some(ToolTail::Jump) => jumping,
-                Some(ToolTail::Sprint) => sprinting,
-                Some(ToolTail::Crouch) => crouching,
+                Some(ToolTail::Use) => frame.use_prosthetic(),
+                Some(ToolTail::Block) => frame.held(ArtToken::Block),
+                Some(ToolTail::Attack) => frame.held(ArtToken::Attack),
+                Some(ToolTail::Interact) => frame.held(ArtToken::Interact),
+                Some(ToolTail::Grapple) => frame.held(ArtToken::Grapple),
+                Some(ToolTail::Jump) => frame.held(ArtToken::Jump),
+                Some(ToolTail::Sprint) => frame.held(ArtToken::Sprint),
+                Some(ToolTail::Crouch) => frame.held(ArtToken::Crouch),
                 None => false,
             };
             if self.prosthetic_delay > 0 || held || self.tool_min_use > 0 {
@@ -442,5 +398,19 @@ mod tests {
         state.push_tool_first(ToolFirst::Up);
         assert_eq!(state.tool_first, Some(ToolFirst::Up));
         assert_eq!(state.tool_first_age, 0);
+    }
+}
+
+fn first_for_tail(tail: ToolTail) -> ToolFirst {
+    match tail {
+        ToolTail::Block => ToolFirst::Block,
+        ToolTail::Attack => ToolFirst::Attack,
+        ToolTail::Interact => ToolFirst::Interact,
+        ToolTail::Grapple => ToolFirst::Grapple,
+        ToolTail::Jump => ToolFirst::Jump,
+        ToolTail::Sprint => ToolFirst::Sprint,
+        ToolTail::Crouch => ToolFirst::Crouch,
+        ToolTail::Switch => ToolFirst::Switch,
+        ToolTail::Use => ToolFirst::Interact,
     }
 }

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 use crate::{
-    action::{self, ATTACK, BLOCK, CROUCH, DODGE, GRAPPLE, INTERACT, JUMP, SPRINT, USE_PROSTHETIC, VANILLA_ART_INPUT},
+    action::{self, ATTACK, BLOCK, CROUCH, GRAPPLE, INTERACT, JUMP, SPRINT, USE_PROSTHETIC, VANILLA_ART_INPUT},
     bindings,
     config::{Config, ToolTail},
     device::{Gamepad, is_key_down},
@@ -19,7 +19,7 @@ use crate::{
         prosthetic::ProstheticState,
     },
     game::{self, ID, UID},
-    input::{ArtCombo, ArtToken},
+    input::{ActionFrame, ArtCombo, ArtToken, DirectionBuffer},
     menu_probe,
 };
 
@@ -57,27 +57,30 @@ pub struct Mod {
     flow: Flow,
     combat_art: CombatArtState,
     disable_block: bool,
-    blocking_last_frame: bool,
-    attacking_last_frame: bool,
-    interacting_last_frame: bool,
-    grappling_last_frame: bool,
-    using_tool_last_frame: bool,
+    action_frame: ActionFrame,
+    direction: DirectionBuffer,
     /// Prosthetic-tool state machine, grouped in its feature module.
     prosthetic: ProstheticState,
-    gamepad: Gamepad,
-    combo_dirs_last: [bool; 4],
+    /// `None` when `no_gamepad.enable` is present: keyboard-only players and
+    /// startup diagnosis can skip the gilrs HID enumeration entirely.
+    gamepad: Option<Gamepad>,
 }
 
 impl Mod {
     pub fn new(path: impl AsRef<Path>) -> anyhow::Result<Mod> {
         let cfg_path = path.as_ref().to_path_buf();
-        let base_config = bindings::load_effective_config(&cfg_path)?;
+        let no_gamepad = cfg_path
+            .parent()
+            .map(|dir| dir.join("no_gamepad.enable").is_file())
+            .unwrap_or(false);
+        let cfg_text = std::fs::read_to_string(&cfg_path)?;
+        let base_config = bindings::load_effective_config_from_text(&cfg_path, &cfg_text)?;
         let config = base_config.clone();
         let availability_uids = collect_availability_uids(&base_config);
-        let emblem = Emblem::new(&cfg_path);
-        let flow = Flow::new(&cfg_path);
-        paper_guard::init(&cfg_path);
-        let combat_art = CombatArtState::new(config.rl_combo_max_age);
+        let emblem = Emblem::from_text(&cfg_text);
+        let flow = Flow::from_text(&cfg_text);
+        paper_guard::init_from_text(&cfg_text);
+        let combat_art = CombatArtState::new(config.rl_window());
         let modification = Mod {
             cfg_path: cfg_path.clone(),
             config,
@@ -87,16 +90,17 @@ impl Mod {
             availability_uids,
             emblem,
             flow,
-            gamepad: Gamepad::new()?,
+            gamepad: if no_gamepad {
+                log::warn!("gamepad: disabled by no_gamepad.enable");
+                None
+            } else {
+                Some(Gamepad::new()?)
+            },
             combat_art,
-            blocking_last_frame: false,
-            attacking_last_frame: false,
-            interacting_last_frame: false,
-            grappling_last_frame: false,
-            using_tool_last_frame: false,
+            action_frame: ActionFrame::default(),
+            direction: DirectionBuffer::new(),
             prosthetic: ProstheticState::new(),
             disable_block: false,
-            combo_dirs_last: [false; 4],
         };
         Ok(modification)
     }
@@ -106,6 +110,9 @@ impl Mod {
         // close is the point where learned arts / newly acquired tools can
         // change; until then the previous snapshot is still valid.
         let menu_generation = menu_probe::menu_close_generation();
+        if self.availability_menu_generation != menu_generation {
+            game::invalidate_pointer_cache();
+        }
         if !force && self.availability_signature.is_some() && self.availability_menu_generation == menu_generation {
             return;
         }
@@ -152,93 +159,65 @@ impl Mod {
         self.prosthetic.cur_tool = None;
         self.prosthetic.return_default_left = 0;
         self.prosthetic.tool_lock_left = 0;
-        self.prosthetic.switch_down_last = false;
         self.prosthetic.tools_inited = false;
     }
-    fn instant_combo_matches(
-        &self,
-        combo: ArtCombo,
-        blocking_last_frame: bool,
-        interacting_last_frame: bool,
-        grappling_last_frame: bool,
-        attacked_just_now: bool,
-        attacking: bool,
-        combo_up: bool,
-        combo_right: bool,
-        combo_down: bool,
-        combo_left: bool,
-        combo_dirs_last: [bool; 4],
-    ) -> bool {
-        let (Some(first), Some(second)) = (combo.first(), combo.second()) else {
-            return false;
+    fn instant_art_candidate(&self, frame: ActionFrame) -> Option<(ArtCombo, UID)> {
+        const DIRECTIONS: [ArtToken; 4] = [ArtToken::Up, ArtToken::Right, ArtToken::Down, ArtToken::Left];
+        let mut candidates = [ArtCombo::empty(); 16];
+        let mut count = 0usize;
+        let mut push = |combo: ArtCombo| {
+            if count < candidates.len() {
+                candidates[count] = combo;
+                count += 1;
+            }
         };
-        let dir_held = |t: ArtToken| match t {
-            ArtToken::Up => combo_up,
-            ArtToken::Right => combo_right,
-            ArtToken::Down => combo_down,
-            ArtToken::Left => combo_left,
-            _ => false,
-        };
-        let dir_edge = |t: ArtToken| match t {
-            ArtToken::Up => combo_up && !combo_dirs_last[0],
-            ArtToken::Right => combo_right && !combo_dirs_last[1],
-            ArtToken::Down => combo_down && !combo_dirs_last[2],
-            ArtToken::Left => combo_left && !combo_dirs_last[3],
-            _ => false,
-        };
-        match (first, second) {
-            (ArtToken::Block, dir) if dir.is_direction() => blocking_last_frame && dir_edge(dir),
-            (dir, ArtToken::Attack) if dir.is_direction() => dir_held(dir) && attacked_just_now,
-            (ArtToken::Attack, dir) if dir.is_direction() => attacking && dir_edge(dir),
-            (ArtToken::Interact, ArtToken::Attack) => interacting_last_frame && attacked_just_now,
-            (ArtToken::Grapple, ArtToken::Attack) => grappling_last_frame && attacked_just_now,
-            _ => false,
+
+        if frame.was_held(ArtToken::Block) {
+            for direction in DIRECTIONS {
+                if frame.pressed(direction) {
+                    push(ArtCombo::pair(ArtToken::Block, direction));
+                }
+            }
         }
+        if frame.pressed(ArtToken::Attack) {
+            for direction in DIRECTIONS {
+                if frame.held(direction) {
+                    push(ArtCombo::pair(direction, ArtToken::Attack));
+                }
+            }
+            if frame.was_held(ArtToken::Interact) {
+                push(ArtCombo::pair(ArtToken::Interact, ArtToken::Attack));
+            }
+            if frame.was_held(ArtToken::Grapple) {
+                push(ArtCombo::pair(ArtToken::Grapple, ArtToken::Attack));
+            }
+        }
+        if frame.held(ArtToken::Attack) {
+            for direction in DIRECTIONS {
+                if frame.pressed(direction) {
+                    push(ArtCombo::pair(ArtToken::Attack, direction));
+                }
+            }
+        }
+
+        candidates[..count]
+            .iter()
+            .find_map(|combo| self.config.instant_arts.get(combo).copied().map(|uid| (*combo, uid)))
     }
 
     /// Instant arts (cfg name contains 瞬发 / instant): fire same-frame B+A, no combo settle.
-    fn try_instant_combat_art(
-        &mut self,
-        combo_up: bool,
-        combo_right: bool,
-        combo_down: bool,
-        combo_left: bool,
-        attacked_just_now: bool,
-        attacking: bool,
-    ) -> Option<UID> {
+    fn try_instant_combat_art(&mut self, frame: ActionFrame) -> Option<UID> {
         if !self.combat_art.swapout_countdown.is_done() || self.combat_art.fire_busy() {
             return None;
         }
 
         // Every instant-art matcher needs either an attack edge or a direction
-        // edge. Skipping the scan when neither exists keeps this hot path cheap
-        // even when many multi-scheme instant bindings are configured.
-        let direction_edge = (combo_up && !self.combo_dirs_last[0])
-            || (combo_right && !self.combo_dirs_last[1])
-            || (combo_down && !self.combo_dirs_last[2])
-            || (combo_left && !self.combo_dirs_last[3]);
-        if !attacked_just_now && !direction_edge {
+        // edge. Skipping the scan when neither exists keeps this hot path cheap.
+        if !frame.pressed(ArtToken::Attack) && !frame.pressed_direction() {
             return None;
         }
 
-        // Find the match without allocating a temporary Vec on every input tick.
-        let matched = self.config.instant_arts.iter().find_map(|(&combo, &uid)| {
-            self.instant_combo_matches(
-                combo,
-                self.blocking_last_frame,
-                self.interacting_last_frame,
-                self.grappling_last_frame,
-                attacked_just_now,
-                attacking,
-                combo_up,
-                combo_right,
-                combo_down,
-                combo_left,
-                self.combo_dirs_last,
-            )
-            .then_some((combo, uid))
-        });
-        let (combo, uid) = matched?;
+        let (combo, uid) = self.instant_art_candidate(frame)?;
         if self.combat_art.equip_no_delay(uid) {
             log::debug!("ART_INSTANT uid={} combo={:?}", uid, combo);
             self.combat_art.clear_fire();
@@ -280,48 +259,26 @@ impl Mod {
         let d_down = is_key_down(VK_D);
 
         /***** update combat-art directions (WASD / left stick) *****/
-        let stick = self.gamepad.get_left_pos().filter(|pos| *pos != (0.0, 0.0));
-        let (combo_up, combo_right, combo_down, combo_left) = if let Some((x, y)) = stick {
-            let x_abs = x.abs();
-            let y_abs = y.abs();
-            if y_abs >= x_abs {
-                if y > 0.0 {
-                    (true, false, false, false)
-                } else {
-                    (false, false, true, false)
-                }
-            } else if x > 0.0 {
-                (false, true, false, false)
-            } else {
-                (false, false, false, true)
-            }
-        } else {
-            (w_down, d_down, s_down, a_down)
-        };
+        let stick = self.gamepad.as_mut().and_then(|gamepad| gamepad.get_left_pos());
+        let (combo_up, combo_right, combo_down, combo_left) =
+            self.direction.update(stick, w_down, d_down, s_down, a_down);
 
-        /***** parse the action bitflags *****/
-        let action_snapshot = input_handler.action;
-        let attacking = action_snapshot & ATTACK != 0;
-        let blocking = action_snapshot & BLOCK != 0;
+        // Single edge-detection pass. Combat art and prosthetic both consume
+        // this frame, so the 11 token edges are no longer computed twice.
+        self.action_frame
+            .update(input_handler, combo_up, combo_right, combo_down, combo_left);
+
+        /***** parse the action bitflags from the shared frame *****/
+        let attacking = self.action_frame.held(ArtToken::Attack);
+        let blocking = self.action_frame.held(ArtToken::Block);
         // Both tokens follow the game's logical action bits, so in-game key remaps
         // and gamepad bindings keep working. `e` = interact/action, `f` = grapple/hook.
-        let interacting = action_snapshot & INTERACT != 0;
-        let grappling = action_snapshot & GRAPPLE != 0;
-        let using_tool = action_snapshot & USE_PROSTHETIC != 0;
-        let jump_action = action_snapshot & JUMP != 0;
-        let sprint_action = action_snapshot & SPRINT != 0;
-        let crouch_action = action_snapshot & CROUCH != 0;
-        let dodging = action_snapshot & DODGE != 0;
-
-        // All of these are game-mapped action bits. Do not mix in physical
-        // keyboard state here: that would diverge from in-game remaps and from
-        // gamepad bindings.
-        let jumping = jump_action;
-        let sprinting = sprint_action;
-        let crouching = crouch_action;
-        let attacked_just_now = !self.attacking_last_frame && attacking;
-        let blocked_just_now = !self.blocking_last_frame && blocking;
-        let used_tool_just_now = !self.using_tool_last_frame && using_tool;
+        let using_tool = self.action_frame.use_prosthetic();
+        let jumping = self.action_frame.held(ArtToken::Jump);
+        let dodging = self.action_frame.dodging();
+        let attacked_just_now = self.action_frame.pressed(ArtToken::Attack);
+        let blocked_just_now = self.action_frame.pressed(ArtToken::Block);
+        let used_tool_just_now = self.action_frame.use_prosthetic_pressed();
 
         /***** prosthetic: normal token + tail, or bare t → equip + hold-inject USE *****/
         if !self.prosthetic.tools_inited {
@@ -330,40 +287,14 @@ impl Mod {
                 self.prosthetic.return_to_default_tool(&self.config);
             }
         }
-        let tool_armed_via_art_tail = self.prosthetic.handle_prosthetic_input(
-            &self.config,
-            input_handler,
-            combo_up,
-            combo_right,
-            combo_down,
-            combo_left,
-            blocking,
-            attacking,
-            interacting,
-            grappling,
-            jumping,
-            sprinting,
-            crouching,
-            using_tool,
-            used_tool_just_now,
-        );
+        let tool_armed_via_art_tail =
+            self.prosthetic
+                .handle_prosthetic_input(&self.config, input_handler, &self.action_frame);
 
         /***** update combat-art token buffer (normal action tokens + directions) *****/
         // Logical action bits keep in-game remaps and gamepad bindings working.
         if has_available_arts {
-            self.combat_art.combo.tick(
-                combo_up,
-                combo_right,
-                combo_down,
-                combo_left,
-                blocking,
-                attacking,
-                interacting,
-                grappling,
-                jumping,
-                sprinting,
-                crouching,
-            );
+            self.combat_art.combo.tick_frame(&self.action_frame);
         } else {
             self.combat_art.combo.clear();
         }
@@ -376,16 +307,7 @@ impl Mod {
             self.combat_art.suppress_late_rl_skill = true;
             log::debug!("ART_RL_LATE reject — suppress B+A until block released");
         }
-        let instant_art_fired = self
-            .try_instant_combat_art(
-                combo_up,
-                combo_right,
-                combo_down,
-                combo_left,
-                attacked_just_now,
-                attacking,
-            )
-            .is_some();
+        let instant_art_fired = self.try_instant_combat_art(self.action_frame).is_some();
 
         /***** end sustained fire early on external jump/dodge or last token release *****/
         let combo_owns_jump = self.combat_art.combo_suppress_mask & JUMP != 0;
@@ -415,7 +337,7 @@ impl Mod {
                     );
                 } else {
                     log::debug!("ART_RELEASE hold={:?} (key up)", token);
-                    self.combat_art.end_fire_for_queue(self.config.art_queue_delay_frames);
+                    self.combat_art.end_fire_for_queue(self.config.art_queue_delay());
                 }
             }
         }
@@ -656,7 +578,7 @@ impl Mod {
                     if tapping && !held {
                         self.combat_art.art_tap_frames -= 1;
                         if self.combat_art.art_tap_frames == 0 {
-                            self.combat_art.end_fire_for_queue(self.config.art_queue_delay_frames);
+                            self.combat_art.end_fire_for_queue(self.config.art_queue_delay());
                         }
                     }
                 }
@@ -688,14 +610,6 @@ impl Mod {
             Some(ToolTail::Crouch) => action::strip_input(input_handler, CROUCH),
             _ => {}
         }
-
-        /***** for next frame to refer to *****/
-        self.attacking_last_frame = attacking;
-        self.blocking_last_frame = blocking;
-        self.interacting_last_frame = interacting;
-        self.grappling_last_frame = grappling;
-        self.using_tool_last_frame = using_tool;
-        self.combo_dirs_last = [combo_up, combo_right, combo_down, combo_left];
     }
 }
 
@@ -795,6 +709,7 @@ fn filter_config_by_availability(config: &mut Config) {
 #[cfg(test)]
 mod availability_tests {
     use super::*;
+    use crate::action::DODGE;
     use crate::config::{ToolCombo, ToolFirst};
     use crate::features::combat_art::SAKURA_DANCE;
 

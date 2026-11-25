@@ -230,6 +230,7 @@ fn open_overlay(hwnd: HWND) -> Result<()> {
     CURSOR_X.store(state.cursor_x.round() as i32, Ordering::Release);
     CURSOR_Y.store(state.cursor_y.round() as i32, Ordering::Release);
     CURSOR_VISIBLE.store(true, Ordering::Release);
+    game_overlay::retry_renderer_failure();
     UI_OPEN.store(true, Ordering::Release);
     game_overlay::release_cursor_clip();
     game_overlay::reset_surface();

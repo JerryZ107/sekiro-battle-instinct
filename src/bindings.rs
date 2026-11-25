@@ -616,7 +616,14 @@ pub fn take_reload_request() -> bool {
 }
 
 pub fn load_effective_config(cfg_path: &Path) -> Result<Config> {
-    let mut config = Config::open(cfg_path)?;
+    let text = std::fs::read_to_string(cfg_path)?;
+    load_effective_config_from_text(cfg_path, &text)
+}
+
+/// Parse the cfg once and apply the persisted UI bindings. Startup passes the
+/// same text to Emblem/Flow/PaperGuard instead of reading the file four times.
+pub fn load_effective_config_from_text(cfg_path: &Path, text: &str) -> Result<Config> {
+    let mut config = Config::from(text);
     let ui = UiBindings::load(cfg_path)?;
     apply_to_config(&mut config, &ui)?;
     Ok(config)

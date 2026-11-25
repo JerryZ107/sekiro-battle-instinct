@@ -21,8 +21,8 @@
 
 use std::{
     sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -79,6 +79,24 @@ struct CachedInventory {
 
 static CACHE: Mutex<Option<CachedInventory>> = Mutex::new(None);
 static NEXT_SCAN_ID: AtomicU64 = AtomicU64::new(1);
+
+// Lock-free mirrors of the snapshot fields needed by the per-frame emblem
+// consumer. `CACHE` remains the source of truth for paper spending, but the
+// common `Emblem::tick` path never needs to take that mutex.
+static CACHE_READY: AtomicBool = AtomicBool::new(false);
+static CACHED_BASE: AtomicUsize = AtomicUsize::new(0);
+static CACHED_MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
+static CACHED_SCAN_ID: AtomicU64 = AtomicU64::new(0);
+static CAP_SKILL_MASK: AtomicU32 = AtomicU32::new(0);
+static PAPER_TEMP: AtomicU32 = AtomicU32::new(0);
+static PAPER_NORMAL: AtomicU32 = AtomicU32::new(0);
+static LAST_SCAN_MS: AtomicU64 = AtomicU64::new(0);
+static TIME_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+#[inline]
+fn now_ms() -> u64 {
+    TIME_ORIGIN.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
 
 /// Scan the inventory rows once and return a snapshot. `base` is
 /// `InventoryData + 0x10`, exactly the address the old separate scanners used.
@@ -141,8 +159,22 @@ fn scan_at(base: usize, bytes: &[u8]) -> InventorySnapshot {
 fn refresh(force: bool, max_age: Option<Duration>) -> Option<InventorySnapshot> {
     let base = game::inventory_base()?;
     let menu_generation = menu_probe::menu_close_generation();
-    let mut cache = CACHE.lock().ok()?;
 
+    // Fast path: the cached atomics are current and the optional pickup
+    // interval has not elapsed, so no mutex is needed at all.
+    let max_age_expired = max_age.is_some_and(|max_age| {
+        now_ms().saturating_sub(LAST_SCAN_MS.load(Ordering::Acquire)) >= max_age.as_millis() as u64
+    });
+    let fast_path = !force
+        && CACHE_READY.load(Ordering::Acquire)
+        && CACHED_BASE.load(Ordering::Acquire) == base
+        && CACHED_MENU_GENERATION.load(Ordering::Acquire) == menu_generation
+        && !max_age_expired;
+    if fast_path {
+        return None;
+    }
+
+    let mut cache = CACHE.lock().ok()?;
     let stale = force
         || cache.as_ref().is_none_or(|cached| {
             cached.snapshot.base != base
@@ -154,6 +186,8 @@ fn refresh(force: bool, max_age: Option<Duration>) -> Option<InventorySnapshot> 
         crate::frame_perf::mark(crate::frame_perf::EventId::PaperInventoryRescan);
         let mut snapshot = scan(base)?;
         snapshot.scan_id = NEXT_SCAN_ID.fetch_add(1, Ordering::Relaxed);
+        publish_atomics(&snapshot, menu_generation);
+        LAST_SCAN_MS.store(now_ms(), Ordering::Release);
         *cache = Some(CachedInventory {
             snapshot,
             menu_generation,
@@ -164,12 +198,62 @@ fn refresh(force: bool, max_age: Option<Duration>) -> Option<InventorySnapshot> 
     cache.as_ref().map(|cached| cached.snapshot)
 }
 
-/// Event-driven refresh: only when the inventory object or pause-menu state
-/// changed. Safe to call from `process_input`; it is a few pointer reads plus
-/// one uncontended mutex when cached.
-#[inline]
-pub fn ensure_fresh() -> Option<InventorySnapshot> {
-    refresh(false, None)
+fn publish_atomics(snapshot: &InventorySnapshot, menu_generation: u64) {
+    let mut mask = 0u32;
+    for (index, learned) in snapshot.cap_skills.iter().copied().enumerate() {
+        if learned {
+            mask |= 1 << index;
+        }
+    }
+    CACHED_BASE.store(snapshot.base, Ordering::Release);
+    CACHED_MENU_GENERATION.store(menu_generation, Ordering::Release);
+    CACHED_SCAN_ID.store(snapshot.scan_id, Ordering::Release);
+    CAP_SKILL_MASK.store(mask, Ordering::Release);
+    PAPER_TEMP.store(snapshot.temp as u32, Ordering::Release);
+    PAPER_NORMAL.store(snapshot.normal as u32, Ordering::Release);
+    CACHE_READY.store(true, Ordering::Release);
+}
+
+/// True when the cached snapshot no longer matches the live inventory identity
+/// or the pause-menu generation. This is lock-free and safe for per-frame use.
+pub fn cache_invalidated() -> bool {
+    let Some(base) = game::inventory_base() else {
+        return true;
+    };
+    !CACHE_READY.load(Ordering::Acquire)
+        || CACHED_BASE.load(Ordering::Acquire) != base
+        || CACHED_MENU_GENERATION.load(Ordering::Acquire) != menu_probe::menu_close_generation()
+}
+
+/// Event-driven refresh: scans only when an invalidation is visible.
+pub fn refresh_if_needed() {
+    if cache_invalidated() {
+        let _ = refresh(false, None);
+    }
+}
+
+/// Lock-free image for the emblem-cap consumer: `(scan_id, learned skills)`.
+pub fn emblem_image() -> Option<(u64, [bool; 5])> {
+    if !CACHE_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    let mask = CAP_SKILL_MASK.load(Ordering::Acquire);
+    let mut cap_skills = [false; 5];
+    for (index, slot) in cap_skills.iter_mut().enumerate() {
+        *slot = mask & (1 << index) != 0;
+    }
+    Some((CACHED_SCAN_ID.load(Ordering::Acquire), cap_skills))
+}
+
+/// Lock-free paper stock for the damage path.
+pub fn stock_fast() -> Option<(u16, u16)> {
+    if !CACHE_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    Some((
+        PAPER_TEMP.load(Ordering::Acquire) as u16,
+        PAPER_NORMAL.load(Ordering::Acquire) as u16,
+    ))
 }
 
 /// Damage-path refresh with a one-second pickup fallback. The common zero-paper
@@ -183,6 +267,8 @@ pub fn ensure_fresh_for_damage() -> Option<InventorySnapshot> {
 /// and available for future pickup/menu hooks).
 #[allow(dead_code)]
 pub fn invalidate() {
+    CACHE_READY.store(false, Ordering::Release);
+    LAST_SCAN_MS.store(0, Ordering::Release);
     if let Ok(mut cache) = CACHE.lock() {
         *cache = None;
     }
@@ -255,6 +341,8 @@ pub fn spend_emblems(cost: u16) -> u16 {
     };
     let mut snapshot = cached.snapshot;
     let spent = spend_from_rows(snapshot.base as *mut u8, &mut snapshot, cost);
+    PAPER_TEMP.store(snapshot.temp as u32, Ordering::Release);
+    PAPER_NORMAL.store(snapshot.normal as u32, Ordering::Release);
     cached.snapshot = snapshot;
     spent
 }

@@ -1,7 +1,6 @@
 use std::{
     ffi::c_void,
-    fs, mem,
-    path::Path,
+    mem,
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -11,10 +10,6 @@ use std::{
 use anyhow::anyhow;
 
 use crate::{frame::Frames, game, hook_util};
-
-// PlayerIns -> module registry -> SprjChrDataModule.
-const PLAYER_MODULE_REGISTRY_OFFSET: usize = 0x1ff8;
-const CHR_DATA_MODULE_OFFSET: usize = 0x18;
 
 // SprjChrDataModule fields.
 const CURRENT_HP_OFFSET: usize = 0x130;
@@ -27,6 +22,9 @@ const PERFECT_DEFLECT_FLAGS_OFFSET: usize = 0x231;
 const PERFECT_DEFLECT_BIT: u8 = 0x40;
 
 const DEFAULT_RATIOS: [u8; 10] = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110];
+
+#[cfg(test)]
+use std::{fs, path::Path};
 
 #[derive(Clone, Debug)]
 struct FlowConfig {
@@ -42,7 +40,7 @@ impl Default for FlowConfig {
         FlowConfig {
             enabled: true,
             max_stacks: 10,
-            duration_frames: seconds_to_frames(3.0),
+            duration_frames: seconds_to_standard_frames(3.0),
             ratios: DEFAULT_RATIOS,
             debug: false,
         }
@@ -50,11 +48,14 @@ impl Default for FlowConfig {
 }
 
 impl FlowConfig {
+    #[cfg(test)]
     fn load(path: &Path) -> FlowConfig {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        Self::from_text(&text)
+    }
+
+    fn from_text(text: &str) -> FlowConfig {
         let mut config = FlowConfig::default();
-        let Ok(text) = fs::read_to_string(path) else {
-            return config;
-        };
 
         for line in text.lines() {
             let Some((key, value)) = split_kv(line) else {
@@ -164,7 +165,7 @@ unsafe extern "system" fn damage_reaction_detour(
     };
 
     let (module, hp_before, posture_before) = unsafe {
-        let module = player_chr_data_module();
+        let module = game::player_chr_data_module();
         let hp_before = module.map(|data| read_i32(data, CURRENT_HP_OFFSET)).unwrap_or(0);
         let posture_before = module.map(|data| read_i32(data, CURRENT_STAMINA_OFFSET)).unwrap_or(0);
         (module, hp_before, posture_before)
@@ -235,7 +236,7 @@ impl FlowState {
         if self.stacks < config.max_stacks {
             self.stacks += 1;
         }
-        self.timeout_left = config.duration_frames;
+        self.timeout_left = Frames::standard(config.duration_frames.min(u16::MAX as u32) as u16).as_actual() as u32;
 
         let percent = config.ratio_for_stack(self.stacks);
         let (mitigated, restored) = if posture_drop > 0 {
@@ -282,8 +283,8 @@ pub struct Flow {
 }
 
 impl Flow {
-    pub fn new(path: impl AsRef<Path>) -> Flow {
-        let config = FlowConfig::load(path.as_ref());
+    pub fn from_text(text: &str) -> Flow {
+        let config = FlowConfig::from_text(text);
         log::warn!(
             "flow settings: enabled={} max={} duration_frames={} ratios={:?} debug={}",
             config.enabled,
@@ -321,7 +322,7 @@ impl Flow {
             return;
         }
 
-        let Some(chr_data) = player_chr_data_module() else {
+        let Some(chr_data) = game::player_chr_data_module() else {
             return;
         };
 
@@ -424,14 +425,17 @@ fn parse_seconds(raw: &str) -> Option<f32> {
     text.parse::<f32>().ok().map(|value| value.max(0.0))
 }
 
-fn seconds_to_frames(seconds: f32) -> u32 {
-    let standard = (seconds * 60.0).round().clamp(1.0, u16::MAX as f32) as u16;
-    Frames::standard(standard).as_actual() as u32
+/// Parse a duration into a 60 fps frame budget. The value is kept in
+/// standard frames and only converted to the measured framerate when a timer
+/// starts, otherwise a config parsed during boot (before the sampler has seen
+/// a frame) would always be locked to 60 fps.
+fn seconds_to_standard_frames(seconds: f32) -> u32 {
+    (seconds * 60.0).round().clamp(1.0, u16::MAX as f32) as u32
 }
 
 fn parse_seconds_frames(raw: &str, fallback: u32) -> u32 {
     parse_seconds(raw)
-        .map(seconds_to_frames)
+        .map(seconds_to_standard_frames)
         .filter(|frames| *frames > 0)
         .unwrap_or(fallback)
 }
@@ -453,38 +457,6 @@ fn parse_ratios(raw: &str) -> Option<[u8; 10]> {
         *slot = value;
     }
     Some(ratios)
-}
-
-fn player_ins() -> Option<*mut u8> {
-    unsafe {
-        let world_data = *(game::WORLD_DATA as *const *const u8);
-        if world_data.is_null() {
-            return None;
-        }
-        let player = *(world_data.add(0x88) as *const *mut u8);
-        if player.is_null() {
-            return None;
-        }
-        Some(player)
-    }
-}
-
-fn chr_data_module(player: *mut u8) -> Option<*mut u8> {
-    unsafe {
-        let registry = *(player.add(PLAYER_MODULE_REGISTRY_OFFSET) as *const *mut u8);
-        if registry.is_null() {
-            return None;
-        }
-        let chr_data = *(registry.add(CHR_DATA_MODULE_OFFSET) as *const *mut u8);
-        if chr_data.is_null() {
-            return None;
-        }
-        Some(chr_data)
-    }
-}
-
-fn player_chr_data_module() -> Option<*mut u8> {
-    player_ins().and_then(chr_data_module)
 }
 
 unsafe fn add_stamina(chr_data: *mut u8, amount: i32, max_stamina: i32) {
@@ -520,7 +492,7 @@ mod tests {
         FlowConfig {
             enabled: true,
             max_stacks: 10,
-            duration_frames: seconds_to_frames(3.0),
+            duration_frames: seconds_to_standard_frames(3.0),
             ratios: DEFAULT_RATIOS,
             debug: false,
         }
@@ -602,7 +574,7 @@ mod tests {
             let cfg = FlowConfig::load(Path::new(path));
             assert!(cfg.enabled);
             assert_eq!(cfg.max_stacks, 10);
-            assert_eq!(cfg.duration_frames, seconds_to_frames(3.0));
+            assert_eq!(cfg.duration_frames, seconds_to_standard_frames(3.0));
             assert_eq!(cfg.ratios, DEFAULT_RATIOS);
         }
     }

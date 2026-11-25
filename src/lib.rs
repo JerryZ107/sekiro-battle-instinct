@@ -7,6 +7,7 @@ mod config;
 mod core;
 mod device;
 mod features;
+mod fps_unlock;
 mod frame;
 mod frame_perf;
 mod game;
@@ -29,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     thread::{self},
     time::{Duration, Instant},
@@ -70,12 +71,23 @@ extern "system" fn DllMain(hmodule: HMODULE, call_reason: u32, _reserved: *mut c
         };
 
         logger::init(&dir_path);
+        log::warn!("dll: DllMain attach, logger ready");
         boot::on_dinput_attach(&dir_path);
+        log::warn!("dll: DllMain attach done");
 
         // Never call LoadLibrary from DllMain: it can deadlock the Windows loader and
         // leave Steam stuck on "正在启动". Defer chainload + hook setup to a worker thread.
         thread::spawn(move || {
+            let safe_mode = dir_path.join("safe_mode.enable").is_file();
+            log::warn!("init: worker started (safe_mode={safe_mode})");
+            if safe_mode {
+                log::warn!("init: safe mode is on - skipping chainload, hooks, gamepad and UI");
+                INIT_DONE.store(true, Ordering::Release);
+                return;
+            }
+            log::warn!("init: chainload begin");
             chainload(&dir_path);
+            log::warn!("init: chainload done");
             modify(&dir_path);
         });
     }
@@ -220,6 +232,54 @@ fn wait_for_game_code() -> bool {
 
 static PROCESS_INPUT_ORIG: OnceLock<fn(*mut game::InputHandler, usize) -> usize> = OnceLock::new();
 
+/// Last completed startup step. Written only by the init worker; read by the
+/// watchdog so a hang can be attributed to a specific phase.
+static INIT_STEP: AtomicU8 = AtomicU8::new(0);
+static INIT_DONE: AtomicBool = AtomicBool::new(false);
+
+fn init_step_name(step: u8) -> &'static str {
+    match step {
+        0 => "not started",
+        1 => "frame-perf init",
+        2 => "waiting for game code",
+        3 => "game code checked",
+        4 => "reading config / creating Mod (gamepad init)",
+        5 => "Mod created",
+        6 => "installing damage hook",
+        7 => "installing process_input hook",
+        8 => "installing menu hook",
+        9 => "starting UI hooks",
+        10 => "enabling MinHook hooks",
+        11 => "init finished",
+        _ => "unknown",
+    }
+}
+
+fn init_step(step: u8, message: &str) {
+    INIT_STEP.store(step, Ordering::Release);
+    log::warn!("init[{step}]: {message} ({})", init_step_name(step));
+}
+
+/// Logs a loud error if startup is still stuck after 12 seconds. The worker
+/// cannot be killed safely, but the step number tells us exactly where to look.
+fn start_init_watchdog() {
+    let _ = thread::Builder::new()
+        .name("paper-jutsu-init-watchdog".into())
+        .spawn(|| {
+            for _ in 0..12 {
+                thread::sleep(Duration::from_secs(1));
+                if INIT_DONE.load(Ordering::Acquire) {
+                    return;
+                }
+            }
+            let step = INIT_STEP.load(Ordering::Acquire);
+            log::error!(
+                "init: still not finished after 12s at step {step} ({}) - inspect battle_instinct.log",
+                init_step_name(step)
+            );
+        });
+}
+
 static STATE: OnceLock<State> = OnceLock::new();
 static INPUT_STATE_BUSY: AtomicBool = AtomicBool::new(false);
 static GAMEPLAY_LOGIC_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -254,7 +314,21 @@ impl Drop for InputAccessGuard {
 }
 
 fn modify(path: &Path) {
-    frame_perf::init(path);
+    start_init_watchdog();
+    let safe_mode = path.join("safe_mode.enable").is_file();
+    if safe_mode {
+        log::warn!("init: safe mode is on - skipping frame-perf, hooks, gamepad and UI");
+        INIT_DONE.store(true, Ordering::Release);
+        return;
+    }
+
+    // Frame diagnostics are opt-in: they start two threads and record atomics
+    // on every input tick, which is pure overhead during normal play.
+    init_step(1, "initializing frame diagnostics");
+    let frame_perf_enabled = path.join("enable_frame_perf.enable").is_file();
+    if frame_perf_enabled {
+        frame_perf::init(path);
+    }
     let gameplay_disabled = path.join("disable_gameplay_logic.enable").is_file();
     GAMEPLAY_LOGIC_ENABLED.store(!gameplay_disabled, Ordering::Release);
     if gameplay_disabled {
@@ -264,8 +338,18 @@ fn modify(path: &Path) {
     let damage_hook_disabled = path.join("disable_damage_hook.enable").is_file();
     let path = path.join("battle_instinct.cfg");
     load_console::print_line("等待游戏代码就绪…");
+    init_step(2, "waiting for game code");
     let ready_started = Instant::now();
-    if wait_for_game_code() {
+    let code_ready = wait_for_game_code();
+    init_step(
+        3,
+        if code_ready {
+            "game code ready"
+        } else {
+            "game code timeout"
+        },
+    );
+    if code_ready {
         load_console::print_line(&format!(
             "  游戏代码已就绪（{:.3} 秒）",
             ready_started.elapsed().as_secs_f32()
@@ -282,12 +366,21 @@ fn modify(path: &Path) {
     let result = (|| unsafe {
         let ui_cfg_path = path.clone();
         menu_probe::start_menu_monitor();
-        let modification = Mod::new(path)?;
+        init_step(4, "reading config and creating Mod (this includes gamepad init)");
+        let modification = Mod::new(&path)?;
+        init_step(5, "Mod created");
+        // Apply the optional game-side FPS patch only after the MOD config and
+        // gamepad init succeeded, so a bad cfg cannot leave the game unlocked.
+        if let Some(game_dir) = path.parent() {
+            log::warn!("init: checking optional fps_unlock.cfg");
+            crate::fps_unlock::init(game_dir);
+        }
         log::warn!(
             "perf: event-driven inventory refresh, no global keyboard hook, dynamic mouse hook, lock-free input state"
         );
 
         load_console::print_line("安装伤害事件钩子…");
+        init_step(6, "installing damage hook");
         if damage_hook_disabled {
             log::warn!("diagnostic: player damage reaction hook disabled by marker file");
             frame_perf::mark(frame_perf::EventId::DamageHookDisabled);
@@ -300,6 +393,7 @@ fn modify(path: &Path) {
         }
 
         load_console::print_line("安装输入钩子…");
+        init_step(7, "installing process_input hook");
         let target = game::PROCESS_INPUT as *mut c_void;
         let detour = process_input as *mut c_void;
         let mut process_input_hook_ready = false;
@@ -333,6 +427,7 @@ fn modify(path: &Path) {
         }
 
         load_console::print_line("安装菜单选中项 Hook…");
+        init_step(8, "installing menu hook");
         if let Err(error) = game_menu::install_hooks() {
             log::error!("menu hook install failed: {error:#}");
             load_console::print_line(&format!("  ✗ 菜单选中项 Hook 安装失败（战斗功能继续）: {error:#}"));
@@ -340,10 +435,12 @@ fn modify(path: &Path) {
             load_console::print_line("  ✔ 菜单选中项 Hook 已安装");
         }
 
+        init_step(9, "starting UI hooks");
         if let Err(error) = ui::start(ui_cfg_path) {
             log::error!("ui/input hook startup failed: {error:#}");
             load_console::print_line(&format!("  ✗ 输入/UI Hook 启动失败（战斗功能继续）: {error:#}"));
         }
+        init_step(10, "enabling MinHook hooks");
         if let Err(error) = MinHook::enable_all_hooks() {
             log::error!("Failed to enable MinHook hooks: {error:?}");
             load_console::print_line(&format!("  ✗ 启用 Hook 失败: {error:?}"));
@@ -353,6 +450,8 @@ fn modify(path: &Path) {
         Ok::<_, anyhow::Error>(())
     })();
 
+    init_step(11, "init finished");
+    INIT_DONE.store(true, Ordering::Release);
     match result {
         Ok(()) => load_console::finish(true, None),
         Err(e) => {
@@ -368,7 +467,8 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
         input_handler.as_mut().expect("input_handler is null")
     };
 
-    let mod_started = Instant::now();
+    let perf_enabled = frame_perf::enabled();
+    let mod_started = perf_enabled.then(Instant::now);
     if GAMEPLAY_LOGIC_ENABLED.load(Ordering::Acquire) && !crate::ui::overlay_open() {
         if let Some(state) = STATE.get() {
             // Safety: the guard prevents concurrent/re-entrant access. The UI and
@@ -379,9 +479,11 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
             }
         }
     }
-    let mod_us = mod_started.elapsed().as_micros() as u64;
+    let mod_us = mod_started
+        .map(|started| started.elapsed().as_micros() as u64)
+        .unwrap_or(0);
 
-    let orig_started = Instant::now();
+    let orig_started = perf_enabled.then(Instant::now);
     let result = if let Some(process_input_orig) = PROCESS_INPUT_ORIG.get() {
         process_input_orig(input_handler, arg)
     } else {
@@ -390,7 +492,11 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
             unsafe { mem::transmute(game::PROCESS_INPUT) };
         process_input_orig(input_handler, arg)
     };
-    let orig_us = orig_started.elapsed().as_micros() as u64;
-    frame_perf::record_input_hook(mod_us, orig_us);
+    if perf_enabled {
+        let orig_us = orig_started
+            .map(|started| started.elapsed().as_micros() as u64)
+            .unwrap_or(0);
+        frame_perf::record_input_hook(mod_us, orig_us);
+    }
     result
 }

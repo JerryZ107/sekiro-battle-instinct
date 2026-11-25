@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn queued_fire_waits_for_release_then_flushes_after_delay() {
-        let mut state = CombatArtState::new(18);
+        let mut state = CombatArtState::new(Frames::standard(18));
         state.queued_art = Some((SAKURA_DANCE, ArtToken::Attack));
         state.queue_flush_left = 2;
         state.queue_flush_skip_tick = true;
@@ -196,7 +196,7 @@ pub struct CombatArtState {
 }
 
 impl CombatArtState {
-    pub fn new(rl_combo_max_age: u16) -> Self {
+    pub fn new(rl_combo_max_age: Frames) -> Self {
         Self {
             combo: ArtComboWindow::new(rl_combo_max_age),
             cur_art: None,
@@ -237,10 +237,10 @@ impl CombatArtState {
     }
 
     /// End sustained fire; if a queued art is waiting, start the cfg flush delay.
-    pub fn end_fire_for_queue(&mut self, queue_delay_frames: u16) {
+    pub fn end_fire_for_queue(&mut self, queue_delay: Frames) {
         self.clear_fire();
         if self.queued_art.is_some() {
-            self.queue_flush_left = queue_delay_frames;
+            self.queue_flush_left = queue_delay.as_actual();
             self.queue_flush_skip_tick = true;
             log::debug!(
                 "ART_QUEUE_WAIT delay={} uid={:?}",

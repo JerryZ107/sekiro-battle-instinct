@@ -1,4 +1,7 @@
-use std::{error, fmt};
+use std::{
+    error, fmt,
+    time::{Duration, Instant},
+};
 
 use gilrs::{Axis, EventType, Gilrs};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VIRTUAL_KEY};
@@ -7,10 +10,13 @@ pub fn is_key_down(keycode: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(keycode.0.into()) as u16 & 0x8000 != 0 }
 }
 
+const RECONNECT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
 pub struct Gamepad {
     girls: Gilrs,
     connected: bool,
     left_pos: (f32, f32),
+    last_reconnect_poll: Instant,
 }
 
 impl Gamepad {
@@ -21,15 +27,37 @@ impl Gamepad {
             girls,
             connected,
             left_pos: (0.0, 0.0),
+            last_reconnect_poll: Instant::now(),
         };
         Ok(gamepad)
     }
 
     pub fn get_left_pos(&mut self) -> Option<(f32, f32)> {
+        // Keyboard-only players should not pay for a full HID event pump every
+        // frame. When no pad is connected, poll for reconnects at a low rate;
+        // once connected, keep draining events normally.
+        if !self.connected {
+            if self.last_reconnect_poll.elapsed() < RECONNECT_POLL_INTERVAL {
+                return None;
+            }
+            self.last_reconnect_poll = Instant::now();
+            while let Some(event) = self.girls.next_event() {
+                if matches!(event.event, EventType::Connected) {
+                    self.connected = true;
+                }
+            }
+            if !self.connected {
+                return None;
+            }
+        }
+
         while let Some(event) = self.girls.next_event() {
             match event.event {
                 EventType::Connected => self.connected = true,
-                EventType::Disconnected => self.connected = self.girls.gamepads().next().is_some(),
+                EventType::Disconnected => {
+                    self.connected = self.girls.gamepads().next().is_some();
+                    self.last_reconnect_poll = Instant::now();
+                }
                 EventType::AxisChanged(Axis::LeftStickX, value, _code) => self.left_pos.0 = value,
                 EventType::AxisChanged(Axis::LeftStickY, value, _code) => self.left_pos.1 = value,
                 _ => (),

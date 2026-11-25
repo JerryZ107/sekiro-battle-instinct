@@ -66,9 +66,13 @@ static RENDERER: LazyLock<Mutex<Option<OverlayRenderer>>> = LazyLock::new(|| Mut
 static LAST_UPLOADED_GENERATION: AtomicU64 = AtomicU64::new(0);
 static HAS_TEXTURE: AtomicBool = AtomicBool::new(false);
 static RENDERER_READY: AtomicBool = AtomicBool::new(false);
+/// Set after a failed renderer creation so Present does not retry D3DCompile
+/// every frame. Reset on ResizeBuffers or when the editor is opened.
+static RENDERER_FAILED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn reset_surface() {
     RENDERER_READY.store(false, Ordering::Release);
+    RENDERER_FAILED.store(false, Ordering::Release);
     LAST_UPLOADED_GENERATION.store(0, Ordering::Release);
     HAS_TEXTURE.store(false, Ordering::Release);
     DRAW_PLAN.store(0, Ordering::Release);
@@ -236,8 +240,10 @@ unsafe extern "system" fn clip_cursor_detour(rect: *const RECT) -> BOOL {
 }
 
 unsafe extern "system" fn present_detour(swapchain: *mut c_void, sync: u32, flags: u32) -> HRESULT {
+    let sync = crate::fps_unlock::on_present(sync);
+    crate::frame_perf::record_present(sync);
     unsafe { prepare_window_hook(swapchain) };
-    if !RENDERER_READY.load(Ordering::Acquire) {
+    if !RENDERER_READY.load(Ordering::Acquire) && !RENDERER_FAILED.load(Ordering::Acquire) {
         unsafe { ensure_renderer(swapchain) };
     }
     if super::overlay_open() {
@@ -258,8 +264,10 @@ unsafe extern "system" fn present1_detour(
     flags: u32,
     parameters: *const c_void,
 ) -> HRESULT {
+    let sync = crate::fps_unlock::on_present(sync);
+    crate::frame_perf::record_present(sync);
     unsafe { prepare_window_hook(swapchain) };
-    if !RENDERER_READY.load(Ordering::Acquire) {
+    if !RENDERER_READY.load(Ordering::Acquire) && !RENDERER_FAILED.load(Ordering::Acquire) {
         unsafe { ensure_renderer(swapchain) };
     }
     if super::overlay_open() {
@@ -282,10 +290,12 @@ unsafe extern "system" fn resize_buffers_detour(
     format: u32,
     flags: u32,
 ) -> HRESULT {
+    crate::frame_perf::reset_present_clock();
     if let Ok(mut renderer) = RENDERER.lock() {
         *renderer = None;
     }
     RENDERER_READY.store(false, Ordering::Release);
+    RENDERER_FAILED.store(false, Ordering::Release);
     LAST_UPLOADED_GENERATION.store(0, Ordering::Release);
     HAS_TEXTURE.store(false, Ordering::Release);
     DRAW_PLAN.store(0, Ordering::Release);
@@ -321,15 +331,24 @@ unsafe fn ensure_renderer(swapchain: *mut c_void) {
             Ok(new_renderer) => {
                 *renderer = Some(new_renderer);
                 RENDERER_READY.store(true, Ordering::Release);
+                RENDERER_FAILED.store(false, Ordering::Release);
                 log::warn!("ui: lightweight overlay renderer preinitialized");
             }
             Err(error) => {
+                RENDERER_FAILED.store(true, Ordering::Release);
                 log_render_error_once(&format!("cannot initialize overlay renderer: {error:#}"));
             }
         }
     } else {
         RENDERER_READY.store(true, Ordering::Release);
+        RENDERER_FAILED.store(false, Ordering::Release);
     }
+}
+
+/// Allow one retry after a previous failure; called when the user explicitly
+/// opens the editor.
+pub(crate) fn retry_renderer_failure() {
+    RENDERER_FAILED.store(false, Ordering::Release);
 }
 
 pub(crate) fn release_cursor_clip() {
@@ -344,17 +363,6 @@ unsafe fn render_overlay(swapchain: *mut c_void) {
     let Some(swapchain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&swapchain) }) else {
         return;
     };
-    let desc = match unsafe { swapchain.GetDesc() } {
-        Ok(desc) => desc,
-        Err(error) => {
-            log_render_error_once(&format!("GetDesc failed: {error}"));
-            return;
-        }
-    };
-    let screen_w = desc.BufferDesc.Width.max(1);
-    let screen_h = desc.BufferDesc.Height.max(1);
-    super::set_frame_size(screen_w as i32, screen_h as i32);
-
     let mut renderer = match RENDERER.lock() {
         Ok(renderer) => renderer,
         Err(poisoned) => poisoned.into_inner(),
@@ -362,6 +370,8 @@ unsafe fn render_overlay(swapchain: *mut c_void) {
     let Some(active) = renderer.as_mut() else {
         return;
     };
+    let (screen_w, screen_h) = active.screen_size();
+    super::set_frame_size(screen_w as i32, screen_h as i32);
 
     let generation = paint_worker::latest_generation();
     if generation != LAST_UPLOADED_GENERATION.load(Ordering::Acquire) {
