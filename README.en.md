@@ -4,7 +4,7 @@
 
 [简体中文](README.md) | **English**
 
-A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings.
+A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings. The in-game UI architecture is inspired by [kargoshakar/SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom).
 
 ## 1. MOD Overview
 
@@ -99,6 +99,8 @@ See [GitHub Releases](https://github.com/JerryZ107/sekiro-paper-jutsu/releases) 
 - [Tmsrise](https://github.com/tmsrise): [Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
 - [ReaperAnon](https://github.com/ReaperAnon): [Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
 - [Yuzheng Wu](https://github.com/Persona-woo): input-feel testing and improvements on the original
+- **[kargoshakar](https://github.com/kargoshakar)**: [SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom) — reference for the lightweight Present/ResizeBuffers hooks, WndProc + RawInput input handling, software cursor, and overlay rendering architecture
+- **[rootBrz](https://github.com/rootBrz)**: [SekiroImGui](https://github.com/rootBrz/SekiroImGui) — upstream project of SekiroImGuiCustom and the original ImGui overlay implementation
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party components.
 

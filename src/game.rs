@@ -12,6 +12,16 @@ pub const GET_ITEM_ID: usize = 0x140C3D680;
 pub const SET_SLOT: usize = 0x140D592F0;
 pub const PLAYER_DAMAGE_REACTION: usize = 0x140B6E6A0;
 
+/// First 16 bytes of the supported Sekiro 1.6.0.0 function prologues. These are
+/// used as a readiness/safety signature before MinHook is allowed to patch the
+/// pages; a page can be executable while the loader is still unpacking code.
+pub const PROCESS_INPUT_PREFIX: [u8; 16] = [
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x48, 0x83, 0xEC, 0x20, 0x4C, 0x8B, 0x41, 0x10, 0x48, 0x8B,
+];
+pub const PLAYER_DAMAGE_REACTION_PREFIX: [u8; 16] = [
+    0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x68, 0xB8, 0x48,
+];
+
 // objects
 pub const GAME_DATA: usize = 0x143D5AAC0;
 pub const WORLD_DATA: usize = 0x143D7A1E0;

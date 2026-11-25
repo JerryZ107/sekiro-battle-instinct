@@ -1,103 +1,53 @@
 mod editor;
 mod game_overlay;
 mod i18n;
+mod overlay_render;
+mod paint_worker;
 mod render;
 
 use std::{
     path::PathBuf,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, Ordering},
     },
-    thread,
 };
 
-use anyhow::{Context, Result, anyhow};
-use windows::{
-    Win32::{
-        Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::ClientToScreen,
-        System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentProcessId},
-        UI::{
-            HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext},
-            Input::KeyboardAndMouse::{VK_ESCAPE, VK_F},
-            WindowsAndMessaging::{
-                CallNextHookEx, ClipCursor, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GetClientRect, GetClipCursor, GetCursor, GetCursorPos, GetForegroundWindow, GetMessageW,
-                GetWindowThreadProcessId, HCURSOR, IDC_ARROW, KBDLLHOOKSTRUCT, LoadCursorW, MB_ICONWARNING, MB_OK,
-                MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, SetCursor, SetCursorPos, SetWindowsHookExW,
-                ShowCursor, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_DESTROY,
-                WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEWHEEL,
-                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW,
-                WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
-            },
-        },
+use anyhow::{Result, anyhow};
+use windows::Win32::{
+    Foundation::{HWND, RECT},
+    UI::{
+        Input::KeyboardAndMouse::{VK_ESCAPE, VK_F},
+        WindowsAndMessaging::GetClientRect,
     },
-    core::{PCWSTR, w},
 };
 
 use crate::{
     binding_validation::BindingValidationError,
     bindings::{self, BindingSnapshot, KeyToken},
-    device, game_menu, menu_probe,
+    game_menu, menu_probe,
 };
 
 use self::editor::{Editor, ModalAction, layout};
 
-const WM_APP_OPEN: u32 = WM_APP + 1;
-const WM_APP_CLOSE: u32 = WM_APP + 2;
-const WM_APP_CLICK: u32 = WM_APP + 3;
-const WINDOW_CLASS: PCWSTR = w!("BattleInstinctUiController");
-
 static UI_STATE: OnceLock<Mutex<UiState>> = OnceLock::new();
-static CONTROLLER_HWND: AtomicIsize = AtomicIsize::new(0);
-static OPEN_PENDING: AtomicBool = AtomicBool::new(false);
-/// Fast path for the Present/input hooks: no UI state lock is needed while the
-/// key editor is closed.
 static UI_OPEN: AtomicBool = AtomicBool::new(false);
-/// Rendering hook availability is independent from keyboard capture: gameplay
-/// key tracking still needs the UI message pump if DXGI hooking fails.
-static OVERLAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
-static HOOK_FAILURE_NOTIFIED: AtomicBool = AtomicBool::new(false);
-
-/// Log the failure and show at most one modal warning per game process. Other
-/// combat/gameplay hooks keep running; only the input/UI features are affected.
-fn notify_hook_failure(detail: &str) {
-    log::error!("ui: {detail}");
-    if HOOK_FAILURE_NOTIFIED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let text = format!(
-        "键位编辑或部分组合键功能不可用。\n\n{detail}\n\n其他战斗功能仍会继续运行，详情见 battle_instinct.log。"
-    );
-    let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-    let title: Vec<u16> = "Paper Jutsu".encode_utf16().chain(Some(0)).collect();
-    unsafe {
-        let _ = MessageBoxW(
-            None,
-            PCWSTR::from_raw(text.as_ptr()),
-            PCWSTR::from_raw(title.as_ptr()),
-            MB_OK | MB_ICONWARNING,
-        );
-    }
-}
+static FRAME_W: AtomicI32 = AtomicI32::new(0);
+static FRAME_H: AtomicI32 = AtomicI32::new(0);
+static CURSOR_X: AtomicI32 = AtomicI32::new(0);
+static CURSOR_Y: AtomicI32 = AtomicI32::new(0);
+static CURSOR_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct UiState {
     pub(crate) editor: Option<Editor>,
     pub(crate) frame_width: i32,
     pub(crate) frame_height: i32,
-    pub(crate) ui_dirty: bool,
-    cursor_x: f32,
-    cursor_y: f32,
+    pub(crate) cursor_x: f32,
+    pub(crate) cursor_y: f32,
     cfg_path: PathBuf,
     game_hwnd: isize,
     client_width: i32,
     client_height: i32,
-    saved_clip: Option<RECT>,
-    saved_cursor: isize,
-    cursor_show_calls: i32,
-    last_os_cursor: Option<POINT>,
-    os_cursor_seen: bool,
 }
 
 pub(crate) fn state() -> &'static Mutex<UiState> {
@@ -107,6 +57,29 @@ pub(crate) fn state() -> &'static Mutex<UiState> {
 #[inline]
 pub(crate) fn overlay_open() -> bool {
     UI_OPEN.load(Ordering::Acquire)
+}
+
+pub(crate) fn frame_size() -> (i32, i32) {
+    (FRAME_W.load(Ordering::Acquire), FRAME_H.load(Ordering::Acquire))
+}
+
+pub(crate) fn set_frame_size(width: i32, height: i32) {
+    let width = width.max(1);
+    let height = height.max(1);
+    let changed = FRAME_W.swap(width, Ordering::AcqRel) != width || FRAME_H.swap(height, Ordering::AcqRel) != height;
+    if changed && overlay_open() {
+        paint_worker::request_repaint();
+    }
+}
+
+pub(crate) fn cursor_position() -> Option<(f32, f32)> {
+    if !overlay_open() || !CURSOR_VISIBLE.load(Ordering::Acquire) {
+        return None;
+    }
+    Some((
+        CURSOR_X.load(Ordering::Acquire) as f32,
+        CURSOR_Y.load(Ordering::Acquire) as f32,
+    ))
 }
 
 fn lock_state() -> std::sync::MutexGuard<'static, UiState> {
@@ -126,231 +99,96 @@ pub fn start(cfg_path: PathBuf) -> Result<()> {
             editor: None,
             frame_width: 0,
             frame_height: 0,
-            ui_dirty: false,
             cursor_x: 0.0,
             cursor_y: 0.0,
             cfg_path,
             game_hwnd: 0,
             client_width: 0,
             client_height: 0,
-            saved_clip: None,
-            saved_cursor: 0,
-            cursor_show_calls: 0,
-            last_os_cursor: None,
-            os_cursor_seen: false,
         }))
         .map_err(|_| anyhow!("UI state was already initialized"))?;
 
-    // Must happen before MinHook::enable_all_hooks() in lib.rs. A graphics
-    // hook failure disables only the optional overlay; the keyboard capture and
-    // controller message pump must still start for gameplay key tracking.
-    let overlay_available = match game_overlay::install() {
-        Ok(()) => true,
-        Err(error) => {
-            notify_hook_failure(&format!("DXGI overlay hook 安装失败: {error:#}"));
-            false
-        }
-    };
-    OVERLAY_AVAILABLE.store(overlay_available, Ordering::Release);
-
-    if let Err(error) = thread::Builder::new().name("battle-instinct-ui".into()).spawn(|| {
-        if let Err(error) = run_ui_thread() {
-            device::set_keyboard_capture_active(false);
-            OVERLAY_AVAILABLE.store(false, Ordering::Release);
-            notify_hook_failure(&format!("输入 Hook 线程停止: {error:#}"));
-        }
-    }) {
-        notify_hook_failure(&format!("无法创建输入 Hook 线程: {error:#}"));
-        return Err(error.into());
-    }
+    paint_worker::start()?;
+    game_overlay::install()?;
+    log::warn!("ui: in-game overlay input/rendering ready");
     Ok(())
-}
-
-unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 {
-        let message = wparam.0 as u32;
-        let keyboard = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-        let vk = keyboard.vkCode;
-        let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
-        let up = matches!(message, WM_KEYUP | WM_SYSKEYUP);
-        if down || up {
-            device::record_key_event(vk as u16, down);
-        }
-
-        if down {
-            // The overlay hotkey is only valid while the game owns the foreground
-            // window. A background F press must never read stale menu memory.
-            let foreground = unsafe { GetForegroundWindow() };
-            let mut foreground_pid = 0u32;
-            unsafe {
-                let _ = GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
-            }
-            if foreground_pid != unsafe { GetCurrentProcessId() } {
-                return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-            }
-
-            let overlay_open = overlay_open();
-            let hwnd = HWND(CONTROLLER_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
-
-            if vk == VK_F.0 as u32 {
-                if overlay_open {
-                    if !hwnd.0.is_null() {
-                        unsafe {
-                            let _ = PostMessageW(hwnd, WM_APP_CLOSE, WPARAM(0), LPARAM(0));
-                        }
-                    }
-                    return LRESULT(1);
-                }
-                if OVERLAY_AVAILABLE.load(Ordering::Acquire) && menu_probe::menu_open() && current_row_is_bind_target()
-                {
-                    if !hwnd.0.is_null() && !OPEN_PENDING.swap(true, Ordering::AcqRel) {
-                        let posted = unsafe { PostMessageW(hwnd, WM_APP_OPEN, WPARAM(0), LPARAM(0)) };
-                        if posted.is_err() {
-                            OPEN_PENDING.store(false, Ordering::Release);
-                        }
-                    }
-                    return LRESULT(1);
-                }
-            } else if vk == VK_ESCAPE.0 as u32 && overlay_open {
-                if !hwnd.0.is_null() {
-                    unsafe {
-                        let _ = PostMessageW(hwnd, WM_APP_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                }
-                return LRESULT(1);
-            }
-        }
-    }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
-}
-
-unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && overlay_open() {
-        // Never swallow clicks while another application owns the foreground.
-        let foreground = unsafe { GetForegroundWindow() };
-        let mut foreground_pid = 0u32;
-        unsafe {
-            let _ = GetWindowThreadProcessId(foreground, Some(&mut foreground_pid));
-        }
-        if foreground_pid != unsafe { GetCurrentProcessId() } {
-            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-        }
-
-        let message = wparam.0 as u32;
-        match message {
-            WM_LBUTTONDOWN => {
-                let hwnd = HWND(CONTROLLER_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
-                if !hwnd.0.is_null() {
-                    unsafe {
-                        let _ = PostMessageW(hwnd, WM_APP_CLICK, WPARAM(0), LPARAM(0));
-                    }
-                }
-                return LRESULT(1);
-            }
-            // Never swallow WM_MOUSEMOVE. The overlay polls the OS cursor
-            // position; blocking the move message can stop the OS cursor from
-            // moving at all. The game's menu is keyboard-driven, so letting the
-            // move message through while the editor is open is harmless.
-            WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_XBUTTONDOWN
-            | WM_XBUTTONUP | WM_MOUSEWHEEL => return LRESULT(1),
-            _ => {}
-        }
-    }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 fn current_row_is_bind_target() -> bool {
     game_menu::current_selection().is_some_and(|selection| bindings::category_for_uid(selection.uid).is_some())
 }
 
-fn run_ui_thread() -> Result<()> {
-    unsafe {
-        let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        let instance = GetModuleHandleW(None)?;
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(controller_wndproc),
-            hInstance: instance.into(),
-            lpszClassName: WINDOW_CLASS,
-            ..Default::default()
-        };
-        if RegisterClassW(&wc) == 0 {
-            return Err(anyhow!("RegisterClassW failed"));
-        }
-
-        // Hidden top-level tool window used only for the low-level hooks and
-        // their message pump. It is never shown or activated.
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            WINDOW_CLASS,
-            w!("Paper Jutsu UI Controller"),
-            WS_POPUP,
-            0,
-            0,
-            1,
-            1,
-            None,
-            None,
-            instance,
-            None,
-        )?;
-        if hwnd.0.is_null() {
-            return Err(anyhow!("CreateWindowExW controller failed"));
-        }
-        CONTROLLER_HWND.store(hwnd.0 as isize, Ordering::Release);
-
-        let keyboard =
-            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0).context("install keyboard hook")?;
-        device::set_keyboard_capture_active(true);
-        let mouse = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) {
-            Ok(hook) => hook,
-            Err(error) => {
-                device::set_keyboard_capture_active(false);
-                let _ = UnhookWindowsHookEx(keyboard);
-                return Err(anyhow!("install mouse hook: {error}"));
-            }
-        };
-
-        let mut msg = Default::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-
-        device::set_keyboard_capture_active(false);
-        let _ = UnhookWindowsHookEx(mouse);
-        let _ = UnhookWindowsHookEx(keyboard);
-        CONTROLLER_HWND.store(0, Ordering::Release);
-        let _ = DestroyWindow(hwnd);
-        Ok(())
-    }
-}
-
-unsafe extern "system" fn controller_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_APP_OPEN => {
-            OPEN_PENDING.store(false, Ordering::Release);
-            if let Err(error) = open_overlay() {
-                log::warn!("ui: cannot open key config: {error:#}");
-            }
-            LRESULT(0)
-        }
-        WM_APP_CLOSE => {
+/// Called from the game's WndProc. Returns true if the message was consumed.
+pub(crate) fn on_key(hwnd: HWND, vk: u32) -> bool {
+    if overlay_open() {
+        if vk == VK_ESCAPE.0 as u32 || vk == VK_F.0 as u32 {
             request_close();
-            LRESULT(0)
+            if overlay_open() {
+                paint_worker::request_repaint();
+            }
         }
-        WM_APP_CLICK => {
-            handle_click_cursor();
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            unsafe { PostQuitMessage(0) };
-            LRESULT(0)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        return true;
     }
+
+    let menu_open = menu_probe::menu_open_cached() || menu_probe::menu_open();
+    if vk == VK_F.0 as u32 && menu_open && current_row_is_bind_target() {
+        if let Err(error) = open_overlay(hwnd) {
+            log::warn!("ui: cannot open key config: {error:#}");
+        }
+        return true;
+    }
+    false
 }
 
-fn open_overlay() -> Result<()> {
+pub(crate) fn on_mouse_move(hwnd: HWND, client_x: i32, client_y: i32) {
+    if !overlay_open() {
+        return;
+    }
+    let mut state = lock_state();
+    if state.editor.is_none() {
+        return;
+    }
+    let _ = hwnd;
+    let client_w = state.client_width.max(1);
+    let client_h = state.client_height.max(1);
+    let (frame_w, frame_h) = frame_size();
+    let frame_w = if frame_w > 1 { frame_w } else { state.frame_width.max(1) };
+    let frame_h = if frame_h > 1 {
+        frame_h
+    } else {
+        state.frame_height.max(1)
+    };
+    let x = (client_x as f32 * frame_w as f32 / client_w as f32).clamp(0.0, frame_w as f32 - 1.0);
+    let y = (client_y as f32 * frame_h as f32 / client_h as f32).clamp(0.0, frame_h as f32 - 1.0);
+    state.cursor_x = x;
+    state.cursor_y = y;
+    CURSOR_X.store(x.round() as i32, Ordering::Release);
+    CURSOR_Y.store(y.round() as i32, Ordering::Release);
+    CURSOR_VISIBLE.store(true, Ordering::Release);
+}
+
+pub(crate) fn on_mouse_click(_hwnd: HWND) {
+    let mut state = lock_state();
+    let Some(editor) = state.editor.as_ref() else {
+        return;
+    };
+    let (frame_w, frame_h) = frame_size();
+    let frame_w = if frame_w > 1 { frame_w } else { state.frame_width.max(1) };
+    let frame_h = if frame_h > 1 {
+        frame_h
+    } else {
+        state.frame_height.max(1)
+    };
+    let (panel_w, panel_h, panel_x, panel_y) = render::panel_geometry(editor, frame_w, frame_h);
+    let local_x = state.cursor_x.round() as i32 - panel_x as i32;
+    let local_y = state.cursor_y.round() as i32 - panel_y as i32;
+    if local_x < 0 || local_y < 0 || local_x >= panel_w || local_y >= panel_h {
+        return;
+    }
+    handle_click(&mut state, local_x, local_y, panel_w, panel_h);
+}
+
+fn open_overlay(hwnd: HWND) -> Result<()> {
     let cfg_path = {
         let state = lock_state();
         if state.editor.is_some() {
@@ -364,39 +202,42 @@ fn open_overlay() -> Result<()> {
         return Ok(());
     };
 
-    let game_hwnd = unsafe { GetForegroundWindow() };
     let mut client = RECT::default();
-    let _ = unsafe { GetClientRect(game_hwnd, &mut client) };
+    let _ = unsafe { GetClientRect(hwnd, &mut client) };
     let client_width = (client.right - client.left).max(1);
     let client_height = (client.bottom - client.top).max(1);
+    let (frame_w, frame_h) = frame_size();
+    let frame_w = if frame_w > 1 { frame_w } else { client_width };
+    let frame_h = if frame_h > 1 { frame_h } else { client_height };
+    FRAME_W.store(frame_w, Ordering::Release);
+    FRAME_H.store(frame_h, Ordering::Release);
 
     let uid = editor.uid;
     let name = editor.name.clone();
     let menu_uid = editor.menu_uid;
     let menu_category = editor.menu_category;
+    let (panel_w, panel_h, panel_x, panel_y) = render::panel_geometry(&editor, frame_w, frame_h);
 
     let mut state = lock_state();
-    state.game_hwnd = game_hwnd.0 as isize;
+    state.game_hwnd = hwnd.0 as isize;
     state.client_width = client_width;
     state.client_height = client_height;
-    if state.frame_width <= 0 {
-        state.frame_width = client_width;
-    }
-    if state.frame_height <= 0 {
-        state.frame_height = client_height;
-    }
-    let (panel_w, panel_h, panel_x, panel_y) = render::panel_geometry(client_width, client_height);
+    state.frame_width = frame_w;
+    state.frame_height = frame_h;
     state.cursor_x = panel_x + panel_w as f32 * 0.5;
     state.cursor_y = panel_y + panel_h as f32 * 0.5;
     state.editor = Some(editor);
+    CURSOR_X.store(state.cursor_x.round() as i32, Ordering::Release);
+    CURSOR_Y.store(state.cursor_y.round() as i32, Ordering::Release);
+    CURSOR_VISIBLE.store(true, Ordering::Release);
     UI_OPEN.store(true, Ordering::Release);
-    state.ui_dirty = true;
-    state.last_os_cursor = None;
-    state.os_cursor_seen = false;
-    show_game_cursor(&mut state);
-
+    game_overlay::release_cursor_clip();
+    game_overlay::reset_surface();
+    paint_worker::clear();
+    paint_worker::request_repaint();
+    crate::frame_perf::mark(crate::frame_perf::EventId::UiOpen);
     log::warn!(
-        "ui: opened uid={} name={} from game menu uid={} category={}",
+        "ui: opened in-game key config uid={} name={} from menu uid={} category={}",
         uid,
         name,
         menu_uid,
@@ -422,121 +263,6 @@ fn open_editor(cfg_path: &std::path::Path) -> Result<Option<Editor>> {
     Ok(Some(editor))
 }
 
-fn show_game_cursor(state: &mut UiState) {
-    unsafe {
-        let mut clip = RECT::default();
-        if GetClipCursor(&mut clip).is_ok() {
-            state.saved_clip = Some(clip);
-        }
-        state.saved_cursor = GetCursor().0 as isize;
-        sync_system_cursor(state);
-    }
-}
-
-fn ensure_cursor_visible(state: &mut UiState) {
-    unsafe {
-        // Many games hide the OS cursor every frame. Show it just enough to
-        // reach a non-negative display count without accumulating indefinitely.
-        loop {
-            let count = ShowCursor(BOOL(1));
-            if count < 0 {
-                state.cursor_show_calls += 1;
-                continue;
-            }
-            if count > 0 {
-                ShowCursor(BOOL(0));
-            }
-            break;
-        }
-        if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
-            SetCursor(cursor);
-        }
-    }
-}
-
-fn sync_system_cursor(state: &mut UiState) {
-    if state.editor.is_none() || state.game_hwnd == 0 {
-        return;
-    }
-    let mut foreground_pid = 0u32;
-    unsafe {
-        let _ = GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut foreground_pid));
-    }
-    if foreground_pid != unsafe { GetCurrentProcessId() } {
-        return;
-    }
-
-    let client_width = state.client_width.max(1);
-    let client_height = state.client_height.max(1);
-    let frame_width = state.frame_width.max(1);
-    let frame_height = state.frame_height.max(1);
-    let scale_x = frame_width as f32 / client_width as f32;
-    let scale_y = frame_height as f32 / client_height as f32;
-
-    // Do not read the game's DirectInput camera stream here. Sekiro's pause
-    // menu is not guaranteed to poll the DirectInput mouse, and the game may
-    // keep the device unacquired while the menu is open. Poll the OS cursor
-    // instead: that stream exists regardless of what the game is polling.
-    let mut physical = POINT::default();
-    if unsafe { GetCursorPos(&mut physical) }.is_ok() {
-        if let Some(last) = state.last_os_cursor {
-            let dx = physical.x - last.x;
-            let dy = physical.y - last.y;
-            if dx != 0 || dy != 0 {
-                state.cursor_x = (state.cursor_x + dx as f32 * scale_x).clamp(0.0, (frame_width - 1) as f32);
-                state.cursor_y = (state.cursor_y + dy as f32 * scale_y).clamp(0.0, (frame_height - 1) as f32);
-                if !state.os_cursor_seen {
-                    state.os_cursor_seen = true;
-                    log::warn!("ui: OS cursor movement observed while key editor is open");
-                }
-            }
-        }
-    }
-
-    ensure_cursor_visible(state);
-    let mut point = POINT {
-        x: (state.cursor_x * client_width as f32 / frame_width as f32).round() as i32,
-        y: (state.cursor_y * client_height as f32 / frame_height as f32).round() as i32,
-    };
-    let game_hwnd = HWND(state.game_hwnd as *mut core::ffi::c_void);
-    unsafe {
-        let _ = ClipCursor(None);
-        if ClientToScreen(game_hwnd, &mut point).as_bool() {
-            let _ = SetCursorPos(point.x, point.y);
-        }
-        // SetCursorPos may be DPI-virtualized. Store the real post-warp
-        // position so the next frame compares against the same coordinate
-        // space that GetCursorPos reports.
-        let mut actual = POINT::default();
-        state.last_os_cursor = GetCursorPos(&mut actual).ok().map(|_| actual);
-    }
-}
-
-pub(crate) fn sync_overlay_cursor(state: &mut UiState) {
-    sync_system_cursor(state);
-}
-
-pub(crate) fn close_overlay_for_gameplay(state: &mut UiState) {
-    close_overlay(state);
-}
-
-fn restore_game_cursor(state: &mut UiState) {
-    unsafe {
-        for _ in 0..state.cursor_show_calls {
-            ShowCursor(BOOL(0));
-        }
-        state.cursor_show_calls = 0;
-        if state.saved_cursor != 0 {
-            SetCursor(HCURSOR(state.saved_cursor as *mut core::ffi::c_void));
-        }
-        if let Some(clip) = state.saved_clip.take() {
-            let _ = ClipCursor(Some(&clip));
-        } else {
-            let _ = ClipCursor(None);
-        }
-    }
-}
-
 fn request_close() {
     let mut state = lock_state();
     request_close_state(&mut state);
@@ -544,8 +270,14 @@ fn request_close() {
 
 fn request_close_state(state: &mut UiState) {
     let close = if let Some(editor) = state.editor.as_mut() {
-        editor.request_close();
-        editor.modal.is_none()
+        if editor.modal.is_some() {
+            // Esc / F while a dialog is open only dismisses that dialog.
+            editor.modal_cancel();
+            false
+        } else {
+            editor.request_close();
+            editor.modal.is_none()
+        }
     } else {
         false
     };
@@ -556,26 +288,12 @@ fn request_close_state(state: &mut UiState) {
 
 fn close_overlay(state: &mut UiState) {
     UI_OPEN.store(false, Ordering::Release);
+    CURSOR_VISIBLE.store(false, Ordering::Release);
+    game_overlay::reset_surface();
+    paint_worker::clear();
+    crate::frame_perf::mark(crate::frame_perf::EventId::UiClose);
     state.editor = None;
     state.game_hwnd = 0;
-    state.last_os_cursor = None;
-    state.os_cursor_seen = false;
-    restore_game_cursor(state);
-}
-
-fn handle_click_cursor() {
-    let mut state = lock_state();
-    if state.editor.is_none() || state.game_hwnd == 0 {
-        return;
-    }
-    let (panel_w, panel_h, panel_x, panel_y) =
-        render::panel_geometry(state.frame_width.max(1), state.frame_height.max(1));
-    let local_x = state.cursor_x.round() as i32 - panel_x as i32;
-    let local_y = state.cursor_y.round() as i32 - panel_y as i32;
-    if local_x < 0 || local_y < 0 || local_x >= panel_w || local_y >= panel_h {
-        return;
-    }
-    handle_click(&mut state, local_x, local_y, panel_w, panel_h);
 }
 
 #[derive(Debug)]
@@ -583,7 +301,7 @@ enum ClickAction {
     None,
     Close,
     Save,
-    SaveKeys(Vec<KeyToken>, bool),
+    SaveSchemes(Vec<Vec<KeyToken>>, bool),
     ResetNow,
     Cancel,
 }
@@ -593,29 +311,44 @@ fn click_action(editor: &mut Editor, w: i32, h: i32, x: i32, y: i32) -> ClickAct
 
     if let Some(panel) = l.modal_panel {
         if panel.contains(x, y) {
-            if let Some(confirm) = l.modal_confirm {
-                if confirm.contains(x, y) {
-                    return match editor.modal_confirm() {
+            for (index, button) in l.modal_buttons.iter().copied().enumerate() {
+                if button.contains(x, y) {
+                    return match editor.take_modal_action(index) {
                         Some(ModalAction::Dismiss) | None => ClickAction::None,
+                        Some(ModalAction::SaveAndClose) => ClickAction::Save,
                         Some(ModalAction::DiscardAndClose) => ClickAction::Close,
                         Some(ModalAction::ApplyMode(mode)) => {
                             editor.apply_mode(mode);
                             ClickAction::None
                         }
-                        Some(ModalAction::OverwriteAndSave(keys)) => ClickAction::SaveKeys(keys, true),
+                        Some(ModalAction::OverwriteAndSave(schemes)) => ClickAction::SaveSchemes(schemes, true),
                         Some(ModalAction::ResetAndClose) => ClickAction::ResetNow,
+                        Some(ModalAction::DeleteSelectedScheme) => {
+                            editor.delete_selected_scheme();
+                            ClickAction::None
+                        }
                     };
-                }
-            }
-            if let Some(cancel) = l.modal_cancel {
-                if cancel.contains(x, y) {
-                    editor.modal_cancel();
                 }
             }
         }
         return ClickAction::None;
     }
     if editor.modal.is_some() {
+        return ClickAction::None;
+    }
+
+    for (index, rect) in l.scheme_buttons.iter().copied().enumerate() {
+        if rect.contains(x, y) {
+            editor.select_scheme(index);
+            return ClickAction::None;
+        }
+    }
+    if l.add_scheme.contains(x, y) {
+        editor.add_scheme();
+        return ClickAction::None;
+    }
+    if l.delete_scheme.contains(x, y) {
+        editor.request_delete_scheme();
         return ClickAction::None;
     }
 
@@ -659,7 +392,7 @@ fn click_action(editor: &mut Editor, w: i32, h: i32, x: i32, y: i32) -> ClickAct
 }
 
 fn handle_click(state: &mut UiState, x: i32, y: i32, w: i32, h: i32) {
-    state.ui_dirty = true;
+    paint_worker::request_repaint();
     let action = {
         let Some(editor) = state.editor.as_mut() else {
             return;
@@ -671,38 +404,47 @@ fn handle_click(state: &mut UiState, x: i32, y: i32, w: i32, h: i32) {
         ClickAction::None => {}
         ClickAction::Close => close_overlay(state),
         ClickAction::Save => save_editor(state),
-        ClickAction::SaveKeys(keys, overwrite) => save_editor_keys(state, keys, overwrite),
+        ClickAction::SaveSchemes(schemes, overwrite) => save_editor_schemes(state, schemes, overwrite),
         ClickAction::ResetNow => reset_editor_binding(state),
         ClickAction::Cancel => request_close_state(state),
     }
 }
 
 fn save_editor(state: &mut UiState) {
-    let keys = {
+    let schemes = {
         let Some(editor) = state.editor.as_mut() else {
             return;
         };
         if !editor.complete() {
-            editor.show_message(i18n::pick("请先完成键位配置", "Complete the key binding first."));
+            editor.show_message(i18n::pick(
+                "请先完成所有方案的键位配置",
+                "Complete every scheme before saving.",
+            ));
             return;
         }
 
-        let keys = editor.keys();
-        match editor.snapshot.validate_candidate(editor.uid, &keys) {
-            Ok(()) => keys,
+        let schemes = editor.all_keys();
+        match editor.snapshot.validate_scheme_set(editor.uid, &schemes) {
+            Ok(()) => schemes,
             Err(BindingValidationError::Occupied) => {
-                let conflict_name = editor
-                    .snapshot
-                    .conflicting_entry(editor.uid, &keys)
-                    .map(|entry| {
-                        editor
-                            .snapshot
-                            .name(entry.uid)
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| format!("UID {}", entry.uid))
-                    })
-                    .unwrap_or_else(|| i18n::pick("其他技能/忍具", "another combat art / prosthetic").to_string());
-                editor.show_overwrite_confirm(&conflict_name, keys);
+                let conflicts = editor.snapshot.conflicting_entries(editor.uid, &schemes);
+                let mut names = Vec::new();
+                for entry in conflicts {
+                    let name = editor
+                        .snapshot
+                        .name(entry.uid)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| format!("UID {}", entry.uid));
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+                let conflict_names = if names.is_empty() {
+                    i18n::pick("其他技能/忍具", "another combat art / prosthetic").to_string()
+                } else {
+                    names.join("、")
+                };
+                editor.show_overwrite_confirm(&conflict_names, schemes);
                 return;
             }
             Err(error) => {
@@ -712,30 +454,30 @@ fn save_editor(state: &mut UiState) {
         }
     };
 
-    save_editor_keys(state, keys, false);
+    save_editor_schemes(state, schemes, false);
 }
 
-fn save_editor_keys(state: &mut UiState, keys: Vec<KeyToken>, overwrite: bool) {
+fn save_editor_schemes(state: &mut UiState, schemes: Vec<Vec<KeyToken>>, overwrite: bool) {
     let result = {
         let Some(editor) = state.editor.as_ref() else {
             return;
         };
         if overwrite {
-            bindings::save_ui_binding_overwrite(&state.cfg_path, &editor.snapshot, editor.uid, keys)
+            bindings::save_ui_schemes_overwrite(&state.cfg_path, &editor.snapshot, editor.uid, schemes)
         } else {
-            bindings::save_ui_binding(&state.cfg_path, &editor.snapshot, editor.uid, keys)
+            bindings::save_ui_schemes(&state.cfg_path, &editor.snapshot, editor.uid, schemes)
         }
     };
 
     match result {
         Ok(()) => {
-            let (uid, name, mode) = state
+            let (uid, name, mode, scheme_count) = state
                 .editor
                 .as_ref()
-                .map(|editor| (editor.uid, editor.name.clone(), editor.mode))
-                .unwrap_or((0, String::new(), editor::BindingMode::Two));
+                .map(|editor| (editor.uid, editor.name.clone(), editor.mode(), editor.schemes.len()))
+                .unwrap_or((0, String::new(), editor::BindingMode::Two, 0));
             bindings::request_reload();
-            log::warn!("ui: saved uid={uid} name={name} mode={mode:?} overwrite={overwrite}");
+            log::warn!("ui: saved uid={uid} name={name} mode={mode:?} schemes={scheme_count} overwrite={overwrite}");
             close_overlay(state);
         }
         Err(error) => {

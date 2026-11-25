@@ -8,8 +8,10 @@ mod device;
 mod emblem;
 mod flow;
 mod frame;
+mod frame_perf;
 mod game;
 mod game_menu;
+mod hook_util;
 mod input;
 mod load_console;
 mod logger;
@@ -19,16 +21,19 @@ mod ui;
 
 use core::Mod;
 use std::{
+    cell::UnsafeCell,
     ffi::{OsStr, OsString, c_void},
     fs, mem,
     os::windows::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self},
     time::{Duration, Instant},
 };
 
-use anyhow::anyhow;
 use frame::FRAMERATE;
 use minhook::MinHook;
 use windows::{
@@ -190,14 +195,18 @@ fn chainload(path: &Path) {
 const HOOK_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const HOOK_READY_POLL: Duration = Duration::from_millis(20);
 
+fn hook_target_ready(address: usize, signature: &[u8]) -> bool {
+    menu_probe::range_executable(address, signature.len()) && menu_probe::has_expected_prefix(address, signature)
+}
+
 fn wait_for_game_code() -> bool {
     let deadline = Instant::now() + HOOK_READY_TIMEOUT;
     loop {
         // MinHook needs committed executable pages for its input/damage targets.
         // The menu signature also rejects unsupported Sekiro executable builds.
         if game_menu::code_ready()
-            && menu_probe::range_readable(game::PROCESS_INPUT, 16)
-            && menu_probe::range_readable(game::PLAYER_DAMAGE_REACTION, 16)
+            && hook_target_ready(game::PROCESS_INPUT, &game::PROCESS_INPUT_PREFIX)
+            && hook_target_ready(game::PLAYER_DAMAGE_REACTION, &game::PLAYER_DAMAGE_REACTION_PREFIX)
         {
             return true;
         }
@@ -211,12 +220,47 @@ fn wait_for_game_code() -> bool {
 static PROCESS_INPUT_ORIG: OnceLock<fn(*mut game::InputHandler, usize) -> usize> = OnceLock::new();
 
 static STATE: OnceLock<State> = OnceLock::new();
+static INPUT_STATE_BUSY: AtomicBool = AtomicBool::new(false);
+static GAMEPLAY_LOGIC_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// The process-input detour is only invoked by the game's main thread, and no
+/// other thread ever touches the mod state. Avoid taking a mutex on every game
+/// tick; the mutable reference is created only inside that detour.
 struct State {
-    modification: Mutex<Mod>,
+    modification: UnsafeCell<Mod>,
+}
+
+unsafe impl Sync for State {}
+
+/// Re-entrancy guard for the lock-free `UnsafeCell` above. A second concurrent
+/// or recursive call skips only the mod logic and still invokes the original
+/// game function.
+struct InputAccessGuard;
+
+impl InputAccessGuard {
+    fn acquire() -> Option<Self> {
+        INPUT_STATE_BUSY
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for InputAccessGuard {
+    fn drop(&mut self) {
+        INPUT_STATE_BUSY.store(false, Ordering::Release);
+    }
 }
 
 fn modify(path: &Path) {
+    frame_perf::init(path);
+    let gameplay_disabled = path.join("disable_gameplay_logic.enable").is_file();
+    GAMEPLAY_LOGIC_ENABLED.store(!gameplay_disabled, Ordering::Release);
+    if gameplay_disabled {
+        log::warn!("diagnostic: gameplay MOD logic disabled by marker file");
+        frame_perf::mark(frame_perf::EventId::GameplayLogicDisabled);
+    }
+    let damage_hook_disabled = path.join("disable_damage_hook.enable").is_file();
     let path = path.join("battle_instinct.cfg");
     load_console::print_line("等待游戏代码就绪…");
     let ready_started = Instant::now();
@@ -236,30 +280,56 @@ fn modify(path: &Path) {
     load_console::print_line("读取配置 battle_instinct.cfg …");
     let result = (|| unsafe {
         let ui_cfg_path = path.clone();
+        menu_probe::start_menu_monitor();
         let modification = Mod::new(path)?;
+        log::warn!(
+            "perf: event-driven inventory refresh, no global keyboard hook, dynamic mouse hook, lock-free input state"
+        );
 
         load_console::print_line("安装伤害事件钩子…");
-        if let Err(e) = flow::install_damage_hook() {
+        if damage_hook_disabled {
+            log::warn!("diagnostic: player damage reaction hook disabled by marker file");
+            frame_perf::mark(frame_perf::EventId::DamageHookDisabled);
+            load_console::print_line("  伤害事件钩子已跳过（诊断模式）");
+        } else if let Err(e) = flow::install_damage_hook() {
             log::error!("Failed to install damage reaction hook: {e:?}");
-            load_console::print_line(&format!("  ✗ 伤害事件钩子安装失败: {e}"));
+            load_console::print_line(&format!("  伤害事件钩子安装失败: {e}"));
         } else {
-            load_console::print_line("  ✓ 伤害事件钩子已安装");
+            load_console::print_line("  伤害事件钩子已安装");
         }
 
         load_console::print_line("安装输入钩子…");
         let target = game::PROCESS_INPUT as *mut c_void;
         let detour = process_input as *mut c_void;
-        let process_input_orig = MinHook::create_hook(target, detour)?;
-        let process_input_orig = mem::transmute(process_input_orig);
-        PROCESS_INPUT_ORIG
-            .set(process_input_orig)
-            .map_err(|_| anyhow!("Failed to set PROCESS_INPUT_ORIG"))?;
+        let mut process_input_hook_ready = false;
+        match hook_util::create_hook_with_retry(target, detour, "process_input", true) {
+            Ok(process_input_orig) => {
+                let process_input_orig = mem::transmute(process_input_orig);
+                match PROCESS_INPUT_ORIG.set(process_input_orig) {
+                    Ok(()) => {
+                        process_input_hook_ready = true;
+                        load_console::print_line("  ✓ 输入 Hook 已安装");
+                    }
+                    Err(_) => {
+                        log::error!("Failed to set PROCESS_INPUT_ORIG");
+                        load_console::print_line("  ✗ 输入 Hook 原始函数保存失败");
+                    }
+                }
+            }
+            Err(error) => {
+                log::error!("Failed to install process_input hook: {error:?}");
+                load_console::print_line(&format!("  ✗ 输入 Hook 安装失败（UI 继续尝试启动）: {error:?}"));
+            }
+        }
 
         let state = State {
-            modification: Mutex::new(modification),
+            modification: UnsafeCell::new(modification),
         };
 
-        STATE.set(state).map_err(|_| anyhow!("Failed to set STATE"))?;
+        if STATE.set(state).is_err() {
+            log::error!("Failed to set STATE");
+            load_console::print_line("  ✗ 战斗状态初始化失败（UI 继续尝试启动）");
+        }
 
         load_console::print_line("安装菜单选中项 Hook…");
         if let Err(error) = game_menu::install_hooks() {
@@ -273,8 +343,12 @@ fn modify(path: &Path) {
             log::error!("ui/input hook startup failed: {error:#}");
             load_console::print_line(&format!("  ✗ 输入/UI Hook 启动失败（战斗功能继续）: {error:#}"));
         }
-        MinHook::enable_all_hooks()?;
-        log::warn!("Paper Jutsu hook enabled.");
+        if let Err(error) = MinHook::enable_all_hooks() {
+            log::error!("Failed to enable MinHook hooks: {error:?}");
+            load_console::print_line(&format!("  ✗ 启用 Hook 失败: {error:?}"));
+        } else {
+            log::warn!("Paper Jutsu hook enabled (process_input={process_input_hook_ready}).");
+        }
         Ok::<_, anyhow::Error>(())
     })();
 
@@ -293,16 +367,29 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
         input_handler.as_mut().expect("input_handler is null")
     };
 
-    if let Some(State { modification }) = STATE.get() {
-        modification.lock().unwrap().process_input(input_handler);
+    let mod_started = Instant::now();
+    if GAMEPLAY_LOGIC_ENABLED.load(Ordering::Acquire) && !crate::ui::overlay_open() {
+        if let Some(state) = STATE.get() {
+            // Safety: the guard prevents concurrent/re-entrant access. The UI and
+            // background threads never read or mutate `Mod`.
+            if let Some(_guard) = InputAccessGuard::acquire() {
+                let modification = unsafe { &mut *state.modification.get() };
+                modification.process_input(input_handler);
+            }
+        }
     }
+    let mod_us = mod_started.elapsed().as_micros() as u64;
 
-    if let Some(process_input_orig) = PROCESS_INPUT_ORIG.get() {
-        return process_input_orig(input_handler, arg);
-    }
-
-    // Hook not fully ready: fall back to the raw game function.
-    let process_input_orig: fn(*mut game::InputHandler, usize) -> usize =
-        unsafe { mem::transmute(game::PROCESS_INPUT) };
-    process_input_orig(input_handler, arg)
+    let orig_started = Instant::now();
+    let result = if let Some(process_input_orig) = PROCESS_INPUT_ORIG.get() {
+        process_input_orig(input_handler, arg)
+    } else {
+        // Hook not fully ready: fall back to the raw game function.
+        let process_input_orig: fn(*mut game::InputHandler, usize) -> usize =
+            unsafe { mem::transmute(game::PROCESS_INPUT) };
+        process_input_orig(input_handler, arg)
+    };
+    let orig_us = orig_started.elapsed().as_micros() as u64;
+    frame_perf::record_input_hook(mod_us, orig_us);
+    result
 }

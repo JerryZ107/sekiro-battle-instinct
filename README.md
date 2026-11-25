@@ -6,7 +6,7 @@
 
 ![纸人术演示](demo.gif)
 
-基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 的个人衍生版，主打纸人替伤与更自由的键位配置。
+基于 [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct) 的个人衍生版，主打纸人替伤与更自由的键位配置；内置 UI 架构借鉴自 [kargoshakar/SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom)。
 
 ## 一、MOD 介绍
 
@@ -101,6 +101,8 @@
 - [Tmsrise](https://github.com/tmsrise)：[Sekiro Weapon Wheel](https://www.nexusmods.com/sekiro/mods/1058)
 - [ReaperAnon](https://github.com/ReaperAnon)：[Sekiro Hotkey System](https://www.nexusmods.com/sekiro/mods/1648)
 - [Yuzheng Wu](https://github.com/Persona-woo)：原版输入手感测试与改进
+- **[kargoshakar](https://github.com/kargoshakar)**：[SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom) —— 内置 overlay 的 Present/ResizeBuffers 钩子、WndProc + RawInput 输入、软件光标与轻量渲染架构参考
+- **[rootBrz](https://github.com/rootBrz)**：[SekiroImGui](https://github.com/rootBrz/SekiroImGui) —— SekiroImGuiCustom 的上游项目与 ImGui overlay 实现思路
 
 第三方组件与打包文件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

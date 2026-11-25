@@ -376,9 +376,9 @@ fn validate_locations(base: *mut u8, locations: &EmblemLocations) -> bool {
     if !locations.valid || locations.base != base as usize {
         return false;
     }
-    if !range_readable(base as usize, INVENTORY_SCAN_LEN) {
-        return false;
-    }
+    // The inventory region was range-checked when it was discovered. Validate
+    // only the few cached rows here: this runs inside the damage hook, where a
+    // `VirtualQuery` syscall on every hit would create a visible frame spike.
     for &off in &locations.temp[..locations.temp_count as usize] {
         let item_id = unsafe { read_u32(base, off + 4) } & 0x00ff_ffff;
         if item_id != TEMP_EMBLEM_GOODS_ID {
@@ -409,6 +409,7 @@ fn stock_from_locations(base: *mut u8, locations: &EmblemLocations) -> Option<Em
 }
 
 fn refresh_locations(base: *mut u8, locations: &mut EmblemLocations) -> EmblemStock {
+    crate::frame_perf::mark(crate::frame_perf::EventId::PaperInventoryRescan);
     *locations = EmblemLocations {
         base: base as usize,
         ..EmblemLocations::default()

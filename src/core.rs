@@ -8,13 +8,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use crate::{
     bindings,
     config::{Config, ToolCombo, ToolFirst, ToolTail},
-    device::{Gamepad, KeyHoldTracker, is_key_down},
+    device::{Gamepad, is_key_down},
     emblem::Emblem,
     flow::Flow,
     frame::Frames,
     game::{self},
     input::{ArtCombo, ArtComboWindow, ArtToken},
-    paper_guard,
+    menu_probe, paper_guard,
 };
 
 //----------------------------------------------------------------------------
@@ -51,11 +51,6 @@ const SHADOWFALL: UID = 7600;
 const MORTAL_DRAW: UID = 5700;
 const EMPOWERED_MORTAL_DRAW: UID = 7300;
 
-/// Availability only changes after acquiring an item, loading a save, or a
-/// config reload. A one-second refresh is responsive without polling the game
-/// inventory several times per second.
-const AVAILABILITY_REFRESH_FRAMES: u8 = 60;
-
 // action bitfields
 const ATTACK: u64 = 0x1;
 const BLOCK: u64 = 0x4;
@@ -90,7 +85,10 @@ pub struct Mod {
     config: Config,
     base_config: Config,
     availability_signature: Option<u64>,
-    availability_tick: u8,
+    /// Last pause-menu close observed by this instance. Availability changes
+    /// (learned combat arts, picked-up prosthetics) happen through the menu, so
+    /// this edge is the only periodic reason to re-check the inventory.
+    availability_menu_generation: u64,
     /// Sorted, deduplicated UIDs to check. Rebuilt only when the base config
     /// changes instead of allocating/sorting on every availability refresh.
     availability_uids: Vec<UID>,
@@ -153,11 +151,6 @@ pub struct Mod {
     tool_jump_down: bool,
     tool_sprint_down: bool,
     tool_crouch_down: bool,
-    /// Physical-key hold supplement learned from game action edges.
-    key_hold: KeyHoldTracker,
-    prev_jump_action: bool,
-    prev_sprint_action: bool,
-    prev_crouch_action: bool,
     ejection: Option<(ItemID, ProstheticSlot)>,
     gamepad: Gamepad,
     combo_dirs_last: [bool; 4],
@@ -178,7 +171,7 @@ impl Mod {
             config,
             base_config,
             availability_signature: None,
-            availability_tick: 0,
+            availability_menu_generation: menu_probe::menu_close_generation(),
             availability_uids,
             emblem,
             flow,
@@ -222,10 +215,6 @@ impl Mod {
             tool_jump_down: false,
             tool_sprint_down: false,
             tool_crouch_down: false,
-            key_hold: KeyHoldTracker::new(),
-            prev_jump_action: false,
-            prev_sprint_action: false,
-            prev_crouch_action: false,
             ejection: None,
             combo_dirs_last: [false; 4],
         };
@@ -233,15 +222,18 @@ impl Mod {
     }
 
     fn refresh_available_bindings(&mut self, force: bool) {
-        if !force {
-            self.availability_tick = self.availability_tick.saturating_add(1);
-            if self.availability_signature.is_some() && self.availability_tick < AVAILABILITY_REFRESH_FRAMES {
-                return;
-            }
+        // Do not call the game's native inventory lookup on a timer. A menu
+        // close is the point where learned arts / newly acquired tools can
+        // change; until then the previous snapshot is still valid.
+        let menu_generation = menu_probe::menu_close_generation();
+        if !force && self.availability_signature.is_some() && self.availability_menu_generation == menu_generation {
+            return;
         }
-        self.availability_tick = 0;
+        self.availability_menu_generation = menu_generation;
 
         let Some(signature) = availability_signature(&self.availability_uids) else {
+            // Inventory is not ready yet (loading screen). Keep retrying, but
+            // the failure path is only a handful of pointer reads.
             return;
         };
         if !force && self.availability_signature == Some(signature) {
@@ -255,6 +247,7 @@ impl Mod {
         let tools =
             config.tools.len() + usize::from(config.tool_on_t.is_some()) + usize::from(config.tool_on_q.is_some());
         log::warn!("keybinds: available filter arts={arts} tools={tools}");
+        crate::frame_perf::mark(crate::frame_perf::EventId::AvailabilityRefresh);
         self.config = config;
         self.reset_binding_runtime_state();
     }
@@ -336,6 +329,18 @@ impl Mod {
         if !self.swapout_countdown.is_done() || self.art_fire_busy() {
             return None;
         }
+
+        // Every instant-art matcher needs either an attack edge or a direction
+        // edge. Skipping the scan when neither exists keeps this hot path cheap
+        // even when many multi-scheme instant bindings are configured.
+        let direction_edge = (combo_up && !self.combo_dirs_last[0])
+            || (combo_right && !self.combo_dirs_last[1])
+            || (combo_down && !self.combo_dirs_last[2])
+            || (combo_left && !self.combo_dirs_last[3]);
+        if !attacked_just_now && !direction_edge {
+            return None;
+        }
+
         // Find the match without allocating a temporary Vec on every input tick.
         let matched = self.config.instant_arts.iter().find_map(|(&combo, &uid)| {
             self.instant_combo_matches(
@@ -786,6 +791,7 @@ impl Mod {
                     self.availability_uids = collect_availability_uids(&self.base_config);
                     self.availability_signature = None;
                     self.refresh_available_bindings(true);
+                    crate::frame_perf::mark(crate::frame_perf::EventId::ConfigReload);
                     log::warn!("keybinds: runtime config reloaded");
                 }
                 Err(error) => {
@@ -839,25 +845,12 @@ impl Mod {
         let crouch_action = action_snapshot & CROUCH != 0;
         let dodging = action_snapshot & DODGE != 0;
 
-        // Jump/crouch are emitted by the game as short action pulses in some
-        // contexts. Learn the physical key at the action edge and OR that key's
-        // held state into the logical token for the rest of the press.
-        let newly_down = self.key_hold.update();
-        if jump_action && !self.prev_jump_action {
-            self.key_hold.learn(0, newly_down);
-        }
-        if sprint_action && !self.prev_sprint_action {
-            self.key_hold.learn(1, newly_down);
-        }
-        if crouch_action && !self.prev_crouch_action {
-            self.key_hold.learn(2, newly_down);
-        }
-        self.prev_jump_action = jump_action;
-        self.prev_sprint_action = sprint_action;
-        self.prev_crouch_action = crouch_action;
-        let jumping = jump_action || self.key_hold.held(0);
-        let sprinting = sprint_action || self.key_hold.held(1);
-        let crouching = crouch_action || self.key_hold.held(2);
+        // All of these are game-mapped action bits. Do not mix in physical
+        // keyboard state here: that would diverge from in-game remaps and from
+        // gamepad bindings.
+        let jumping = jump_action;
+        let sprinting = sprint_action;
+        let crouching = crouch_action;
         let attacked_just_now = !self.attacking_last_frame && attacking;
         let blocked_just_now = !self.blocking_last_frame && blocking;
         let used_tool_just_now = !self.using_tool_last_frame && using_tool;

@@ -9,11 +9,10 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use minhook::MinHook;
 
 use crate::{
     bindings::{COMBAT_ART_UID_MAX, COMBAT_ART_UID_MIN, PROSTHETIC_UID_MAX, PROSTHETIC_UID_MIN},
-    menu_probe,
+    hook_util, menu_probe,
 };
 
 // Main pause-menu components are static for Sekiro 1.6.0.0. Combat arts are
@@ -117,35 +116,27 @@ pub struct MenuSelection {
 /// supported Sekiro build. This lets startup install hooks as soon as the code
 /// is usable instead of relying on a fixed delay.
 pub fn code_ready() -> bool {
-    has_expected_prefix(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX)
+    menu_probe::range_executable(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX.len())
+        && menu_probe::has_expected_prefix(MAIN_MENU_DIALOG_CTOR, &MAIN_MENU_DIALOG_CTOR_PREFIX)
 }
 
 pub fn install_hooks() -> Result<()> {
-    if !has_expected_prefix(MAIN_MENU_DIALOG_CTOR, MAIN_MENU_DIALOG_CTOR_PREFIX) {
+    if !code_ready() {
         return Err(anyhow!(
             "unsupported Sekiro executable: menu dialog signature does not match 1.6.0.0"
         ));
     }
-    unsafe {
-        let dialog_ctor = MinHook::create_hook(
-            MAIN_MENU_DIALOG_CTOR as *mut c_void,
-            main_menu_dialog_ctor_detour as *mut c_void,
-        )
-        .map_err(|error| anyhow!("install main-menu dialog hook: {error:?}"))?;
-        let dialog_ctor: MainMenuDialogCtorFn = mem::transmute(dialog_ctor);
-        MAIN_MENU_DIALOG_CTOR_ORIG
-            .set(dialog_ctor)
-            .map_err(|_| anyhow!("set main-menu dialog original"))?;
-    }
+    let dialog_ctor = hook_util::create_hook_with_retry(
+        MAIN_MENU_DIALOG_CTOR as *mut c_void,
+        main_menu_dialog_ctor_detour as *mut c_void,
+        "main-menu dialog ctor",
+        true,
+    )?;
+    let dialog_ctor: MainMenuDialogCtorFn = unsafe { mem::transmute(dialog_ctor) };
+    MAIN_MENU_DIALOG_CTOR_ORIG
+        .set(dialog_ctor)
+        .map_err(|_| anyhow!("set main-menu dialog original"))?;
     Ok(())
-}
-
-fn has_expected_prefix(address: usize, expected: [u8; 16]) -> bool {
-    if !menu_probe::range_readable(address, expected.len()) {
-        return false;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, expected.len()) };
-    bytes == expected
 }
 
 /// Read the highlighted equipment item directly from the InventoryUnit row

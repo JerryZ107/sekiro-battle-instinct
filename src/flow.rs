@@ -9,9 +9,8 @@ use std::{
 };
 
 use anyhow::anyhow;
-use minhook::MinHook;
 
-use crate::{frame::Frames, game};
+use crate::{frame::Frames, game, hook_util};
 
 // PlayerIns -> module registry -> SprjChrDataModule.
 const PLAYER_MODULE_REGISTRY_OFFSET: usize = 0x1ff8;
@@ -141,8 +140,7 @@ pub fn install_damage_hook() -> anyhow::Result<()> {
     unsafe {
         let target = game::PLAYER_DAMAGE_REACTION as *mut c_void;
         let detour = damage_reaction_detour as *mut c_void;
-        let original = MinHook::create_hook(target, detour)
-            .map_err(|status| anyhow!("MinHook failed for player damage reaction: {status:?}"))?;
+        let original = hook_util::create_hook_with_retry(target, detour, "player damage reaction", true)?;
         let original: DamageHookFn = mem::transmute(original);
         DAMAGE_HOOK_ORIG
             .set(original)
