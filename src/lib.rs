@@ -261,7 +261,6 @@ fn modify(path: &Path) {
         frame_perf::mark(frame_perf::EventId::GameplayLogicDisabled);
     }
     let damage_hook_disabled = path.join("disable_damage_hook.enable").is_file();
-    let game_dir = path.to_path_buf();
     let path = path.join("battle_instinct.cfg");
     load_console::print_line("等待游戏代码就绪…");
     let ready_started = Instant::now();
@@ -348,12 +347,6 @@ fn modify(path: &Path) {
             log::error!("Failed to enable MinHook hooks: {error:?}");
             load_console::print_line(&format!("  ✗ 启用 Hook 失败: {error:?}"));
         } else {
-            // enable_all_hooks() also re-armed the present detours created in
-            // parked state. Re-park them (unless a marker asks to keep the
-            // overlay hook permanently mounted for A/B diagnostics).
-            if let Err(error) = ui::mount_present_hooks_after_startup(Some(&game_dir)) {
-                log::warn!("ui: present hook mount policy: {error:#}");
-            }
             log::warn!("Paper Jutsu hook enabled (process_input={process_input_hook_ready}).");
         }
         Ok::<_, anyhow::Error>(())
@@ -375,7 +368,7 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
     };
 
     let mod_started = Instant::now();
-    if GAMEPLAY_LOGIC_ENABLED.load(Ordering::Acquire) {
+    if GAMEPLAY_LOGIC_ENABLED.load(Ordering::Acquire) && !crate::ui::overlay_open() {
         if let Some(state) = STATE.get() {
             // Safety: the guard prevents concurrent/re-entrant access. The UI and
             // background threads never read or mutate `Mod`.

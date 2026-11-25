@@ -1,8 +1,7 @@
 //! Frame pacing diagnostics.
 //!
-//! The game-facing API (record_input_hook / before_present / mark) is
-//! lock-free: each call performs a bounded number of atomic stores into a
-//! pre-allocated ring buffer. All statistics, formatting and disk I/O happen
+//! The game-facing API (record_input_hook / mark) is lock-free: each call
+//! performs a bounded number of atomic stores into a pre-allocated ring buffer. All statistics, formatting and disk I/O happen
 //! on dedicated threads. On the DXGI flip path (exclusive fullscreen) even a
 //! nanosecond-scale lock can serialize a Present; keeping the game threads
 //! allocation- and lock-free is the whole point of this module.
@@ -13,7 +12,7 @@ use std::{
     path::Path,
     sync::{
         OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         mpsc::{SyncSender, sync_channel},
     },
     thread,
@@ -53,8 +52,6 @@ pub enum EventId {
     GameplayLogicDisabled,
     PaperInventoryRescan,
     EmblemScan,
-    PresentHookEnable,
-    PresentHookDisable,
 }
 
 impl EventId {
@@ -70,8 +67,6 @@ impl EventId {
             EventId::GameplayLogicDisabled => 7,
             EventId::PaperInventoryRescan => 8,
             EventId::EmblemScan => 9,
-            EventId::PresentHookEnable => 10,
-            EventId::PresentHookDisable => 11,
         }
     }
 
@@ -87,8 +82,6 @@ impl EventId {
             7 => "GAMEPLAY_LOGIC_DISABLED",
             8 => "PAPER_INVENTORY_RESCAN",
             9 => "EMBLEM_SCAN",
-            10 => "PRESENT_HOOK_ENABLE",
-            11 => "PRESENT_HOOK_DISABLE",
             _ => "UNKNOWN",
         }
     }
@@ -115,16 +108,6 @@ static TICK_POS: AtomicU64 = AtomicU64::new(0);
 static LAST_TICK_US: AtomicU64 = AtomicU64::new(0);
 static TICK_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// One timestamp per hooked Present. Only written while the Present hook is
-/// enabled (key editor open).
-static PRESENT_RING: [AtomicU64; RING_LEN] = [const { AtomicU64::new(0) }; RING_LEN];
-static PRESENT_POS: AtomicU64 = AtomicU64::new(0);
-static LAST_PRESENT_US: AtomicU64 = AtomicU64::new(0);
-/// True only while the Present detour is mounted. Lets the aggregator ignore
-/// stale present samples after the overlay is closed and fall back to ticks.
-static PRESENT_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
-static PRESENT_GENERATION: AtomicU64 = AtomicU64::new(0);
-
 static EVENT_RING: [AtomicU64; EVENT_RING_LEN] = [const { AtomicU64::new(0) }; EVENT_RING_LEN];
 static EVENT_POS: AtomicU64 = AtomicU64::new(0);
 
@@ -142,11 +125,6 @@ static INP_GAP_MAX_US: AtomicU64 = AtomicU64::new(0);
 static OVL_SAMPLES: AtomicU64 = AtomicU64::new(0);
 static OVL_SUM_US: AtomicU64 = AtomicU64::new(0);
 static OVL_MAX_US: AtomicU64 = AtomicU64::new(0);
-static PAINT_SAMPLES: AtomicU64 = AtomicU64::new(0);
-static PAINT_SUM_US: AtomicU64 = AtomicU64::new(0);
-static PAINT_MAX_US: AtomicU64 = AtomicU64::new(0);
-static UPLOAD_SUM_US: AtomicU64 = AtomicU64::new(0);
-static UPLOAD_MAX_US: AtomicU64 = AtomicU64::new(0);
 
 #[inline(always)]
 fn ring_push(ring: &[AtomicU64; RING_LEN], pos: &AtomicU64, value: u64) {
@@ -203,15 +181,6 @@ pub fn record_overlay_draw(us: u64) {
     OVL_MAX_US.fetch_max(us, Ordering::Relaxed);
 }
 
-/// Record GDI paint and texture-upload costs from the paint worker.
-pub fn record_paint_worker(paint_us: u64, upload_us: u64) {
-    PAINT_SAMPLES.fetch_add(1, Ordering::Relaxed);
-    PAINT_SUM_US.fetch_add(paint_us, Ordering::Relaxed);
-    PAINT_MAX_US.fetch_max(paint_us, Ordering::Relaxed);
-    UPLOAD_SUM_US.fetch_add(upload_us, Ordering::Relaxed);
-    UPLOAD_MAX_US.fetch_max(upload_us, Ordering::Relaxed);
-}
-
 /// Event-level marker (menu open/close, refreshes, hook park/unpark).
 /// Never called on the per-frame hot path except through these edges.
 pub fn mark(event: EventId) {
@@ -222,28 +191,6 @@ pub fn mark(event: EventId) {
     let seq = EVENT_POS.fetch_add(1, Ordering::Relaxed);
     let value = now | (event.index() << EVENT_SHIFT);
     EVENT_RING[(seq & EVENT_RING_MASK) as usize].store(value, Ordering::Relaxed);
-}
-
-/// Track whether Present samples are currently meaningful. Mounting also
-/// clears the inter-frame clock: otherwise the first Present after a long
-/// parked interval would report the whole closed-editor period as one giant
-/// LONG frame.
-pub fn set_present_stream_active(active: bool) {
-    PRESENT_STREAM_ACTIVE.store(active, Ordering::Release);
-    LAST_PRESENT_US.store(0, Ordering::Release);
-    PRESENT_GENERATION.fetch_add(1, Ordering::AcqRel);
-}
-
-/// Called from the Present detour while the hook is enabled.
-pub fn before_present() {
-    let now = now_us();
-    if now == 0 {
-        return;
-    }
-    let prev = LAST_PRESENT_US.swap(now, Ordering::Relaxed);
-    if prev != 0 {
-        ring_push(&PRESENT_RING, &PRESENT_POS, now | sample_flags());
-    }
 }
 
 //----------------------------------------------------------------------------
@@ -271,11 +218,11 @@ pub fn init(game_dir: &Path) {
             let mut file = BufWriter::new(file);
             let _ = writeln!(
                 file,
-                "# Paper Jutsu frame timing: one summary per second (src=present|tick); LONG lines are individual frames >= {LONG_FRAME_MS} ms"
+                "# Paper Jutsu frame timing: one summary per second (src=tick); LONG lines are individual frames >= {LONG_FRAME_MS} ms"
             );
             let _ = writeln!(
                 file,
-                "# time_s fps avg_ms p99_ms max_ms frames ui_frames menu_frames gt16.7 gt25 gt33 src hook_samples mod_avg_us mod_max_us orig_avg_us orig_max_us update_gap_max_ms ovl_avg_us ovl_max_us paint_avg_us paint_max_us upload_avg_us upload_max_us"
+                "# time_s fps avg_ms p99_ms max_ms frames ui_frames menu_frames gt16.7 gt25 gt33 src hook_samples mod_avg_us mod_max_us orig_avg_us orig_max_us update_gap_max_ms ovl_avg_us ovl_max_us"
             );
             let _ = file.flush();
             while let Ok(line) = receiver.recv() {
@@ -370,12 +317,9 @@ fn flush_long(sender: &SyncSender<String>, source: &str, deltas: &[(f32, u64)]) 
 
 fn aggregator_loop(sender: SyncSender<String>) {
     let mut tick = RingReader::new();
-    let mut present = RingReader::new();
     let mut events = RingReader::new();
     let mut tick_ms: Vec<(f32, u64)> = Vec::with_capacity(1024);
-    let mut present_ms: Vec<(f32, u64)> = Vec::with_capacity(1024);
     let mut tick_flags: Vec<u64> = Vec::with_capacity(1024);
-    let mut present_flags: Vec<u64> = Vec::with_capacity(1024);
     let mut sorted: Vec<f32> = Vec::with_capacity(1024);
     let mut window_started = Instant::now();
 
@@ -393,37 +337,11 @@ fn aggregator_loop(sender: SyncSender<String>) {
             tick_ms.clear();
             tick_flags.clear();
         }
-        let present_generation = PRESENT_GENERATION.load(Ordering::Acquire);
-        if present.generation != present_generation {
-            present.generation = present_generation;
-            present.prev_us = 0;
-            present_ms.clear();
-            present_flags.clear();
-        }
-
         let tick_start = tick_ms.len();
-        let present_start = present_ms.len();
         drain_stream(&TICK_RING, &TICK_POS, &mut tick, &mut tick_ms, &mut tick_flags);
-        drain_stream(
-            &PRESENT_RING,
-            &PRESENT_POS,
-            &mut present,
-            &mut present_ms,
-            &mut present_flags,
-        );
-        // LONG events are edge reports, so only inspect the slices drained now
-        // rather than re-reporting the whole accumulated window every 100 ms.
+        // LONG events are edge reports, so only inspect the slice drained now
+        // rather than re-reporting the whole accumulated window every 250 ms.
         flush_long(&sender, "tick", &tick_ms[tick_start..]);
-        flush_long(&sender, "present", &present_ms[present_start..]);
-
-        let present_active = PRESENT_STREAM_ACTIVE.load(Ordering::Acquire);
-        if !present_active {
-            // Drop samples left over from the editor session so the next
-            // one-second summary is based on the tick clock, not a partial
-            // present window.
-            present_ms.clear();
-            present_flags.clear();
-        }
 
         if window_started.elapsed() < WINDOW {
             continue;
@@ -431,20 +349,10 @@ fn aggregator_loop(sender: SyncSender<String>) {
         let elapsed = window_started.elapsed().as_secs_f32().max(0.001);
         window_started = Instant::now();
 
-        // Prefer the Present stream while the hook is mounted; otherwise the
-        // tick stream is the authoritative pacing clock (the game main thread
-        // ticks once per presented frame under vsync).
-        let (deltas, flags, source) =
-            if present_active && !present_ms.is_empty() && present_ms.len() >= tick_ms.len() / 2 {
-                (present_ms.as_slice(), present_flags.as_slice(), "present")
-            } else {
-                (tick_ms.as_slice(), tick_flags.as_slice(), "tick")
-            };
+        let (deltas, flags, source) = (tick_ms.as_slice(), tick_flags.as_slice(), "tick");
         if deltas.is_empty() {
             tick_ms.clear();
-            present_ms.clear();
             tick_flags.clear();
-            present_flags.clear();
             continue;
         }
 
@@ -474,25 +382,10 @@ fn aggregator_loop(sender: SyncSender<String>) {
         let ovl_samples = OVL_SAMPLES.swap(0, Ordering::Relaxed);
         let ovl_sum = OVL_SUM_US.swap(0, Ordering::Relaxed);
         let ovl_max = OVL_MAX_US.swap(0, Ordering::Relaxed);
-        let paint_samples = PAINT_SAMPLES.swap(0, Ordering::Relaxed);
-        let paint_sum = PAINT_SUM_US.swap(0, Ordering::Relaxed);
-        let paint_max = PAINT_MAX_US.swap(0, Ordering::Relaxed);
-        let upload_sum = UPLOAD_SUM_US.swap(0, Ordering::Relaxed);
-        let upload_max = UPLOAD_MAX_US.swap(0, Ordering::Relaxed);
         let ovl_avg = if ovl_samples == 0 {
             0.0
         } else {
             ovl_sum as f64 / ovl_samples as f64
-        };
-        let paint_avg = if paint_samples == 0 {
-            0.0
-        } else {
-            paint_sum as f64 / paint_samples as f64
-        };
-        let upload_avg = if paint_samples == 0 {
-            0.0
-        } else {
-            upload_sum as f64 / paint_samples as f64
         };
         let mod_avg = if samples == 0 {
             0.0
@@ -509,13 +402,11 @@ fn aggregator_loop(sender: SyncSender<String>) {
         emit(
             &sender,
             format!(
-                "{secs:9.3}s fps={fps:6.1} avg_ms={avg:7.3} p99_ms={p99:7.3} max_ms={max:7.3} frames={count:4} ui_frames={ui_frames} menu_frames={menu_frames} gt16.7={over_16_7} gt25={over_25} gt33={over_33} src={source} hook_samples={samples} mod_avg_us={mod_avg:.1} mod_max_us={mod_max} orig_avg_us={orig_avg:.1} orig_max_us={orig_max} update_gap_max_ms={:.2} ovl_avg_us={ovl_avg:.1} ovl_max_us={ovl_max} paint_avg_us={paint_avg:.1} paint_max_us={paint_max} upload_avg_us={upload_avg:.1} upload_max_us={upload_max}",
+                "{secs:9.3}s fps={fps:6.1} avg_ms={avg:7.3} p99_ms={p99:7.3} max_ms={max:7.3} frames={count:4} ui_frames={ui_frames} menu_frames={menu_frames} gt16.7={over_16_7} gt25={over_25} gt33={over_33} src={source} hook_samples={samples} mod_avg_us={mod_avg:.1} mod_max_us={mod_max} orig_avg_us={orig_avg:.1} orig_max_us={orig_max} update_gap_max_ms={:.2} ovl_avg_us={ovl_avg:.1} ovl_max_us={ovl_max}",
                 gap_max as f64 / 1000.0
             ),
         );
         tick_ms.clear();
-        present_ms.clear();
         tick_flags.clear();
-        present_flags.clear();
     }
 }
