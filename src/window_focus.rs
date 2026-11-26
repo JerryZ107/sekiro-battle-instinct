@@ -1,8 +1,8 @@
 //! Startup-only window focus workaround.
 //!
 //! Sekiro's exclusive-fullscreen path can stutter until the window loses and
-//! regains foreground (the same thing a manual Alt+Tab does). This module
-//! performs one minimize/restore cycle shortly after the mod starts.
+//! regains foreground (the same thing a manual Alt+Tab does). This module waits
+//! until gameplay data exists, then sends a real Alt+Tab out/back sequence.
 //!
 //! Disable with `disable_auto_alt_tab.enable` in the game directory.
 
@@ -17,11 +17,16 @@ use std::{
 use windows::Win32::{
     Foundation::{BOOL, HWND, LPARAM},
     System::Threading::GetCurrentProcessId,
-    UI::WindowsAndMessaging::{
-        BringWindowToTop, EnumWindows, GW_OWNER, GetClassNameW, GetShellWindow, GetWindow, GetWindowThreadProcessId,
-        IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
+    UI::{
+        Input::KeyboardAndMouse::{KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_MENU, VK_TAB, keybd_event},
+        WindowsAndMessaging::{
+            BringWindowToTop, EnumWindows, GW_OWNER, GetClassNameW, GetForegroundWindow, GetWindow,
+            GetWindowThreadProcessId, IsWindowVisible, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
+        },
     },
 };
+
+use crate::game;
 
 static FOUND: AtomicIsize = AtomicIsize::new(0);
 
@@ -65,38 +70,61 @@ pub fn enabled(game_dir: &Path) -> bool {
     !game_dir.join("disable_auto_alt_tab.enable").is_file()
 }
 
-/// Run one minimize/restore cycle after the game has had time to settle into
-/// its fullscreen mode. This is the programmatic equivalent of Alt+Tab out and
-/// back, without injecting keyboard input.
+fn send_alt_tab() {
+    unsafe {
+        keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
+        keybd_event(VK_TAB.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
+        keybd_event(VK_TAB.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+    }
+}
+
+/// Wait until the player object exists, then Alt+Tab out and back once.
 pub fn schedule_after_startup() {
     let _ = thread::Builder::new()
         .name("paper-jutsu-window-focus".into())
         .spawn(|| {
-            thread::sleep(Duration::from_secs(6));
+            log::warn!("window focus: waiting for gameplay before auto alt-tab");
+            let mut gameplay = false;
+            for _ in 0..120 {
+                if game::player_chr_data_module().is_some() {
+                    gameplay = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+            if !gameplay {
+                log::warn!("window focus: gameplay not detected after 60s; running fallback anyway");
+            }
+            // Give the first gameplay frames / fullscreen transition time to settle.
+            thread::sleep(Duration::from_millis(1500));
+
             let Some(hwnd) = find_game_window() else {
                 log::warn!("window focus: CSclass window not found; skip auto alt-tab");
                 return;
             };
-            log::warn!("window focus: auto alt-tab minimize/restore hwnd={:?}", hwnd.0);
-            let minimized = unsafe { ShowWindow(hwnd, SW_MINIMIZE) }.as_bool();
-            if !minimized {
-                let shell = unsafe { GetShellWindow() };
-                if !shell.0.is_null() {
-                    unsafe {
-                        let _ = SetForegroundWindow(shell);
-                    }
+            log::warn!("window focus: sending Alt+Tab out/back hwnd={:?}", hwnd.0);
+            send_alt_tab();
+            thread::sleep(Duration::from_millis(450));
+            send_alt_tab();
+            thread::sleep(Duration::from_millis(450));
+
+            if unsafe { GetForegroundWindow() } != hwnd {
+                log::warn!("window focus: Alt+Tab did not restore foreground; using minimize/restore fallback");
+                let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+                thread::sleep(Duration::from_millis(300));
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                    let _ = BringWindowToTop(hwnd);
+                    let _ = SetForegroundWindow(hwnd);
+                }
+                thread::sleep(Duration::from_millis(150));
+                unsafe {
+                    let _ = SetForegroundWindow(hwnd);
                 }
             }
-            thread::sleep(Duration::from_millis(300));
-            unsafe {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                let _ = BringWindowToTop(hwnd);
-                let _ = SetForegroundWindow(hwnd);
-            }
-            thread::sleep(Duration::from_millis(150));
-            unsafe {
-                let _ = SetForegroundWindow(hwnd);
-            }
-            log::warn!("window focus: auto alt-tab sequence done");
+            log::warn!("window focus: auto Alt+Tab sequence done (foreground={})", unsafe {
+                GetForegroundWindow() == hwnd
+            });
         });
 }
