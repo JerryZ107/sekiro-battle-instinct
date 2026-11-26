@@ -240,7 +240,6 @@ unsafe extern "system" fn clip_cursor_detour(rect: *const RECT) -> BOOL {
 }
 
 unsafe extern "system" fn present_detour(swapchain: *mut c_void, sync: u32, flags: u32) -> HRESULT {
-    let sync = crate::fps_unlock::on_present(sync);
     crate::frame_perf::record_present(sync);
     unsafe { prepare_window_hook(swapchain) };
     if !RENDERER_READY.load(Ordering::Acquire) && !RENDERER_FAILED.load(Ordering::Acquire) {
@@ -264,7 +263,6 @@ unsafe extern "system" fn present1_detour(
     flags: u32,
     parameters: *const c_void,
 ) -> HRESULT {
-    let sync = crate::fps_unlock::on_present(sync);
     crate::frame_perf::record_present(sync);
     unsafe { prepare_window_hook(swapchain) };
     if !RENDERER_READY.load(Ordering::Acquire) && !RENDERER_FAILED.load(Ordering::Acquire) {

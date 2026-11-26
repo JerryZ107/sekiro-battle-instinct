@@ -70,11 +70,7 @@
 - `no_gamepad.enable`：跳过 `gilrs` 初始化，键盘玩家可用；也是排查启动卡死的第一候选开关。
 - 以上 marker 都放在 `sekiro.exe` 同目录。
 
-## 可选 FPS 解锁（P2）
+## 已移除的实验性 FPS 解锁
 
-- 新模块 `src/fps_unlock.rs`，默认惰性：只有游戏目录存在 `fps_unlock.cfg` 且 `enabled = true` 才初始化。
-- 功能：帧率上限（`fps_offset`）、加载 300fps、`Present` 垂直同步覆盖、高帧速度补偿、`ChangeDisplaySettingsExW` 刷新率 Hook。
-- 安全：写入前校验当前帧间隔是否为 `1/60`；速度补偿先校验目标常量是否在已知表中；所有写入走 `VirtualProtect` + `WriteProcessMemory`。
-- `Present` 入口调用 `fps_unlock::on_present(sync)`，返回值再传给原始 `Present`；关闭时只是一次原子读。
-- 启动时读取当前刷新率并检查 `limit` 是否能整除刷新率；180Hz 下 60/90/180 平滑，120/144 会抽帧。
-- 配置与风险说明见 `docs/fps-unlock.md`。
+- 游戏侧 `fps_offset` / `speedfix` 补丁容易与显示器刷新率、垂直同步、全屏模式冲突（例如 180Hz 下 120fps 会 3:2 抽帧），已从主线移除。
+- 保留只读的 `frame_perf` 帧节奏诊断，以及 P0 的帧率自适应计时。

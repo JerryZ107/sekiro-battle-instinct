@@ -7,7 +7,6 @@ mod config;
 mod core;
 mod device;
 mod features;
-mod fps_unlock;
 mod frame;
 mod frame_perf;
 mod game;
@@ -369,12 +368,6 @@ fn modify(path: &Path) {
         init_step(4, "reading config and creating Mod (this includes gamepad init)");
         let modification = Mod::new(&path)?;
         init_step(5, "Mod created");
-        // Apply the optional game-side FPS patch only after the MOD config and
-        // gamepad init succeeded, so a bad cfg cannot leave the game unlocked.
-        if let Some(game_dir) = path.parent() {
-            log::warn!("init: checking optional fps_unlock.cfg");
-            crate::fps_unlock::init(game_dir);
-        }
         log::warn!(
             "perf: event-driven inventory refresh, no global keyboard hook, dynamic mouse hook, lock-free input state"
         );

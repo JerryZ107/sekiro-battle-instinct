@@ -2,13 +2,8 @@ use std::{
     ffi::c_void,
     fmt,
     num::NonZero,
-    sync::{
-        OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
-
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
 //----------------------------------------------------------------------------
 //
@@ -32,14 +27,6 @@ pub const PROCESS_INPUT_PREFIX: [u8; 16] = [
 pub const PLAYER_DAMAGE_REACTION_PREFIX: [u8; 16] = [
     0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x68, 0xB8, 0x48,
 ];
-
-/// Base address of the running `sekiro.exe`. Data-patch modules use
-/// `base + RVA`; the function/object constants above are absolute for the
-/// usual 0x140000000 image base.
-pub fn module_base() -> usize {
-    static BASE: OnceLock<usize> = OnceLock::new();
-    *BASE.get_or_init(|| unsafe { GetModuleHandleW(None).map(|module| module.0 as usize).unwrap_or(0) })
-}
 
 // objects
 pub const GAME_DATA: usize = 0x143D5AAC0;
