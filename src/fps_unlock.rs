@@ -23,7 +23,9 @@ use anyhow::{Result, anyhow, bail};
 use windows::{
     Win32::{
         Foundation::HWND,
-        Graphics::Gdi::{CDS_TYPE, DEVMODEW, DISP_CHANGE, DM_DISPLAYFREQUENCY},
+        Graphics::Gdi::{
+            CDS_TYPE, DEVMODEW, DISP_CHANGE, DM_DISPLAYFREQUENCY, GetDC, GetDeviceCaps, ReleaseDC, VREFRESH,
+        },
         System::{
             Diagnostics::Debug::{FlushInstructionCache, ReadProcessMemory, WriteProcessMemory},
             LibraryLoader::{GetModuleHandleW, GetProcAddress},
@@ -96,11 +98,13 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: false,
-            limit: 120,
-            loading_boost: true,
+            // 60 fps divides both 60 Hz and 180 Hz panels, so the default
+            // profile stays vanilla-smooth even when v-sync is on.
+            limit: 60,
+            loading_boost: false,
             vsync: VsyncMode::Auto,
-            speed_fix: true,
-            fullscreen_refresh: false,
+            speed_fix: false,
+            fullscreen_refresh: true,
         }
     }
 }
@@ -258,6 +262,24 @@ fn activate(config: &Config) -> Result<()> {
     VSYNC_MODE.store(config.vsync.code(), Ordering::Release);
     LOADING_BOOST.store(config.loading_boost, Ordering::Release);
 
+    if let Some(refresh) = display_refresh_hz() {
+        if limit_divides_refresh(config.limit, refresh) {
+            log::warn!(
+                "fps unlock: limit={} divides display {}Hz (even vblank pacing)",
+                config.limit,
+                refresh
+            );
+        } else {
+            log::warn!(
+                "fps unlock: limit={} does NOT divide display {}Hz; v-sync judder is likely - use {} or {}",
+                config.limit,
+                refresh,
+                refresh,
+                refresh / 2
+            );
+        }
+    }
+
     let delta = 1.0 / config.limit as f32;
     if !write_f32(fps_addr, delta) {
         bail!("cannot write fps delta at {fps_addr:#x}");
@@ -297,6 +319,24 @@ fn activate(config: &Config) -> Result<()> {
 
 fn is_default_delta(value: f32) -> bool {
     (value - DEFAULT_DELTA).abs() < 0.002
+}
+
+/// True when `limit` can be displayed with an integer number of vblanks at
+/// `refresh` Hz. 180 Hz accepts 60/90/180; 120/144 produce 3:2 or 5:4 judder.
+fn limit_divides_refresh(limit: u16, refresh: u16) -> bool {
+    limit > 0 && refresh > 0 && (limit == refresh || refresh % limit == 0)
+}
+
+fn display_refresh_hz() -> Option<u16> {
+    unsafe {
+        let hdc = GetDC(None);
+        if hdc.0.is_null() {
+            return None;
+        }
+        let hz = GetDeviceCaps(hdc, VREFRESH);
+        let _ = ReleaseDC(None, hdc);
+        u16::try_from(hz).ok().filter(|hz| *hz > 0)
+    }
 }
 
 fn nearest_speed_fix(limit: u16) -> f32 {
@@ -532,6 +572,27 @@ mod tests {
         let cfg = Config::parse("enabled=0\nlimit=1\n");
         assert!(!cfg.enabled);
         assert_eq!(cfg.limit, 30);
+    }
+
+    #[test]
+    fn defaults_are_vanilla_safe() {
+        let cfg = Config::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.limit, 60);
+        assert!(!cfg.loading_boost);
+        assert!(!cfg.speed_fix);
+        assert!(cfg.fullscreen_refresh);
+    }
+
+    #[test]
+    fn only_integer_vblank_limits_are_smooth() {
+        assert!(limit_divides_refresh(60, 180));
+        assert!(limit_divides_refresh(90, 180));
+        assert!(limit_divides_refresh(180, 180));
+        assert!(!limit_divides_refresh(120, 180));
+        assert!(!limit_divides_refresh(144, 180));
+        assert!(limit_divides_refresh(60, 60));
+        assert!(!limit_divides_refresh(120, 60));
     }
 
     #[test]

@@ -76,4 +76,5 @@
 - 功能：帧率上限（`fps_offset`）、加载 300fps、`Present` 垂直同步覆盖、高帧速度补偿、`ChangeDisplaySettingsExW` 刷新率 Hook。
 - 安全：写入前校验当前帧间隔是否为 `1/60`；速度补偿先校验目标常量是否在已知表中；所有写入走 `VirtualProtect` + `WriteProcessMemory`。
 - `Present` 入口调用 `fps_unlock::on_present(sync)`，返回值再传给原始 `Present`；关闭时只是一次原子读。
+- 启动时读取当前刷新率并检查 `limit` 是否能整除刷新率；180Hz 下 60/90/180 平滑，120/144 会抽帧。
 - 配置与风险说明见 `docs/fps-unlock.md`。

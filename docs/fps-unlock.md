@@ -7,13 +7,36 @@
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `false` | 总开关；也接受 `unlock` |
-| `limit` | `120` | 帧率上限，`30..=300` |
-| `loading_boost` | `true` | 加载画面把帧间隔写成 `1/300`，缩短加载时间 |
+| `limit` | `60` | 帧率上限，`30..=300`；**必须能整除刷新率** |
+| `loading_boost` | `false` | 加载画面把帧间隔写成 `1/300`；会改变加载阶段的节奏 |
 | `vsync` | `auto` | `auto` 透传游戏值；`on` 强制 `Present(1)`；`off` 强制 `Present(0)` |
-| `speed_fix` | `true` | `limit != 60` 时按上游 `speedFixMatrix` 选最接近 `limit/2` 的常量 |
-| `fullscreen_refresh` | `false` | Hook `ChangeDisplaySettingsExW`，清掉 `DM_DISPLAYFREQUENCY` |
+| `speed_fix` | `false` | `limit != 60` 时按上游 `speedFixMatrix` 选最接近 `limit/2` 的常量 |
+| `fullscreen_refresh` | `true` | Hook `ChangeDisplaySettingsExW`，阻止游戏全屏时强行改回 60Hz |
 
 示例见 `res/fps_unlock.cfg.example`。
+
+## 刷新率整除规则（最重要）
+
+垂直同步下，帧率上限最好能整除显示器刷新率：
+
+| 刷新率 | 平滑的 limit | 会抽帧的 limit |
+| --- | --- | --- |
+| 60Hz | 60 | 120、90、144 |
+| 180Hz | 60、90、180 | 120、144 |
+| 144Hz | 72、144 | 120、90 |
+
+例子：
+
+- 180Hz + 120fps = 1.5 个 vblank/帧，画面按 1、2、1、2 个 vblank 交替 → 平均 120fps 但看起来一顿一顿。
+- 180Hz + 60fps = 正好 3 个 vblank/帧 → 和原作一样顺。
+- 60Hz + 60fps = 1:1 → 顺。
+
+模块启动时会读取当前刷新率并写日志：
+
+```text
+fps unlock: limit=60 divides display 180Hz (even vblank pacing)
+fps unlock: limit=120 does NOT divide display 180Hz; v-sync judder is likely - use 180 or 90
+```
 
 ## 安全门禁
 
@@ -27,6 +50,7 @@
 
 - `>60fps` 会改变游戏逻辑/动画速度，`speed_fix` 只是近似补偿，不保证所有招式/敌人行为正常。
 - `fullscreen_refresh` 只 Hook 了 `ChangeDisplaySettingsExW`；没有实现上游的 `ResizeTarget` 内部刷新率 shellcode，独占全屏仍可能被锁 60Hz。建议配合无边框窗口。
+- 如果全屏刷新率仍然在 60/180 之间跳变，最稳的是游戏内切 **窗口化/无边框**，不要让游戏修改显示模式。
 - `vsync = off` 在窗口模式下仍可能被 DWM 同步；只有独占全屏/允许撕裂的交换链才有明显效果。
 - `fps_unlock.cfg` 只在启动时读取一次；修改后需要重启游戏。
 - `safe_mode.enable` 优先级更高：存在时 `fps_unlock` 也不会初始化。
