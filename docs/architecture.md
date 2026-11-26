@@ -67,3 +67,9 @@
 
 - 游戏侧 `fps_offset` / `speedfix` 补丁容易与显示器刷新率、垂直同步、全屏模式冲突（例如 180Hz 下 120fps 会 3:2 抽帧），已从主线移除。
 - 同时移除 `frame_perf` 采样/诊断；只保留 P0 的 MOD 内部计时缩放，它不写游戏内存、不改 `Present` 同步参数、不改刷新率。
+
+## UI/Overlay Ablation Test
+
+- `disable_overlay.enable`: skip `ui::start`, so no `Present`, `ResizeBuffers`, `Present1`, `GetRawInputData`, `SetCursorPos`, `ClipCursor` or `WndProc` hooks and no CPU painter.
+- Combat hooks (`process_input`, damage reaction, menu dialog) stay enabled.
+- Use it to distinguish overlay/Present-path stutter from the game/Windows exclusive-fullscreen path: if the stutter disappears, investigate the overlay; if it remains, the display path is responsible.

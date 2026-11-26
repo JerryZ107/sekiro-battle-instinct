@@ -419,10 +419,24 @@ fn modify(path: &Path) {
             load_console::print_line("  ✔ 菜单选中项 Hook 已安装");
         }
 
-        init_step(9, "starting UI hooks");
-        if let Err(error) = ui::start(ui_cfg_path) {
-            log::error!("ui/input hook startup failed: {error:#}");
-            load_console::print_line(&format!("  ✗ 输入/UI Hook 启动失败（战斗功能继续）: {error:#}"));
+        let overlay_disabled = path
+            .parent()
+            .map(|dir| dir.join("disable_overlay.enable").is_file())
+            .unwrap_or(false);
+        if overlay_disabled {
+            init_step(9, "UI/overlay disabled by disable_overlay.enable");
+            load_console::print_line("  UI/Overlay disabled (ablation test: combat hooks only)");
+            log::warn!(
+                "ui: disabled by disable_overlay.enable; Present/ResizeBuffers/Present1/RawInput/cursor/WndProc hooks and CPU painter will not be installed"
+            );
+        } else {
+            init_step(9, "starting UI hooks");
+            if let Err(error) = ui::start(ui_cfg_path) {
+                log::error!("ui/input hook startup failed: {error:#}");
+                load_console::print_line(&format!(
+                    "  UI hook startup failed (combat features continue): {error:#}"
+                ));
+            }
         }
         init_step(10, "enabling MinHook hooks");
         if let Err(error) = MinHook::enable_all_hooks() {
