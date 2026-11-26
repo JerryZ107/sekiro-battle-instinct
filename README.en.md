@@ -4,7 +4,9 @@
 
 [简体中文](README.md) | **English**
 
-A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on a two-key combat-art system and freely configurable keybindings. The in-game UI architecture is inspired by [kargoshakar/SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom).
+![Paper Jutsu demo](demo.gif)
+
+A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekiro-battle-instinct), focused on paper-doll damage mitigation and more flexible keybinding configuration. The in-game UI architecture is inspired by [kargoshakar/SekiroImGuiCustom](https://github.com/kargoshakar/SekiroImGuiCustom).
 
 ## 1. MOD Overview
 
@@ -12,15 +14,15 @@ A personal fork of [dec32/sekiro-battle-instinct](https://github.com/dec32/sekir
 
 Combat arts can now be freely rebound. Go to **Skills → Combat Arts**, highlight a combat art, and press `F` to open the keybinding editor.
 
-![Combat-art keybinding editor](moves.jpg)
+![Combat-art keybinding editor](moves_en.jpg)
 
 ### 1.2 Prosthetic Keybindings
 
 Prosthetic tools can also be freely rebound. Go to **Inventory → Prosthetic Tools**, highlight a prosthetic, and press `F` to open the editor. Both single-key and two-key triggers are supported.
 
-![Two-key prosthetic keybinding editor](hand1.jpg)
+![Two-key prosthetic keybinding editor](hand1_en.jpg)
 
-![Single-key prosthetic keybinding editor](hand2.jpg)
+![Single-key prosthetic keybinding editor](hand2_en.jpg)
 
 ### 1.3 Passive: Increased Spirit Emblem Cap
 
@@ -32,13 +34,13 @@ Prosthetic tools can also be freely rebound. Go to **Inventory → Prosthetic To
 
 ### 1.4 Passive: Paper Doll Damage Mitigation
 
-Incoming hit damage is divided into tiers based on its percentage of your maximum HP. When you have enough emblems, each hit spends 1 emblem to reduce that hit's HP loss by **60%**.
+Incoming hit damage is divided into tiers based on its percentage of your maximum HP. When you have enough emblems, each hit spends that tier's emblem cost to reduce the hit's HP loss by **60%**.
 
 | Damage tier | Single-hit damage as % of max HP | Effect with enough emblems |
 | --- | --- | --- |
 | Tier 1 | 1%–33% | Spend 1 emblem; reduce this hit's HP loss by 60% |
-| Tier 2 | 33%–66% | Spend 1 emblem; reduce this hit's HP loss by 60% |
-| Tier 3 | 66%–100% | Spend 1 emblem; reduce this hit's HP loss by 60% |
+| Tier 2 | 33%–66% | Spend 2 emblems; reduce this hit's HP loss by 60% |
+| Tier 3 | 66%–100% | Spend 3 emblems; reduce this hit's HP loss by 60% |
 
 When emblems are insufficient, the following fallback rules apply:
 
