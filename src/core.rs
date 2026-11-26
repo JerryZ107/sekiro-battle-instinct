@@ -134,7 +134,6 @@ impl Mod {
         let tools =
             config.tools.len() + usize::from(config.tool_on_t.is_some()) + usize::from(config.tool_on_q.is_some());
         log::warn!("keybinds: available filter arts={arts} tools={tools}");
-        crate::frame_perf::mark(crate::frame_perf::EventId::AvailabilityRefresh);
         self.config = config;
         self.reset_binding_runtime_state();
     }
@@ -238,7 +237,6 @@ impl Mod {
                     self.availability_uids = collect_availability_uids(&self.base_config);
                     self.availability_signature = None;
                     self.refresh_available_bindings(true);
-                    crate::frame_perf::mark(crate::frame_perf::EventId::ConfigReload);
                     log::warn!("keybinds: runtime config reloaded");
                 }
                 Err(error) => {

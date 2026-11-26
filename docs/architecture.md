@@ -34,7 +34,6 @@
 
 - `ActionFrame` 每帧只从输入读取一次，统一计算 11 个 token 的 `held/pressed`；`ArtComboWindow` 和 `ProstheticState` 共用，不再各自维护一套边沿状态。
 - `InventorySnapshot` 增加无锁原子镜像：`Emblem::tick` 不再每帧获取库存互斥锁；伤害路径的纸人库存读取也走原子快照。
-- `frame_perf` 改为 opt-in：默认不启动线程/ring/日志；需要排查时在游戏目录创建 `enable_frame_perf.enable`。
 - 未连接手柄时，`gilrs` 只每 500ms 探测一次重连，不再每帧泵 HID 事件。
 - Overlay renderer 初始化失败后设置 `RENDERER_FAILED`，避免每次 Present 重试 D3DCompile；`ResizeBuffers` 或打开 UI 时允许重试。
 - 伤害钩子缓存最近一次已校验的 `damage_info` 指针，避免连续受击重复做内存探针。
@@ -56,15 +55,9 @@
 - 注入类帧数（`BLOCK_INJECTION_DURATION`、`ATTACK_SUPRESSION_DURATION`、`PROSTHETIC_SUPPRESSION_DURATION`、`tool_min_use`）保持游戏原生帧，不做墙钟缩放，与上游 `dec32/sekiro-battle-instinct` 一致。
 - 配置中的 `*_frames` 字段仍按 60fps 存储；`Config::rl_window()/tool_window()/art_queue_delay()/tool_lock()` 返回 `Frames`，在计时器启动时再换算，避免启动阶段采样器尚未就绪时把窗口锁死在 60fps。
 
-### Present 侧帧节奏诊断
-
-- `frame_perf::record_present(sync)` 在每个 `Present`/`Present1` 入口记录时间戳，输出 `present_fps / present_avg_ms / present_p99_ms / present_max_ms / present_gt16.7 / present_gt33 / present_ui / present_sync0`。
-- `tick` 与 `present` 分别聚合：如果 `fps` 正常但 `present_max_ms` 高，说明渲染/垂直同步侧卡顿；如果 `present_fps` 正常但 `mod_max_us` 高，才是 MOD 自身开销。
-- `ResizeBuffers` 通过 generation 重置 Present 时钟，避免把 swap-chain 重建间隔误报成一次超长帧；超过 25ms 的 Present 仍会以 `LONG ... src=present` 单独记录。
-
 ## 启动诊断与安全模式
 
-- 启动阶段写入带步骤号的日志：`dll: DllMain ...`、`init[1]` 到 `init[11]`，分别对应帧率诊断、等待游戏代码、创建 Mod（含手柄初始化）、伤害钩子、输入钩子、菜单钩子、UI、MinHook 启用等阶段。
+- 启动阶段写入带步骤号的日志：`dll: DllMain ...`、`init[1]` 到 `init[11]`，分别对应启动诊断、等待游戏代码、创建 Mod（含手柄初始化）、伤害钩子、输入钩子、菜单钩子、UI、MinHook 启用等阶段。
 - 12 秒 watchdog：如果 `init` 在 12 秒内没有完成，会写出最后停留的步骤号，便于区分是 `wait_for_game_code`、`Mod::new`（gilrs 手柄枚举）还是 hook 安装卡住。
 - `safe_mode.enable`：只加载 DLL、写日志，跳过 chainload、所有 hook、手柄和 UI。用于确认 DLL 本身能否被游戏加载，不改变游戏行为。
 - `no_gamepad.enable`：跳过 `gilrs` 初始化，键盘玩家可用；也是排查启动卡死的第一候选开关。
@@ -73,4 +66,4 @@
 ## 已移除的实验性 FPS 解锁
 
 - 游戏侧 `fps_offset` / `speedfix` 补丁容易与显示器刷新率、垂直同步、全屏模式冲突（例如 180Hz 下 120fps 会 3:2 抽帧），已从主线移除。
-- 保留只读的 `frame_perf` 帧节奏诊断，以及 P0 的帧率自适应计时。
+- 同时移除 `frame_perf` 采样/诊断；只保留 P0 的 MOD 内部计时缩放，它不写游戏内存、不改 `Present` 同步参数、不改刷新率。

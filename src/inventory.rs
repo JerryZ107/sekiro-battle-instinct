@@ -183,7 +183,6 @@ fn refresh(force: bool, max_age: Option<Duration>) -> Option<InventorySnapshot> 
         });
 
     if stale {
-        crate::frame_perf::mark(crate::frame_perf::EventId::PaperInventoryRescan);
         let mut snapshot = scan(base)?;
         snapshot.scan_id = NEXT_SCAN_ID.fetch_add(1, Ordering::Relaxed);
         publish_atomics(&snapshot, menu_generation);

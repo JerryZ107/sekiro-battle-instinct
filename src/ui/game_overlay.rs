@@ -13,7 +13,6 @@ use std::{
         LazyLock, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Instant,
 };
 
 use anyhow::{Result, anyhow};
@@ -240,7 +239,6 @@ unsafe extern "system" fn clip_cursor_detour(rect: *const RECT) -> BOOL {
 }
 
 unsafe extern "system" fn present_detour(swapchain: *mut c_void, sync: u32, flags: u32) -> HRESULT {
-    crate::frame_perf::record_present(sync);
     unsafe { prepare_window_hook(swapchain) };
     if !RENDERER_READY.load(Ordering::Acquire) && !RENDERER_FAILED.load(Ordering::Acquire) {
         unsafe { ensure_renderer(swapchain) };
@@ -263,7 +261,6 @@ unsafe extern "system" fn present1_detour(
     flags: u32,
     parameters: *const c_void,
 ) -> HRESULT {
-    crate::frame_perf::record_present(sync);
     unsafe { prepare_window_hook(swapchain) };
     if !RENDERER_READY.load(Ordering::Acquire) && !RENDERER_FAILED.load(Ordering::Acquire) {
         unsafe { ensure_renderer(swapchain) };
@@ -288,7 +285,6 @@ unsafe extern "system" fn resize_buffers_detour(
     format: u32,
     flags: u32,
 ) -> HRESULT {
-    crate::frame_perf::reset_present_clock();
     if let Ok(mut renderer) = RENDERER.lock() {
         *renderer = None;
     }
@@ -392,9 +388,7 @@ unsafe fn render_overlay(swapchain: *mut c_void) {
     }
     let (x, y, w, h) = unpack_plan(DRAW_PLAN.load(Ordering::Acquire));
     let cursor = super::cursor_position();
-    let draw_started = Instant::now();
     let draw_result = active.draw(&swapchain, x, y, w, h, screen_w, screen_h, cursor);
-    crate::frame_perf::record_overlay_draw(draw_started.elapsed().as_micros() as u64);
     if let Err(error) = draw_result {
         log_render_error_once(&format!("overlay draw failed: {error:#}"));
         HAS_TEXTURE.store(false, Ordering::Release);

@@ -236,7 +236,6 @@ fn open_overlay(hwnd: HWND) -> Result<()> {
     game_overlay::reset_surface();
     paint_worker::clear();
     paint_worker::request_repaint();
-    crate::frame_perf::mark(crate::frame_perf::EventId::UiOpen);
     log::warn!(
         "ui: opened in-game key config uid={} name={} from menu uid={} category={}",
         uid,
@@ -292,7 +291,6 @@ fn close_overlay(state: &mut UiState) {
     CURSOR_VISIBLE.store(false, Ordering::Release);
     game_overlay::reset_surface();
     paint_worker::clear();
-    crate::frame_perf::mark(crate::frame_perf::EventId::UiClose);
     state.editor = None;
     state.game_hwnd = 0;
 }

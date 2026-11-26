@@ -117,7 +117,6 @@ impl Emblem {
         }
 
         if self.last_i != Some(i) {
-            crate::frame_perf::mark(crate::frame_perf::EventId::EmblemScan);
             log::warn!(
                 "emblem: skills A={} B={} C={} D={} E={} -> i={} cap={}",
                 cap_skills[0] as u8,
@@ -132,7 +131,6 @@ impl Emblem {
         }
 
         if cur != target {
-            crate::frame_perf::mark(crate::frame_perf::EventId::EmblemScan);
             unsafe { memory::write_u16(player, CAP_OFFSET, target as u16) };
             log::warn!("emblem: cap {} -> {} (i={})", cur, target, i);
         }

@@ -8,7 +8,6 @@ mod core;
 mod device;
 mod features;
 mod frame;
-mod frame_perf;
 mod game;
 mod game_menu;
 mod hook_util;
@@ -239,7 +238,7 @@ static INIT_DONE: AtomicBool = AtomicBool::new(false);
 fn init_step_name(step: u8) -> &'static str {
     match step {
         0 => "not started",
-        1 => "frame-perf init",
+        1 => "startup diagnostics",
         2 => "waiting for game code",
         3 => "game code checked",
         4 => "reading config / creating Mod (gamepad init)",
@@ -316,23 +315,16 @@ fn modify(path: &Path) {
     start_init_watchdog();
     let safe_mode = path.join("safe_mode.enable").is_file();
     if safe_mode {
-        log::warn!("init: safe mode is on - skipping frame-perf, hooks, gamepad and UI");
+        log::warn!("init: safe mode is on - skipping hooks, gamepad and UI");
         INIT_DONE.store(true, Ordering::Release);
         return;
     }
 
-    // Frame diagnostics are opt-in: they start two threads and record atomics
-    // on every input tick, which is pure overhead during normal play.
-    init_step(1, "initializing frame diagnostics");
-    let frame_perf_enabled = path.join("enable_frame_perf.enable").is_file();
-    if frame_perf_enabled {
-        frame_perf::init(path);
-    }
+    init_step(1, "initializing startup diagnostics");
     let gameplay_disabled = path.join("disable_gameplay_logic.enable").is_file();
     GAMEPLAY_LOGIC_ENABLED.store(!gameplay_disabled, Ordering::Release);
     if gameplay_disabled {
         log::warn!("diagnostic: gameplay MOD logic disabled by marker file");
-        frame_perf::mark(frame_perf::EventId::GameplayLogicDisabled);
     }
     let damage_hook_disabled = path.join("disable_damage_hook.enable").is_file();
     let path = path.join("battle_instinct.cfg");
@@ -376,7 +368,6 @@ fn modify(path: &Path) {
         init_step(6, "installing damage hook");
         if damage_hook_disabled {
             log::warn!("diagnostic: player damage reaction hook disabled by marker file");
-            frame_perf::mark(frame_perf::EventId::DamageHookDisabled);
             load_console::print_line("  伤害事件钩子已跳过（诊断模式）");
         } else if let Err(e) = features::flow::install_damage_hook() {
             log::error!("Failed to install damage reaction hook: {e:?}");
@@ -460,8 +451,6 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
         input_handler.as_mut().expect("input_handler is null")
     };
 
-    let perf_enabled = frame_perf::enabled();
-    let mod_started = perf_enabled.then(Instant::now);
     if GAMEPLAY_LOGIC_ENABLED.load(Ordering::Acquire) && !crate::ui::overlay_open() {
         if let Some(state) = STATE.get() {
             // Safety: the guard prevents concurrent/re-entrant access. The UI and
@@ -472,24 +461,13 @@ fn process_input(input_handler: *mut game::InputHandler, arg: usize) -> usize {
             }
         }
     }
-    let mod_us = mod_started
-        .map(|started| started.elapsed().as_micros() as u64)
-        .unwrap_or(0);
 
-    let orig_started = perf_enabled.then(Instant::now);
-    let result = if let Some(process_input_orig) = PROCESS_INPUT_ORIG.get() {
+    if let Some(process_input_orig) = PROCESS_INPUT_ORIG.get() {
         process_input_orig(input_handler, arg)
     } else {
         // Hook not fully ready: fall back to the raw game function.
         let process_input_orig: fn(*mut game::InputHandler, usize) -> usize =
             unsafe { mem::transmute(game::PROCESS_INPUT) };
         process_input_orig(input_handler, arg)
-    };
-    if perf_enabled {
-        let orig_us = orig_started
-            .map(|started| started.elapsed().as_micros() as u64)
-            .unwrap_or(0);
-        frame_perf::record_input_hook(mod_us, orig_us);
     }
-    result
 }

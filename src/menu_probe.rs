@@ -55,14 +55,6 @@ pub fn start_menu_monitor() {
                     let open = menu_open();
                     let was_open = MENU_WAS_OPEN.swap(open, Ordering::AcqRel);
                     MENU_OPEN_CACHED.store(open, Ordering::Release);
-                    if was_open != open {
-                        crate::frame_perf::reset_tick_clock();
-                        crate::frame_perf::mark(if open {
-                            crate::frame_perf::EventId::MenuOpen
-                        } else {
-                            crate::frame_perf::EventId::MenuClose
-                        });
-                    }
                     if was_open && !open {
                         // Consumers that need to rescan inventory only need an
                         // edge, not a per-frame menu probe. Keeping this as a
