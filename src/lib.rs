@@ -18,6 +18,7 @@ mod logger;
 mod memory;
 mod menu_probe;
 mod ui;
+mod window_focus;
 
 use core::Mod;
 use std::{
@@ -444,6 +445,14 @@ fn modify(path: &Path) {
             load_console::print_line(&format!("  ✗ 启用 Hook 失败: {error:?}"));
         } else {
             log::warn!("Paper Jutsu hook enabled (process_input={process_input_hook_ready}).");
+        }
+
+        if let Some(game_dir) = path.parent() {
+            if window_focus::enabled(game_dir) {
+                window_focus::schedule_after_startup();
+            } else {
+                log::warn!("window focus: disabled by disable_auto_alt_tab.enable");
+            }
         }
         Ok::<_, anyhow::Error>(())
     })();

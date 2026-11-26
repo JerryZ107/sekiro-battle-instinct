@@ -73,3 +73,10 @@
 - `disable_overlay.enable`: skip `ui::start`, so no `Present`, `ResizeBuffers`, `Present1`, `GetRawInputData`, `SetCursorPos`, `ClipCursor` or `WndProc` hooks and no CPU painter.
 - Combat hooks (`process_input`, damage reaction, menu dialog) stay enabled.
 - Use it to distinguish overlay/Present-path stutter from the game/Windows exclusive-fullscreen path: if the stutter disappears, investigate the overlay; if it remains, the display path is responsible.
+
+## 自动 Alt+Tab 窗口重置
+
+- 启动完成后 6 秒，后台线程找到当前进程的 `CSclass` 窗口，执行一次 `SW_MINIMIZE` -> 300ms -> `SW_RESTORE` + `SetForegroundWindow`。
+- 效果等价于手动 Alt+Tab 切出再切回，用于打破 Sekiro 独占全屏下的显示通路卡顿。
+- 默认启用；游戏目录放 `disable_auto_alt_tab.enable` 可关闭。
+- 不修改帧率上限、Present 同步参数或显示刷新率，只改变窗口前后台状态。
