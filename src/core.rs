@@ -8,10 +8,10 @@ use crate::{
     device::{Gamepad, is_key_down},
     features::{
         combat_art::{
-            ART_BLOCK_INJECTION_DURATION, ATTACK_SUPRESSION_DURATION, BLOCK_INJECTION_DURATION, CombatArt,
-            CombatArtState, Countdown, EMPOWERED_MORTAL_DRAW, HIGH_MONK, ICHIMONJI, ICHIMONJI_DOUBLE, MORTAL_DRAW,
-            PRAYING_STRIKES, PRAYING_STRIKES_EXORCISM, SENPO_LEAPING_KICKS, SHADOWFALL, SHADOWRUSH,
-            SLOT_SWAP_SETTLE_DURATION, art_fallback, combat_art_slot_matches, combo_action_mask, set_combat_art,
+            ART_INPUT_PAUSE_DURATION, ATTACK_SUPRESSION_DURATION, BLOCK_INJECTION_DURATION, CombatArt, CombatArtState,
+            Countdown, EMPOWERED_MORTAL_DRAW, HIGH_MONK, ICHIMONJI, ICHIMONJI_DOUBLE, MORTAL_DRAW, PRAYING_STRIKES,
+            PRAYING_STRIKES_EXORCISM, SENPO_LEAPING_KICKS, SHADOWFALL, SHADOWRUSH, SLOT_SWAP_SETTLE_DURATION,
+            art_fallback, combat_art_slot_matches, combo_action_mask, set_combat_art,
         },
         emblem_cap::Emblem,
         flow::Flow,
@@ -333,7 +333,7 @@ impl Mod {
                 if !self.combat_art.art_attack_latched {
                     // Released during settle / prime (common for quick `ee`): still fire a short
                     // B+A inject instead of cancelling into a bare block.
-                    self.combat_art.art_tap_frames = ART_BLOCK_INJECTION_DURATION.saturating_add(3);
+                    self.combat_art.art_tap_frames = ART_INPUT_PAUSE_DURATION.saturating_add(3);
                     log::debug!(
                         "ART_RELEASE→TAP hold={:?} tap={}",
                         token,
@@ -548,7 +548,7 @@ impl Mod {
         // which is the Shadowfall "first cast after swap → trailing R1" bug.
         if self.combat_art.attack_delay == 0 && self.combat_art.pending_rl_attack {
             self.combat_art.pending_rl_attack = false;
-            self.combat_art.art_block_inject_left = ART_BLOCK_INJECTION_DURATION;
+            self.combat_art.art_input_pause_left = ART_INPUT_PAUSE_DURATION;
         }
 
         // The combo keys themselves must never reach the game's native action
@@ -564,17 +564,18 @@ impl Mod {
         }
 
         // Sustained art fire:
-        // 1) first N frames: BLOCK only + suppress ATTACK (prevents a stray R1/whirlwind)
-        // 2) then: BLOCK+ATTACK while last combo token is held (charge / multi-hit)
-        //    For `ee`, the last token is Interact — hold e to keep injecting B+A (charge).
+        // 1) first N frames: pause synthetic input (all combo keys suppressed)
+        // 2) then: inject BLOCK+ATTACK while the last combo token is held
+        //    (charge / multi-hit). For `ee`, the last token is Interact.
         if self.combat_art.attack_delay == 0 {
             if let Some(token) = self.combat_art.hold_for_attack {
                 let held = self.combat_art.combo.token_held(token);
                 let tapping = self.combat_art.art_tap_frames > 0;
                 if held || tapping {
-                    if self.combat_art.art_block_inject_left > 0 {
-                        action::or_input(input_handler, BLOCK);
-                        self.combat_art.art_block_inject_left -= 1;
+                    if self.combat_art.art_input_pause_left > 0 {
+                        // Hold both keys for a short pause so the game does not
+                        // see an early attack edge, then inject B+A directly.
+                        self.combat_art.art_input_pause_left -= 1;
                     } else {
                         action::or_input(input_handler, VANILLA_ART_INPUT);
                         self.combat_art.art_attack_latched = true;

@@ -15,7 +15,9 @@ use crate::{
 // Combat-art injection timing (frames at 60 fps; Frames/actual conversion is
 // applied by the caller where needed).
 pub const BLOCK_INJECTION_DURATION: u8 = 10;
-pub const ART_BLOCK_INJECTION_DURATION: u8 = 2;
+/// Pause the synthetic art input for two frames after the slot swap settle,
+/// then inject BLOCK+ATTACK directly.
+pub const ART_INPUT_PAUSE_DURATION: u8 = 2;
 pub const ATTACK_SUPRESSION_DURATION: u8 = 4;
 pub const SLOT_SWAP_SETTLE_DURATION: u8 = 6;
 
@@ -183,8 +185,8 @@ pub struct CombatArtState {
     pub suppress_late_rl_skill: bool,
     /// Keep injecting ATTACK while this combo's last token stays held.
     pub hold_for_attack: Option<ArtToken>,
-    /// Remaining BLOCK-only prime frames (ATTACK suppressed) at art start.
-    pub art_block_inject_left: u8,
+    /// Remaining settle frames before injecting BLOCK+ATTACK at art start.
+    pub art_input_pause_left: u8,
     /// True after the first BLOCK|ATTACK frame that opens the art.
     pub art_attack_latched: bool,
     /// Native action bits of the combo that fired; stripped until injection ends.
@@ -210,7 +212,7 @@ impl CombatArtState {
             pending_rl_attack: false,
             suppress_late_rl_skill: false,
             hold_for_attack: None,
-            art_block_inject_left: 0,
+            art_input_pause_left: 0,
             art_attack_latched: false,
             combo_suppress_mask: 0,
             queued_art: None,
@@ -227,13 +229,13 @@ impl CombatArtState {
         self.hold_for_attack.is_some()
             || self.pending_rl_attack
             || self.attack_delay > 0
-            || self.art_block_inject_left > 0
+            || self.art_input_pause_left > 0
             || self.art_tap_frames > 0
     }
 
     pub fn clear_fire(&mut self) {
         self.hold_for_attack = None;
-        self.art_block_inject_left = 0;
+        self.art_input_pause_left = 0;
         self.art_attack_latched = false;
         self.pending_rl_attack = false;
         self.art_tap_frames = 0;
@@ -283,13 +285,13 @@ impl CombatArtState {
 
     pub fn arm_combo_fire(&mut self, hold: ArtToken, held: bool) {
         self.hold_for_attack = Some(hold);
-        self.art_block_inject_left = 0;
+        self.art_input_pause_left = 0;
         self.art_attack_latched = false;
         // If the last key is already up (common when flushing a queued tap), auto-fire briefly.
         self.art_tap_frames = if held {
             0
         } else {
-            ART_BLOCK_INJECTION_DURATION.saturating_add(3)
+            ART_INPUT_PAUSE_DURATION.saturating_add(3)
         };
     }
 }
