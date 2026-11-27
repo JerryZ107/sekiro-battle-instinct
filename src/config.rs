@@ -54,6 +54,14 @@ pub struct ToolCombo {
     pub tail: ToolTail,
 }
 
+/// Three-key prosthetic sequence: first → middle → tail.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ToolCombo3 {
+    pub first: ToolFirst,
+    pub middle: ToolFirst,
+    pub tail: ToolTail,
+}
+
 impl ToolFirst {
     #[inline(always)]
     pub const fn index(self) -> u8 {
@@ -97,6 +105,12 @@ impl ComboKey for ToolCombo {
     }
 }
 
+impl ComboKey for ToolCombo3 {
+    fn index(self) -> usize {
+        ((self.first.index() as usize) << 8) | ((self.middle.index() as usize) << 4) | self.tail.index() as usize
+    }
+}
+
 /// Default `rl` (Block→Attack) combo window in seconds @60fps.
 pub const DEFAULT_RL_WINDOW_SECS: f32 = 0.3;
 /// Default two-key prosthetic window (first → q/t) in seconds @60fps (~18 frames).
@@ -128,12 +142,16 @@ pub fn tool_multi_lock_secs_to_frames(secs: f32) -> u16 {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Combat arts keyed by r/l/e/f + direction pairs (or empty for ∅).
+    /// Combat arts keyed by two- or three-token r/l/e/f + direction combos
+    /// (or empty for ∅).
     pub arts: ComboTable<ArtCombo, UID>,
     /// Name contains `瞬发` / `instant`: block + direction edge fires immediately (e.g. `r↓`).
     pub instant_arts: ComboTable<ArtCombo, UID>,
-    /// Two-key prosthetic binds: (↑↓←→|r|l|e|f|q) then (q|t).
+    /// Two-key prosthetic binds: (↑↓←→|r|l|e|f|q) then a tail key.
     pub tools: ComboTable<ToolCombo, UID>,
+    /// Three-key prosthetic binds: first → middle → tail. Each stage uses
+    /// the same 0.3s perception window and requires upstream keys to stay held.
+    pub tools3: ComboTable<ToolCombo3, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,
     /// Unique bare-`q` prosthetic (same fire style as bare `t`; does not become return-default).
@@ -160,15 +178,19 @@ impl Config {
         self.arts.get(&combo).copied()
     }
 
-    /// Generic combo lookup for the normal two-token buffer. Supported instant
-    /// arts are still handled by the same-frame instant path first; this fallback
-    /// lets UI rebinds of instant-marked UIDs use any legal two-token combo.
+    /// Generic combo lookup for the normal two-/three-token buffer. Supported
+    /// instant arts are still handled by the same-frame instant path first; this
+    /// fallback lets UI rebinds of instant-marked UIDs use any legal combo.
     pub fn art_or_instant(&self, combo: ArtCombo) -> Option<UID> {
         self.arts.get(&combo).or_else(|| self.instant_arts.get(&combo)).copied()
     }
 
     pub fn tool(&self, combo: ToolCombo) -> Option<UID> {
         self.tools.get(&combo).copied()
+    }
+
+    pub fn tool3(&self, combo: ToolCombo3) -> Option<UID> {
+        self.tools3.get(&combo).copied()
     }
 
     /// The cfg fields below are stored as 60 fps frame budgets. These
@@ -201,6 +223,7 @@ impl Default for Config {
             arts: ComboTable::new(),
             instant_arts: ComboTable::new(),
             tools: ComboTable::new(),
+            tools3: ComboTable::new(),
             tool_on_t: None,
             tool_on_q: None,
             rl_combo_max_age: rl_window_secs_to_frames(DEFAULT_RL_WINDOW_SECS),
@@ -282,6 +305,9 @@ impl<S: AsRef<str>> From<S> for Config {
                         ToolMotion::Combo(combo) => {
                             insert_tool_bind(&mut config, combo, id);
                         }
+                        ToolMotion::Combo3(combo) => {
+                            insert_tool_bind3(&mut config, combo, id);
+                        }
                     }
                 }
                 continue;
@@ -326,6 +352,19 @@ fn insert_art_bind(config: &mut Config, combo: ArtCombo, id: UID) {
         return;
     }
     config.arts.insert(combo, id);
+}
+
+fn insert_tool_bind3(config: &mut Config, combo: ToolCombo3, id: UID) {
+    if let Some(prev) = config.tools3.get(&combo) {
+        if *prev != id {
+            log::warn!(
+                "Duplicate three-key tool bind {:?}: keeping UID {prev}, ignoring {id}",
+                combo
+            );
+        }
+        return;
+    }
+    config.tools3.insert(combo, id);
 }
 
 fn insert_tool_bind(config: &mut Config, combo: ToolCombo, id: UID) {
@@ -392,6 +431,7 @@ enum ToolMotion {
     TAlone,
     QAlone,
     Combo(ToolCombo),
+    Combo3(ToolCombo3),
 }
 
 /// `↑q-0.5s`, `↑q-多段触发时限0.5s`, or `↑q-multi-hit0.5s` after the bind token.
@@ -416,9 +456,10 @@ fn parse_tool_motion_with_lock(raw: &str) -> Option<(ToolMotion, Option<f32>)> {
     parse_tool_motion(raw).map(|motion| (motion, None))
 }
 
-/// `t` / `q` alone, or first∈{↑↓←→,r,l,e,f,q} then tail∈{q,t,r,l,e,f}.
-/// Bare `q` is exclusive with using `q` as a two-key first (e.g. `qt`).
-/// Tail `r`/`l`/`e`/`f` arms the tool and hold-injects USE while that key is held (same as `q`/`t`).
+/// `t` / `q` alone, or two/three keys:
+/// first ∈ {↑↓←→,r,l,e,f,q}; middle ∈ the same set except `t`; tail ∈ {q,t,r,l,e,f,j,s,c}.
+/// Bare `q` is exclusive with using `q` as a first key (e.g. `qt`).
+/// Tail `r`/`l`/`e`/`f` arms the tool and hold-injects USE while that key is held.
 fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
     let motion = motion.trim();
     if motion == "t" || motion == "T" {
@@ -428,9 +469,29 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         return Some(ToolMotion::QAlone);
     }
 
-    let mut chars = motion.chars();
-    let first_ch = chars.next()?;
-    let first = match first_ch {
+    let chars: Vec<char> = motion.chars().collect();
+    match chars.as_slice() {
+        [first_ch, tail_ch] => {
+            let first = parse_tool_first(*first_ch)?;
+            let tail = parse_tool_tail(*tail_ch)?;
+            // Same physical key twice (e.g. `rr`) is not useful as a prosthetic bind.
+            if tool_first_matches_tail(first, tail) {
+                return None;
+            }
+            Some(ToolMotion::Combo(ToolCombo { first, tail }))
+        }
+        [first_ch, middle_ch, tail_ch] => {
+            let first = parse_tool_first(*first_ch)?;
+            let middle = parse_tool_first(*middle_ch)?;
+            let tail = parse_tool_tail(*tail_ch)?;
+            Some(ToolMotion::Combo3(ToolCombo3 { first, middle, tail }))
+        }
+        _ => None,
+    }
+}
+
+fn parse_tool_first(ch: char) -> Option<ToolFirst> {
+    Some(match ch {
         '↑' => ToolFirst::Up,
         '→' => ToolFirst::Right,
         '↓' => ToolFirst::Down,
@@ -443,14 +504,13 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         's' | 'S' => ToolFirst::Sprint,
         'c' | 'C' => ToolFirst::Crouch,
         'q' | 'Q' => ToolFirst::Switch,
-        't' | 'T' => return None, // t cannot be first of a two-key bind
+        't' | 'T' => return None,
         _ => return None,
-    };
-    let tail_ch = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    let tail = match tail_ch {
+    })
+}
+
+fn parse_tool_tail(ch: char) -> Option<ToolTail> {
+    Some(match ch {
         'q' | 'Q' => ToolTail::Switch,
         't' | 'T' => ToolTail::Use,
         'r' | 'R' => ToolTail::Block,
@@ -461,9 +521,11 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
         's' | 'S' => ToolTail::Sprint,
         'c' | 'C' => ToolTail::Crouch,
         _ => return None,
-    };
-    // Same physical key twice (e.g. `rr`) is not useful as a prosthetic bind.
-    if matches!(
+    })
+}
+
+fn tool_first_matches_tail(first: ToolFirst, tail: ToolTail) -> bool {
+    matches!(
         (first, tail),
         (ToolFirst::Block, ToolTail::Block)
             | (ToolFirst::Attack, ToolTail::Attack)
@@ -473,13 +535,11 @@ fn parse_tool_motion(motion: &str) -> Option<ToolMotion> {
             | (ToolFirst::Sprint, ToolTail::Sprint)
             | (ToolFirst::Crouch, ToolTail::Crouch)
             | (ToolFirst::Switch, ToolTail::Switch)
-    ) {
-        return None;
-    }
-    Some(ToolMotion::Combo(ToolCombo { first, tail }))
+    )
 }
 
-/// Combat-art motions: `∅`, or exactly two of {↑↓←→, r, l, e, f} (e.g. `r↑`, `ee`, `rl`).
+/// Combat-art motions: `∅`, or two/three of {↑↓←→, r, l, e, f}
+/// (e.g. `r↑`, `ee`, `rl`, `r↑l`).
 fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
     let motion = motion.trim();
     if matches!(motion, "∅" | "NONE" | "none") {
@@ -504,17 +564,13 @@ fn parse_art_combo(motion: &str) -> Option<ArtCombo> {
         };
         tokens.push(token);
     }
-    if tokens.len() == 2 {
-        Some(ArtCombo::pair(tokens[0], tokens[1]))
-    } else {
-        None
-    }
+    ArtCombo::from_tokens(&tokens)
 }
 
 #[cfg(test)]
 mod test {
     use crate::{
-        config::{Config, ToolCombo, ToolFirst, ToolTail, rl_window_secs_to_frames},
+        config::{Config, ToolCombo, ToolCombo3, ToolFirst, ToolTail, rl_window_secs_to_frames},
         input::{ArtCombo, ArtToken},
     };
 
@@ -600,10 +656,46 @@ mod test {
     }
 
     #[test]
+    fn test_three_key_art_bind() {
+        let config = Config::from("7700 Sakura Dance rle\n6100 One Mind ↑↑e");
+        assert_eq!(
+            config.art(ArtCombo::triple(ArtToken::Block, ArtToken::Attack, ArtToken::Interact)),
+            Some(7700)
+        );
+        assert_eq!(
+            config.art(ArtCombo::triple(ArtToken::Up, ArtToken::Up, ArtToken::Interact)),
+            Some(6100)
+        );
+        assert!(config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Attack)).is_none());
+    }
+
+    #[test]
     fn test_art_multi_bind() {
         let config = Config::from("7000  Nightjar Reversal  ↓l");
         assert_eq!(config.art(ArtCombo::pair(ArtToken::Down, ArtToken::Attack)), Some(7000));
         assert!(config.art(ArtCombo::pair(ArtToken::Attack, ArtToken::Down)).is_none());
+    }
+
+    #[test]
+    fn test_three_key_tool_bind() {
+        let config = Config::from("75300 Lazulite Sabimaru ↑rq\n79200 Mountain Echo →le");
+        assert_eq!(
+            config.tool3(ToolCombo3 {
+                first: ToolFirst::Up,
+                middle: ToolFirst::Block,
+                tail: ToolTail::Switch,
+            }),
+            Some(75300)
+        );
+        assert_eq!(
+            config.tool3(ToolCombo3 {
+                first: ToolFirst::Right,
+                middle: ToolFirst::Attack,
+                tail: ToolTail::Interact,
+            }),
+            Some(79200)
+        );
+        assert!(config.tools.is_empty());
     }
 
     #[test]

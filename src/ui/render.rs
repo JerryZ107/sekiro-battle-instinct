@@ -265,10 +265,17 @@ impl UiPainter {
         let mode = editor.mode();
         let slots = editor.slots();
         for (i, rect) in l.slots.iter().copied().enumerate() {
-            let label = match mode {
-                BindingMode::Single => i18n::pick("键位（点击移除）", "Key (click to remove)").to_string(),
-                BindingMode::Two if i == 0 => i18n::pick("首键（点击移除）", "First key (click to remove)").to_string(),
-                BindingMode::Two => i18n::pick("尾键（点击移除）", "Second key (click to remove)").to_string(),
+            let label = match (mode, i) {
+                (BindingMode::Single, _) => i18n::pick("键位（点击移除）", "Key (click to remove)").to_string(),
+                (BindingMode::Two | BindingMode::Three, 0) => {
+                    i18n::pick("首键（点击移除）", "First key (click to remove)").to_string()
+                }
+                (BindingMode::Three, 1) => i18n::pick("中键（点击移除）", "Middle key (click to remove)").to_string(),
+                (BindingMode::Two, 1) | (BindingMode::Three, 2) => {
+                    i18n::pick("尾键（点击移除）", "Tail key (click to remove)").to_string()
+                }
+                (BindingMode::Three, _) => i18n::pick("尾键（点击移除）", "Tail key (click to remove)").to_string(),
+                (BindingMode::Two, _) => i18n::pick("尾键（点击移除）", "Tail key (click to remove)").to_string(),
             };
             fill(hdc, rect, PANEL);
             frame(hdc, rect, GOLD, 1);

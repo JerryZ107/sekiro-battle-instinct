@@ -141,6 +141,10 @@ mod tests {
             combo_action_mask(ArtCombo::pair(ArtToken::Block, ArtToken::Attack)),
             BLOCK | ATTACK
         );
+        assert_eq!(
+            combo_action_mask(ArtCombo::triple(ArtToken::Block, ArtToken::Attack, ArtToken::Sprint)),
+            BLOCK | ATTACK | SPRINT | DODGE
+        );
         assert_eq!(combo_action_mask(ArtCombo::empty()), 0);
     }
 
@@ -307,10 +311,11 @@ pub fn set_combat_art(art: impl ID) -> bool {
     game::set_slot(art, COMBAT_ART_SLOT as usize)
 }
 
-/// Native action bits owned by a two-token combo. `Sprint` also suppresses the
-/// companion dodge/step action so the combo does not get preempted.
+/// Native action bits owned by a two- or three-token combo. `Sprint` also
+/// suppresses the companion dodge/step action so the combo does not get
+/// preempted.
 pub fn combo_action_mask(combo: ArtCombo) -> u64 {
-    [combo.first(), combo.second()]
+    [combo.first(), combo.second(), combo.third()]
         .into_iter()
         .flatten()
         .map(|token| match token {

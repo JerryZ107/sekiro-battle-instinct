@@ -6,6 +6,7 @@ use crate::bindings::{BindingCategory, BindingSnapshot, BindingSource, KeyToken}
 pub enum BindingMode {
     Single,
     Two,
+    Three,
 }
 
 impl BindingMode {
@@ -13,6 +14,7 @@ impl BindingMode {
         match self {
             BindingMode::Single => i18n::pick("单键触发", "Single-key"),
             BindingMode::Two => i18n::pick("双键触发", "Two-key"),
+            BindingMode::Three => i18n::pick("三键触发", "Three-key"),
         }
     }
 
@@ -20,7 +22,18 @@ impl BindingMode {
         match self {
             BindingMode::Single => 1,
             BindingMode::Two => 2,
+            BindingMode::Three => 3,
         }
+    }
+}
+
+const COMBAT_ART_MODES: &[BindingMode] = &[BindingMode::Two, BindingMode::Three];
+const PROSTHETIC_MODES: &[BindingMode] = &[BindingMode::Single, BindingMode::Two, BindingMode::Three];
+
+fn legal_modes(category: BindingCategory) -> &'static [BindingMode] {
+    match category {
+        BindingCategory::CombatArt => COMBAT_ART_MODES,
+        BindingCategory::Prosthetic => PROSTHETIC_MODES,
     }
 }
 
@@ -91,10 +104,10 @@ impl SchemeDraft {
     }
 
     pub fn mode(&self) -> BindingMode {
-        if self.slots.len() <= 1 {
-            BindingMode::Single
-        } else {
-            BindingMode::Two
+        match self.slots.len() {
+            0 | 1 => BindingMode::Single,
+            2 => BindingMode::Two,
+            _ => BindingMode::Three,
         }
     }
 
@@ -224,56 +237,86 @@ impl Editor {
     }
 
     pub fn mode_is_switchable(&self) -> bool {
-        self.category == BindingCategory::Prosthetic
+        legal_modes(self.category).len() > 1
+    }
+
+    fn mode_position(&self) -> Option<usize> {
+        legal_modes(self.category).iter().position(|mode| *mode == self.mode())
     }
 
     pub fn mode_can_prev(&self) -> bool {
-        self.mode_is_switchable() && self.mode() == BindingMode::Two
+        self.mode_position().is_some_and(|index| index > 0)
     }
 
     pub fn mode_can_next(&self) -> bool {
-        self.mode_is_switchable() && self.mode() == BindingMode::Single
+        self.mode_position()
+            .is_some_and(|index| index + 1 < legal_modes(self.category).len())
     }
 
-    /// `<`: move to the previous legal mode. Combat arts are fixed at Two.
+    /// `<`: move to the previous legal mode. Combat arts switch between
+    /// two-key and three-key triggers; prosthetics between single, two and three.
     pub fn mode_prev(&mut self) {
-        if !self.mode_can_prev() {
+        let Some(index) = self.mode_position() else {
+            return;
+        };
+        if index > 0 {
+            let target = legal_modes(self.category)[index - 1];
+            self.request_mode(target);
+        }
+    }
+
+    /// `>`: move to the next legal mode. In both editors the three-key mode
+    /// follows (sits to the right of) the two-key mode.
+    pub fn mode_next(&mut self) {
+        let Some(index) = self.mode_position() else {
+            return;
+        };
+        if index + 1 < legal_modes(self.category).len() {
+            let target = legal_modes(self.category)[index + 1];
+            self.request_mode(target);
+        }
+    }
+
+    pub fn request_mode(&mut self, mode: BindingMode) {
+        if mode == self.mode() {
             return;
         }
-        if self.selected_scheme().slots.get(1).and_then(|v| *v).is_some() {
-            self.modal = Some(Modal {
-                message: i18n::pick(
-                    "切换为单键触发后，第2键将被清空，是否继续？",
-                    "Switching to single-key mode will clear the second key. Continue?",
+        let dropped_keys = self
+            .selected_scheme()
+            .slots
+            .iter()
+            .skip(mode.slot_count())
+            .any(Option::is_some);
+        if !dropped_keys {
+            self.apply_mode(mode);
+            return;
+        }
+        self.modal = Some(Modal {
+            message: if i18n::is_en() {
+                format!(
+                    "Switching to {} mode will clear the extra key(s). Continue?",
+                    mode.label()
                 )
-                .into(),
-                buttons: vec![
-                    ModalButton {
-                        label: i18n::pick("确认切换", "Switch").into(),
-                        action: ModalAction::ApplyMode(BindingMode::Single),
-                        style: ModalButtonStyle::Primary,
-                    },
-                    ModalButton {
-                        label: i18n::pick("取消", "Cancel").into(),
-                        action: ModalAction::Dismiss,
-                        style: ModalButtonStyle::Neutral,
-                    },
-                ],
-            });
-        } else {
-            self.apply_mode(BindingMode::Single);
-        }
-    }
-
-    /// `>`: move to the next legal mode. Combat arts are fixed at Two.
-    pub fn mode_next(&mut self) {
-        if self.mode_can_next() {
-            self.apply_mode(BindingMode::Two);
-        }
+            } else {
+                format!("切换为{}后，多出的键位将被清空，是否继续？", mode.label())
+            },
+            buttons: vec![
+                ModalButton {
+                    label: i18n::pick("确认切换", "Switch").into(),
+                    action: ModalAction::ApplyMode(mode),
+                    style: ModalButtonStyle::Primary,
+                },
+                ModalButton {
+                    label: i18n::pick("取消", "Cancel").into(),
+                    action: ModalAction::Dismiss,
+                    style: ModalButtonStyle::Neutral,
+                },
+            ],
+        });
     }
 
     pub fn apply_mode(&mut self, mode: BindingMode) {
-        if mode == self.mode() {
+        if mode == self.mode() || !legal_modes(self.category).contains(&mode) {
             return;
         }
         self.selected_scheme_mut().slots.resize(mode.slot_count(), None);
@@ -286,12 +329,7 @@ impl Editor {
     }
 
     pub fn add_scheme(&mut self) {
-        let mode = if self.category == BindingCategory::CombatArt {
-            BindingMode::Two
-        } else {
-            self.mode()
-        };
-        self.schemes.push(SchemeDraft::blank(mode));
+        self.schemes.push(SchemeDraft::blank(self.mode()));
         self.selected_index = self.schemes.len() - 1;
     }
 
@@ -356,23 +394,17 @@ impl Editor {
             ));
             return;
         }
-        if token.is_prosthetic() && mode == BindingMode::Two {
-            if self.selected_scheme().slots.first().is_some_and(Option::is_none) {
+        if token.is_prosthetic() && mode != BindingMode::Single {
+            let tail_index = mode.slot_count() - 1;
+            if self.selected_scheme().slots[..tail_index].iter().any(Option::is_none) {
                 self.show_message(i18n::pick(
                     "忍具键/忍具切换键只能作为尾键。",
-                    "Use Tool / Switch Tool can only be the second key.",
+                    "Use Tool / Switch Tool can only be the tail key.",
                 ));
                 return;
             }
-            if self.selected_scheme().slots.get(1).is_some_and(Option::is_none) {
-                self.selected_scheme_mut().slots[1] = Some(token);
-                self.check_after_edit(1);
-            } else {
-                self.show_message(i18n::pick(
-                    "键位已满，请点击配置区键位去移除。",
-                    "Key slots are full. Click a slot in the configuration area to remove it.",
-                ));
-            }
+            self.selected_scheme_mut().slots[tail_index] = Some(token);
+            self.check_after_edit(tail_index);
             return;
         }
         if mode == BindingMode::Single && !token.is_prosthetic() {
@@ -493,8 +525,8 @@ impl Editor {
     pub fn request_reset(&mut self) {
         self.modal = Some(Modal {
             message: i18n::pick(
-                "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请先点击首键或尾键对应槽位以移除。）",
-                "Reset every trigger key for this combat art / prosthetic?\n\n(To change one key, click the first or second key slot to remove it first.)",
+                "确定要重置此技能/忍具的触发键位吗？\n\n（若要更换键位，请先点击对应槽位以移除。）",
+                "Reset every trigger key for this combat art / prosthetic?\n\n(To change one key, click its slot to remove it first.)",
             )
             .into(),
             buttons: vec![
@@ -607,11 +639,10 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
     let content_r = w - m;
     let title = Rect::new(content_l, 14, content_r, 58);
     let category = Rect::new(content_l, 58, content_r, 82);
-    let mode = Rect::new(content_l, 92, content_r, 134);
+    let mode_rect = Rect::new(content_l, 92, content_r, 134);
     let arrow_w = 42;
-    let mode_left = Rect::new(content_l, mode.t, content_l + arrow_w, mode.b);
-    let mode_right = Rect::new(content_r - arrow_w, mode.t, content_r, mode.b);
-
+    let mode_left = Rect::new(content_l, mode_rect.t, content_l + arrow_w, mode_rect.b);
+    let mode_right = Rect::new(content_r - arrow_w, mode_rect.t, content_r, mode_rect.b);
     let scheme_title = Rect::new(content_l, 142, content_r, 166);
     let scheme_top = 172;
     let scheme_gap = 6;
@@ -654,14 +685,14 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
             slots_top + slots_h,
         ));
     } else {
-        let width = (content_r - content_l - slot_gap) / 2;
-        slots.push(Rect::new(content_l, slots_top, content_l + width, slots_top + slots_h));
-        slots.push(Rect::new(
-            content_l + width + slot_gap,
-            slots_top,
-            content_r,
-            slots_top + slots_h,
-        ));
+        // First → second → third are laid out left-to-right, so the third-key
+        // slot/window naturally sits to the right of the two-key pair.
+        let width = (content_r - content_l - slot_gap * (n - 1)) / n;
+        for index in 0..n {
+            let l = content_l + index * (width + slot_gap);
+            let r = if index + 1 == n { content_r } else { l + width };
+            slots.push(Rect::new(l, slots_top, r, slots_top + slots_h));
+        }
     }
 
     let grid_top = slots_top + slots_h + 12;
@@ -729,7 +760,7 @@ pub fn layout(editor: &Editor, w: i32, h: i32) -> Layout {
         panel,
         title,
         category,
-        mode,
+        mode: mode_rect,
         mode_left,
         mode_right,
         scheme_title,
@@ -872,7 +903,7 @@ mod tests {
             e.modal.as_ref().unwrap().message,
             i18n::pick(
                 "忍具键/忍具切换键只能作为尾键。",
-                "Use Tool / Switch Tool can only be the second key.",
+                "Use Tool / Switch Tool can only be the tail key.",
             )
         );
     }
@@ -881,6 +912,9 @@ mod tests {
     fn mode_switch_is_directional_and_requires_confirmation() {
         let mut e = editor(70500, vec![KeyToken::Up, KeyToken::ProstheticUse]);
         e.mode_next();
+        assert_eq!(e.mode(), BindingMode::Three);
+        assert_eq!(e.slots().len(), 3);
+        e.mode_prev();
         assert_eq!(e.mode(), BindingMode::Two);
         e.mode_prev();
         assert_eq!(e.mode(), BindingMode::Two);
@@ -895,6 +929,81 @@ mod tests {
         assert_eq!(e.mode(), BindingMode::Single);
         e.mode_next();
         assert_eq!(e.mode(), BindingMode::Two);
+        e.mode_next();
+        assert_eq!(e.mode(), BindingMode::Three);
+    }
+
+    #[test]
+    fn prosthetic_three_key_mode_uses_first_middle_tail_slots() {
+        let mut e = editor(70500, vec![KeyToken::Up, KeyToken::ProstheticUse]);
+        e.mode_next();
+        assert_eq!(e.mode(), BindingMode::Three);
+        e.click_slot(0);
+        e.click_slot(1);
+        e.click_key(KeyToken::Block);
+        e.click_key(KeyToken::Attack);
+        e.click_key(KeyToken::ProstheticUse);
+        assert_eq!(
+            e.slots(),
+            &[
+                Some(KeyToken::Block),
+                Some(KeyToken::Attack),
+                Some(KeyToken::ProstheticUse)
+            ]
+        );
+        assert!(e.complete());
+    }
+
+    #[test]
+    fn combat_art_three_key_mode_is_right_of_two_key_mode() {
+        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
+        assert_eq!(e.mode(), BindingMode::Two);
+        assert!(e.mode_can_next());
+        assert!(!e.mode_can_prev());
+
+        e.mode_next();
+        assert_eq!(e.mode(), BindingMode::Three);
+        assert_eq!(e.slots().len(), 3);
+        assert_eq!(e.slots()[2], None);
+        e.click_key(KeyToken::Block);
+        assert_eq!(
+            e.slots(),
+            &[Some(KeyToken::Interact), Some(KeyToken::Attack), Some(KeyToken::Block)]
+        );
+
+        // Dropping the third key requires confirmation.
+        e.mode_prev();
+        assert_eq!(e.mode(), BindingMode::Three);
+        assert!(e.modal.is_some());
+        match e.take_modal_action(0) {
+            Some(ModalAction::ApplyMode(mode)) => e.apply_mode(mode),
+            other => panic!("unexpected modal action: {other:?}"),
+        }
+        assert_eq!(e.mode(), BindingMode::Two);
+        assert_eq!(e.slots().len(), 2);
+    }
+
+    #[test]
+    fn arrow_from_two_key_mode_shows_three_slot_ui_for_both_categories() {
+        for uid in [7100, 70500] {
+            let mut e = editor(uid, vec![KeyToken::Up, KeyToken::Attack]);
+            assert!(e.mode_is_switchable());
+            e.mode_next();
+            assert_eq!(e.mode(), BindingMode::Three);
+            let l = layout(&e, 800, 700);
+            assert_eq!(l.slots.len(), 3);
+            assert!(l.slots[0].r <= l.slots[1].l);
+            assert!(l.slots[1].r <= l.slots[2].l);
+        }
+    }
+
+    #[test]
+    fn adding_scheme_in_three_key_mode_keeps_three_slots() {
+        let mut e = editor(7100, vec![KeyToken::Interact, KeyToken::Attack]);
+        e.mode_next();
+        e.add_scheme();
+        assert_eq!(e.mode(), BindingMode::Three);
+        assert_eq!(e.slots(), &[None, None, None]);
     }
 
     #[test]

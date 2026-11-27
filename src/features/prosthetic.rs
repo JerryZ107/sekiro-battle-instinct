@@ -8,7 +8,7 @@
 
 use crate::{
     action::SWITCH_PROSTHETIC,
-    config::{Config, ToolCombo, ToolFirst, ToolTail},
+    config::{Config, ToolCombo, ToolCombo3, ToolFirst, ToolTail},
     frame::Frames,
     game::{self, ID, InputHandler, ItemID, UID},
     input::{ActionFrame, ArtToken},
@@ -48,6 +48,9 @@ pub struct ProstheticState {
     /// Pending first token for a prosthetic combo; waiting for q/t.
     pub tool_first: Option<ToolFirst>,
     pub tool_first_age: u16,
+    /// Middle key of a three-key prosthetic sequence.
+    pub tool_middle: Option<ToolFirst>,
+    pub tool_middle_age: u16,
     /// While set, keep injecting USE_PROSTHETIC until this tail key is released.
     pub hold_tool_tail: Option<ToolTail>,
     /// Guarantee a few USE frames after equip (tap-friendly).
@@ -61,6 +64,13 @@ pub struct ProstheticState {
     pub tools_inited: bool,
     pub ejection: Option<(ItemID, ProstheticSlot)>,
     pub prosthetic_delay: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolTailMatch {
+    Arm(UID),
+    Middle(ToolFirst),
+    None,
 }
 
 impl ProstheticState {
@@ -198,8 +208,7 @@ impl ProstheticState {
             self.tool_min_use = 3;
             self.prosthetic_delay = PROSTHETIC_SUPRESSION_DURATION;
             self.refresh_tool_lock(config);
-            self.tool_first = None;
-            self.tool_first_age = 0;
+            self.clear_tool_sequence();
             true
         } else {
             false
@@ -211,11 +220,19 @@ impl ProstheticState {
         self.tool_min_use = self.tool_min_use.max(3);
         self.hold_tool_tail = Some(tail);
         self.prosthetic_delay = 0;
-        self.tool_first = None;
+        self.clear_tool_sequence();
     }
 
-    /// Try to complete a pending first-key with `tail`. Returns true if a tool was armed.
-    pub fn try_complete_tool_tail(&mut self, tail: ToolTail, config: &Config) -> bool {
+    fn clear_tool_sequence(&mut self) {
+        self.tool_first = None;
+        self.tool_first_age = 0;
+        self.tool_middle = None;
+        self.tool_middle_age = 0;
+    }
+
+    /// Try to complete a pending first/middle sequence with `tail`.
+    /// Returns true if a tool was armed.
+    pub fn try_complete_tool_tail(&mut self, tail: ToolTail, config: &Config, frame: &ActionFrame) -> bool {
         if self.tool_lock_left > 0 {
             // Multi-hit: refresh when the arming tail (or use/switch) is pressed again.
             let same_tail = self.hold_tool_tail == Some(tail);
@@ -225,15 +242,74 @@ impl ProstheticState {
                 return true;
             }
         }
-        if let Some(first) = self.tool_first {
-            if let Some(uid) = config.tool(ToolCombo { first, tail }) {
-                return self.arm_tool(uid, tail, config);
+
+        match self.classify_tool_tail(tail, config, frame) {
+            ToolTailMatch::Arm(uid) => self.arm_tool(uid, tail, config),
+            ToolTailMatch::Middle(middle) => {
+                self.tool_middle = Some(middle);
+                self.tool_middle_age = 0;
+                false
             }
-            // Pending first did not match this tail — clear so it does not stale.
-            self.tool_first = None;
-            self.tool_first_age = 0;
+            ToolTailMatch::None => {
+                self.clear_tool_sequence();
+                false
+            }
         }
-        false
+    }
+
+    /// Pure trigger resolution for tests and for keeping pair priority explicit:
+    /// an exact two-key match always wins over using the edge as a triple middle.
+    fn classify_tool_tail(&self, tail: ToolTail, config: &Config, frame: &ActionFrame) -> ToolTailMatch {
+        let Some(first) = self.tool_first else {
+            return ToolTailMatch::None;
+        };
+        let window = config.tool_window().as_actual();
+
+        // Once a middle key exists, only the exact three-key sequence may fire.
+        if let Some(middle) = self.tool_middle {
+            let chain_held = tool_first_held(first, frame) && tool_first_held(middle, frame);
+            if chain_held && self.tool_middle_age < window {
+                if let Some(uid) = config.tool3(ToolCombo3 { first, middle, tail }) {
+                    return ToolTailMatch::Arm(uid);
+                }
+            }
+            return ToolTailMatch::None;
+        }
+
+        // Two-key trigger priority: if this tail completes a configured pair,
+        // fire it and never treat the same edge as a triple middle key.
+        if let Some(uid) = config.tool(ToolCombo { first, tail }) {
+            return ToolTailMatch::Arm(uid);
+        }
+
+        // No pair matched. Keep this edge as the middle key only when the
+        // first key is still held and the 0.3s first-key window is valid.
+        if tool_first_held(first, frame) && self.tool_first_age < window {
+            if let Some(middle) = middle_for_tail(tail) {
+                return ToolTailMatch::Middle(middle);
+            }
+        }
+        ToolTailMatch::None
+    }
+
+    /// A direction cannot be a prosthetic tail, but it can be the middle key
+    /// of a triple. This keeps the first -> middle hold requirement.
+    fn try_push_tool_middle(&mut self, middle: ToolFirst, config: &Config, frame: &ActionFrame) -> bool {
+        if self.tool_middle.is_some() {
+            self.clear_tool_sequence();
+            return false;
+        }
+        let Some(first) = self.tool_first else {
+            return false;
+        };
+        if tool_first_held(first, frame) && self.tool_first_age < config.tool_window().as_actual() {
+            self.tool_middle = Some(middle);
+            self.tool_middle_age = 0;
+            true
+        } else {
+            self.clear_tool_sequence();
+            false
+        }
     }
 
     pub fn push_tool_first(&mut self, token: ToolFirst) {
@@ -253,7 +329,8 @@ impl ProstheticState {
     ) -> bool {
         let mut armed_via_art_tail = false;
 
-        // First-key edges for directions only (r/l/e/f may complete a combo as tail first).
+        // Directions can start a sequence or become its middle key; they can
+        // never be the tail of a prosthetic bind.
         for (token, first) in [
             (ArtToken::Up, ToolFirst::Up),
             (ArtToken::Right, ToolFirst::Right),
@@ -261,7 +338,9 @@ impl ProstheticState {
             (ArtToken::Left, ToolFirst::Left),
         ] {
             if frame.pressed(token) {
-                self.push_tool_first(first);
+                if !self.try_push_tool_middle(first, config, frame) && self.tool_middle.is_none() {
+                    self.push_tool_first(first);
+                }
             }
         }
 
@@ -275,19 +354,28 @@ impl ProstheticState {
             (ArtToken::Crouch, ToolTail::Crouch),
         ] {
             if frame.pressed(token) {
-                if self.try_complete_tool_tail(tail, config) {
+                if self.try_complete_tool_tail(tail, config, frame) {
                     armed_via_art_tail = true;
-                } else {
-                    self.push_tool_first(first_for_tail(tail));
+                } else if self.tool_middle.is_none() {
+                    if let Some(first) = middle_for_tail(tail) {
+                        self.push_tool_first(first);
+                    }
                 }
             }
         }
 
         if self.tool_first.is_some() {
-            self.tool_first_age = self.tool_first_age.saturating_add(1);
-            if self.tool_first_age >= config.tool_window().as_actual() {
-                self.tool_first = None;
-                self.tool_first_age = 0;
+            let window = config.tool_window().as_actual();
+            if self.tool_middle.is_some() {
+                self.tool_middle_age = self.tool_middle_age.saturating_add(1);
+                if self.tool_middle_age >= window {
+                    self.clear_tool_sequence();
+                }
+            } else {
+                self.tool_first_age = self.tool_first_age.saturating_add(1);
+                if self.tool_first_age >= window {
+                    self.clear_tool_sequence();
+                }
             }
         }
 
@@ -301,38 +389,30 @@ impl ProstheticState {
         }
 
         if frame.switch_prosthetic_pressed() {
+            let had_pending = self.tool_first.is_some();
             if self.tool_lock_left > 0 {
                 self.refresh_tool_hold(ToolTail::Switch, config);
-            } else if let Some(first) = self.tool_first {
-                if let Some(uid) = config.tool(ToolCombo {
-                    first,
-                    tail: ToolTail::Switch,
-                }) {
+            } else if self.try_complete_tool_tail(ToolTail::Switch, config, frame) {
+                // armed through a two- or three-key sequence
+            } else if !had_pending {
+                if let Some(uid) = config.tool_on_q {
                     let _ = self.arm_tool(uid, ToolTail::Switch, config);
                 } else {
-                    self.tool_first = None;
+                    self.push_tool_first(ToolFirst::Switch);
                 }
-            } else if let Some(uid) = config.tool_on_q {
-                let _ = self.arm_tool(uid, ToolTail::Switch, config);
-            } else {
-                self.push_tool_first(ToolFirst::Switch);
             }
         }
 
         if frame.use_prosthetic_pressed() {
+            let had_pending = self.tool_first.is_some();
             if self.tool_lock_left > 0 {
                 self.refresh_tool_hold(ToolTail::Use, config);
-            } else if let Some(first) = self.tool_first {
-                if let Some(uid) = config.tool(ToolCombo {
-                    first,
-                    tail: ToolTail::Use,
-                }) {
+            } else if self.try_complete_tool_tail(ToolTail::Use, config, frame) {
+                // armed through a two- or three-key sequence
+            } else if !had_pending {
+                if let Some(uid) = config.tool_on_t {
                     let _ = self.arm_tool(uid, ToolTail::Use, config);
-                } else {
-                    self.tool_first = None;
                 }
-            } else if let Some(uid) = config.tool_on_t {
-                let _ = self.arm_tool(uid, ToolTail::Use, config);
             }
         }
 
@@ -391,6 +471,86 @@ mod tests {
         assert_eq!(ProstheticSlot::S2.as_slot_index(), 4);
     }
 
+    fn held_frame(tokens: &[ArtToken]) -> ActionFrame {
+        let mut bits = 0u16;
+        for token in tokens {
+            bits |= token.bit();
+        }
+        ActionFrame::from_held_for_test(bits, 0)
+    }
+
+    #[test]
+    fn three_key_tool_requires_hold_chain_and_stage_window() {
+        let mut config = Config::default();
+        config.tools3.insert(
+            ToolCombo3 {
+                first: ToolFirst::Up,
+                middle: ToolFirst::Right,
+                tail: ToolTail::Block,
+            },
+            75300,
+        );
+        let mut state = ProstheticState::new();
+        state.tool_first = Some(ToolFirst::Up);
+        state.tool_first_age = 0;
+        state.tool_middle = Some(ToolFirst::Right);
+        state.tool_middle_age = 0;
+
+        let both_held = held_frame(&[ArtToken::Up, ArtToken::Right]);
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &both_held),
+            ToolTailMatch::Arm(75300)
+        );
+
+        let first_released = held_frame(&[ArtToken::Right]);
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &first_released),
+            ToolTailMatch::None
+        );
+
+        let middle_released = held_frame(&[ArtToken::Up]);
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &middle_released),
+            ToolTailMatch::None
+        );
+
+        state.tool_middle_age = config.tool_window().as_actual();
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &both_held),
+            ToolTailMatch::None
+        );
+    }
+
+    #[test]
+    fn double_tool_match_wins_over_becoming_middle_key() {
+        let mut config = Config::default();
+        config.tools.insert(
+            ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Block,
+            },
+            75300,
+        );
+        let mut state = ProstheticState::new();
+        state.tool_first = Some(ToolFirst::Up);
+        state.tool_first_age = 0;
+        let frame = held_frame(&[ArtToken::Up, ArtToken::Block]);
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &frame),
+            ToolTailMatch::Arm(75300)
+        );
+    }
+
+    #[test]
+    fn direction_can_be_middle_key_but_not_tail() {
+        let config = Config::default();
+        let mut state = ProstheticState::new();
+        state.push_tool_first(ToolFirst::Up);
+        let frame = held_frame(&[ArtToken::Up, ArtToken::Right]);
+        assert!(state.try_push_tool_middle(ToolFirst::Right, &config, &frame));
+        assert_eq!(state.tool_middle, Some(ToolFirst::Right));
+    }
+
     #[test]
     fn pushing_a_first_token_resets_its_age() {
         let mut state = ProstheticState::new();
@@ -401,8 +561,8 @@ mod tests {
     }
 }
 
-fn first_for_tail(tail: ToolTail) -> ToolFirst {
-    match tail {
+fn middle_for_tail(tail: ToolTail) -> Option<ToolFirst> {
+    Some(match tail {
         ToolTail::Block => ToolFirst::Block,
         ToolTail::Attack => ToolFirst::Attack,
         ToolTail::Interact => ToolFirst::Interact,
@@ -411,6 +571,23 @@ fn first_for_tail(tail: ToolTail) -> ToolFirst {
         ToolTail::Sprint => ToolFirst::Sprint,
         ToolTail::Crouch => ToolFirst::Crouch,
         ToolTail::Switch => ToolFirst::Switch,
-        ToolTail::Use => ToolFirst::Interact,
+        ToolTail::Use => return None,
+    })
+}
+
+fn tool_first_held(first: ToolFirst, frame: &ActionFrame) -> bool {
+    match first {
+        ToolFirst::Up => frame.held(ArtToken::Up),
+        ToolFirst::Right => frame.held(ArtToken::Right),
+        ToolFirst::Down => frame.held(ArtToken::Down),
+        ToolFirst::Left => frame.held(ArtToken::Left),
+        ToolFirst::Block => frame.held(ArtToken::Block),
+        ToolFirst::Attack => frame.held(ArtToken::Attack),
+        ToolFirst::Interact => frame.held(ArtToken::Interact),
+        ToolFirst::Grapple => frame.held(ArtToken::Grapple),
+        ToolFirst::Jump => frame.held(ArtToken::Jump),
+        ToolFirst::Sprint => frame.held(ArtToken::Sprint),
+        ToolFirst::Crouch => frame.held(ArtToken::Crouch),
+        ToolFirst::Switch => frame.switch_prosthetic(),
     }
 }

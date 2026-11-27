@@ -30,6 +30,7 @@ pub enum ArtToken {
 pub struct ArtCombo {
     first: Option<ArtToken>,
     second: Option<ArtToken>,
+    third: Option<ArtToken>,
 }
 
 impl ArtCombo {
@@ -37,6 +38,7 @@ impl ArtCombo {
         ArtCombo {
             first: None,
             second: None,
+            third: None,
         }
     }
 
@@ -44,21 +46,53 @@ impl ArtCombo {
         ArtCombo {
             first: Some(a),
             second: Some(b),
+            third: None,
         }
     }
 
-    pub fn second(self) -> Option<ArtToken> {
-        self.second
+    pub const fn triple(a: ArtToken, b: ArtToken, c: ArtToken) -> ArtCombo {
+        ArtCombo {
+            first: Some(a),
+            second: Some(b),
+            third: Some(c),
+        }
+    }
+
+    /// Build a two- or three-token combo from an ordered key sequence.
+    pub fn from_tokens(tokens: &[ArtToken]) -> Option<ArtCombo> {
+        match tokens {
+            [first, second] => Some(ArtCombo::pair(*first, *second)),
+            [first, second, third] => Some(ArtCombo::triple(*first, *second, *third)),
+            _ => None,
+        }
     }
 
     pub fn first(self) -> Option<ArtToken> {
         self.first
     }
 
+    pub fn second(self) -> Option<ArtToken> {
+        self.second
+    }
+
+    pub fn third(self) -> Option<ArtToken> {
+        self.third
+    }
+
+    /// Last configured token; this is the key held for sustained art fire.
+    pub fn last(self) -> Option<ArtToken> {
+        self.third.or(self.second).or(self.first)
+    }
+
+    #[allow(dead_code)]
+    pub fn len(self) -> usize {
+        usize::from(self.first.is_some()) + usize::from(self.second.is_some()) + usize::from(self.third.is_some())
+    }
+
     pub fn is_rl(self) -> bool {
         matches!(
-            (self.first, self.second),
-            (Some(ArtToken::Block), Some(ArtToken::Attack))
+            (self.first, self.second, self.third),
+            (Some(ArtToken::Block), Some(ArtToken::Attack), None)
         )
     }
 }
@@ -236,7 +270,7 @@ impl ActionFrame {
     }
 
     #[cfg(test)]
-    fn from_held_for_test(held: u16, last_held: u16) -> Self {
+    pub(crate) fn from_held_for_test(held: u16, last_held: u16) -> Self {
         Self {
             held,
             last_held,
@@ -336,12 +370,15 @@ pub trait ComboKey: Copy + Eq {
     fn index(self) -> usize;
 }
 
-/// Fixed-size, allocation-free map for two-token combos. This is the fork's
-/// equivalent of dec32/sekiro-battle-instinct's `InputsTrie<T>`: the key is a
-/// compact pair of token indices and lookup is a direct array access.
+/// Fixed-size, allocation-free map for two- or three-token combos. This is
+/// the fork's equivalent of dec32/sekiro-battle-instinct's `InputsTrie<T>`:
+/// the key is a compact sequence of token indices and lookup is a direct array
+/// access. Three nibbles (first/second/third) need 4096 slots.
+pub const COMBO_TABLE_SIZE: usize = 4096;
+
 #[derive(Clone, Debug)]
 pub struct ComboTable<K: ComboKey, T> {
-    entries: [Option<(K, T)>; 256],
+    entries: [Option<(K, T)>; COMBO_TABLE_SIZE],
 }
 
 impl<K: ComboKey, T> Default for ComboTable<K, T> {
@@ -416,7 +453,7 @@ impl<K: ComboKey, T> ComboTable<K, T> {
 
 impl<K: ComboKey, T> IntoIterator for ComboTable<K, T> {
     type Item = (K, T);
-    type IntoIter = std::iter::Flatten<std::array::IntoIter<Option<(K, T)>, 256>>;
+    type IntoIter = std::iter::Flatten<std::array::IntoIter<Option<(K, T)>, COMBO_TABLE_SIZE>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.entries.into_iter().flatten()
@@ -446,12 +483,14 @@ impl<K: ComboKey, T> FromIterator<(K, T)> for ComboTable<K, T> {
     }
 }
 
-/// ArtCombo uses token index 0 for `None`, 1..=11 for real tokens.
+/// ArtCombo uses token index 0 for `None`, 1..=11 for real tokens. The
+/// three nibbles keep pair and triple lookups in the same direct-access table.
 impl ComboKey for ArtCombo {
     fn index(self) -> usize {
         let first = self.first.map_or(0, ArtToken::index);
         let second = self.second.map_or(0, ArtToken::index);
-        ((first as usize) << 4) | second as usize
+        let third = self.third.map_or(0, ArtToken::index);
+        ((first as usize) << 8) | ((second as usize) << 4) | third as usize
     }
 }
 
@@ -459,6 +498,7 @@ impl ComboKey for ArtCombo {
 pub struct ArtComboWindow {
     first: Option<ArtToken>,
     second: Option<ArtToken>,
+    third: Option<ArtToken>,
     age: u16,
     completed_this_frame: Option<ArtCombo>,
     /// `l` after `r` outside the configured rl window.
@@ -471,17 +511,20 @@ pub struct ArtComboWindow {
 }
 
 impl ArtComboWindow {
-    /// ~300ms at 60fps for most two-token arts (~0.3s).
+    /// ~300ms at 60fps for most combo stages (~0.3s).
     const MAX_AGE: Frames = Frames::standard(18);
     /// Same window for `ee` / e-then-X and `ff` / f-then-X (~0.3s).
     const MAX_AGE_FF: Frames = Frames::standard(18);
     /// Longer window when first key is `l` (attack), ~0.7s @60fps.
     const MAX_AGE_L: Frames = Frames::standard(42);
+    /// Every triple-key stage gets the same 0.3s perception window.
+    const TRIPLE_STAGE: Frames = Frames::standard(18);
 
     pub fn new(max_age_rl: Frames) -> ArtComboWindow {
         ArtComboWindow {
             first: None,
             second: None,
+            third: None,
             age: 0,
             completed_this_frame: None,
             late_rl_rejected: false,
@@ -492,33 +535,58 @@ impl ArtComboWindow {
         }
     }
 
-    /// Consume the shared per-frame action edges.
+    /// Consume the shared per-frame action edges. A two-token prefix always
+    /// completes here; production code uses [`Self::tick_frame_with`] so a
+    /// configured pair wins before the third key is inspected.
+    #[allow(dead_code)]
     pub fn tick_frame(&mut self, frame: &ActionFrame) {
+        self.tick_frame_with(frame, |_| true);
+    }
+
+    /// Consume action edges, using `combo_is_bound` to decide whether a pair
+    /// is a complete trigger or merely the prefix of a three-key trigger.
+    /// A bound pair fires immediately; remaining edges in the same frame are
+    /// deliberately ignored so the third key cannot preempt it.
+    pub fn tick_frame_with<F>(&mut self, frame: &ActionFrame, combo_is_bound: F)
+    where
+        F: Fn(ArtCombo) -> bool,
+    {
         self.completed_this_frame = None;
         let mut updated = false;
+        let mut fired = false;
 
         // The current held mask must be visible to push for same-frame
         // BLOCK+ATTACK validation, so update it before processing edges.
         self.held = frame.held_mask();
 
-        // Order matters for same-frame pairs: directions, block, interact,
+        // Order matters for same-frame sequences: directions, block, interact,
         // grapple, jump, sprint, crouch, attack.
         for token in ArtToken::ALL {
             if frame.pressed(token) {
-                updated |= self.push(token);
+                let (did_update, did_fire) = self.push(token, &combo_is_bound);
+                updated |= did_update;
+                if did_fire {
+                    fired = true;
+                    break;
+                }
             }
         }
 
-        if updated {
+        if fired || updated {
             self.age = 0;
         } else {
             self.age = self.age.saturating_add(1);
             let block_held = self.held & ArtToken::Block.bit() != 0;
-            let max_age = match (self.first, self.second) {
-                (Some(ArtToken::Attack), None) => Self::MAX_AGE_L.as_actual(),
-                (Some(ArtToken::Interact), None) | (Some(ArtToken::Grapple), None) => Self::MAX_AGE_FF.as_actual(),
+            let max_age = match (self.first, self.second, self.third) {
+                (Some(ArtToken::Attack), None, None) => Self::MAX_AGE_L.as_actual(),
+                (Some(ArtToken::Interact), None, None) | (Some(ArtToken::Grapple), None, None) => {
+                    Self::MAX_AGE_FF.as_actual()
+                }
                 // After `r`, `rl` window while block held; +1 frame so late `l` can set `late_rl_rejected`.
-                (Some(ArtToken::Block), None) if block_held => self.max_age_rl.as_actual().saturating_add(1),
+                (Some(ArtToken::Block), None, None) if block_held => {
+                    let rl_age = self.max_age_rl.as_actual().saturating_add(1);
+                    rl_age.max(Self::TRIPLE_STAGE.as_actual())
+                }
                 _ => Self::MAX_AGE.as_actual(),
             };
             if self.age >= max_age {
@@ -527,7 +595,8 @@ impl ArtComboWindow {
         }
     }
 
-    /// Test-only compatibility wrapper. Production code calls `tick_frame`.
+    /// Test-only compatibility wrapper. Production code calls
+    /// `tick_frame_with`.
     #[cfg(test)]
     pub fn tick(
         &mut self,
@@ -543,6 +612,43 @@ impl ArtComboWindow {
         sprint: bool,
         crouch: bool,
     ) {
+        self.tick_with(
+            up,
+            right,
+            down,
+            left,
+            block,
+            attack,
+            interact,
+            grapple,
+            jump,
+            sprint,
+            crouch,
+            |_| true,
+        );
+    }
+
+    /// Test wrapper that lets a test model which pair/triple prefixes are
+    /// configured, matching the real config lookup used by `core.rs`.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick_with<F>(
+        &mut self,
+        up: bool,
+        right: bool,
+        down: bool,
+        left: bool,
+        block: bool,
+        attack: bool,
+        interact: bool,
+        grapple: bool,
+        jump: bool,
+        sprint: bool,
+        crouch: bool,
+        combo_is_bound: F,
+    ) where
+        F: Fn(ArtCombo) -> bool,
+    {
         let mut held = 0u16;
         if up {
             held |= ArtToken::Up.bit();
@@ -580,42 +686,86 @@ impl ArtComboWindow {
 
         let frame = ActionFrame::from_held_for_test(held, self.test_last_held);
         self.test_last_held = held;
-        self.tick_frame(&frame);
+        self.tick_frame_with(&frame, combo_is_bound);
     }
 
-    fn push(&mut self, token: ArtToken) -> bool {
-        match (self.first, self.second) {
-            (None, _) => {
+    /// Returns `(state_changed, completed_trigger)`.
+    fn push<F>(&mut self, token: ArtToken, combo_is_bound: &F) -> (bool, bool)
+    where
+        F: Fn(ArtCombo) -> bool,
+    {
+        match (self.first, self.second, self.third) {
+            (None, _, _) => {
                 self.first = Some(token);
                 self.second = None;
-                true
+                self.third = None;
+                (true, false)
             }
-            (Some(a), None) => {
-                if a == ArtToken::Block && token == ArtToken::Attack {
-                    // Within cfg window, and `r`+`l` both held on the attack edge.
+            (Some(a), None, _) => {
+                let pair = ArtCombo::pair(a, token);
+                let pair_bound = combo_is_bound(pair);
+
+                // The special `r` -> `l` rule applies to a configured pair:
+                // both keys must be held and the attack edge must be inside
+                // the rl window. A triple is allowed to use the generic 0.3s
+                // per-stage window instead.
+                if pair_bound && a == ArtToken::Block && token == ArtToken::Attack {
                     if self.age >= self.max_age_rl.as_actual() {
                         self.late_rl_rejected = true;
                         self.clear();
-                        return false;
+                        return (false, false);
                     }
                     if self.held & ArtToken::Block.bit() == 0 {
                         self.clear();
-                        return false;
+                        return (false, false);
                     }
                 }
-                self.second = Some(token);
-                self.completed_this_frame = Some(ArtCombo::pair(a, token));
-                true
+
+                if pair_bound {
+                    self.second = Some(token);
+                    self.third = None;
+                    self.completed_this_frame = Some(pair);
+                    (true, true)
+                } else if self.token_held(a) && self.age < Self::TRIPLE_STAGE.as_actual() {
+                    // No double match and the first key is still held: this
+                    // edge is the middle key of a possible triple.
+                    self.second = Some(token);
+                    self.third = None;
+                    self.age = 0;
+                    (true, false)
+                } else {
+                    // A triple must keep every upstream key held. Releasing
+                    // the first key before the middle edge invalidates it.
+                    if a == ArtToken::Block && token == ArtToken::Attack && self.age >= self.max_age_rl.as_actual() {
+                        self.late_rl_rejected = true;
+                    }
+                    self.clear();
+                    (false, false)
+                }
             }
-            (Some(_), Some(_)) => {
+            (Some(a), Some(b), None) => {
+                let triple = ArtCombo::triple(a, b, token);
+                let chain_held = self.token_held(a) && self.token_held(b);
+                if combo_is_bound(triple) && chain_held && self.age < Self::TRIPLE_STAGE.as_actual() {
+                    self.third = Some(token);
+                    self.completed_this_frame = Some(triple);
+                    (true, true)
+                } else {
+                    // Triple failed: do not keep a stale first/middle chain.
+                    self.clear();
+                    (false, false)
+                }
+            }
+            (Some(_), Some(_), Some(_)) => {
                 self.first = Some(token);
                 self.second = None;
-                true
+                self.third = None;
+                (true, false)
             }
         }
     }
 
-    /// Two-token combo completed on this frame, if any.
+    /// Two- or three-token combo completed on this frame, if any.
     pub fn take_completed(&mut self) -> Option<ArtCombo> {
         self.completed_this_frame.take()
     }
@@ -631,7 +781,20 @@ impl ArtComboWindow {
         self.first.is_some() && self.second.is_none()
     }
 
+    /// True when a two-token prefix did not match and we are waiting for the
+    /// third key of a three-token combo.
+    #[allow(dead_code)]
+    pub fn awaiting_third(&self) -> bool {
+        self.first.is_some() && self.second.is_some() && self.third.is_none()
+    }
+
+    /// Block first, waiting for the second or third key.
+    pub fn awaiting_block_combo(&self) -> bool {
+        matches!(self.first, Some(ArtToken::Block)) && self.third.is_none()
+    }
+
     /// Block first, waiting for second (e.g. `rl`, `r↑`).
+    #[allow(dead_code)]
     pub fn awaiting_block_second(&self) -> bool {
         matches!(self.first, Some(ArtToken::Block)) && self.second.is_none()
     }
@@ -644,6 +807,7 @@ impl ArtComboWindow {
     pub fn clear(&mut self) {
         self.first = None;
         self.second = None;
+        self.third = None;
         self.age = 0;
         self.completed_this_frame = None;
     }
@@ -830,6 +994,429 @@ mod test {
             Some(ArtCombo::pair(ArtToken::Grapple, ArtToken::Block))
         );
         assert!(w.token_held(ArtToken::Grapple));
+    }
+
+    #[test]
+    fn triple_combo_fires_after_unbound_pair_prefix() {
+        let triple = ArtCombo::triple(ArtToken::Up, ArtToken::Right, ArtToken::Attack);
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.take_completed().is_none());
+
+        // Middle key arrives while the first key is still held.
+        w.tick_with(
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.take_completed().is_none());
+        assert!(w.awaiting_third());
+
+        // Tail arrives while both upstream keys are still held.
+        w.tick_with(
+            true,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert_eq!(w.take_completed(), Some(triple));
+    }
+
+    #[test]
+    fn triple_requires_every_upstream_key_to_stay_held() {
+        let triple = ArtCombo::triple(ArtToken::Up, ArtToken::Right, ArtToken::Attack);
+
+        // Releasing the first key before the middle edge invalidates it.
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        w.tick_with(
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.take_completed().is_none());
+        assert!(!w.awaiting_third());
+
+        // Releasing the middle key before the tail edge also invalidates it.
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        w.tick_with(
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.take_completed().is_none());
+    }
+
+    #[test]
+    fn unbound_block_attack_prefix_uses_three_key_window() {
+        let triple = ArtCombo::triple(ArtToken::Block, ArtToken::Attack, ArtToken::Interact);
+        // The normal rl double window is only 0.1s, but the triple stage is 0.3s.
+        let mut w = ArtComboWindow::new(Frames::standard(6));
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        for _ in 0..10 {
+            w.tick_with(
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                |combo| combo == triple,
+            );
+        }
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.awaiting_third());
+
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert_eq!(w.take_completed(), Some(triple));
+    }
+
+    #[test]
+    fn triple_stages_expire_after_three_tenths_of_a_second() {
+        let triple = ArtCombo::triple(ArtToken::Attack, ArtToken::Right, ArtToken::Jump);
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+
+        // Attack normally has a longer double-key window, but the triple
+        // middle stage is capped at 0.3s.
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        for _ in 0..18 {
+            w.tick_with(
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                |combo| combo == triple,
+            );
+        }
+        w.tick_with(
+            false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.take_completed().is_none());
+        assert!(!w.awaiting_third());
+
+        // Middle -> tail is also limited to 0.3s.
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        w.tick_with(
+            false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.awaiting_third());
+        for _ in 0..18 {
+            w.tick_with(
+                false,
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                |combo| combo == triple,
+            );
+        }
+        w.tick_with(
+            false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            true,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.take_completed().is_none());
+    }
+
+    #[test]
+    fn bound_pair_takes_priority_and_skips_third_key_same_frame() {
+        let pair = ArtCombo::pair(ArtToken::Interact, ArtToken::Jump);
+        let triple = ArtCombo::triple(ArtToken::Interact, ArtToken::Jump, ArtToken::Attack);
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+
+        // interact, jump and attack all get pressed on the same frame. The
+        // interact+jump pair is configured, so the attack edge must not be
+        // judged as the third token at all.
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            true,
+            false,
+            false,
+            |combo| combo == pair || combo == triple,
+        );
+        assert_eq!(w.take_completed(), Some(pair));
+    }
+
+    #[test]
+    fn triple_is_not_judged_after_pair_already_fired() {
+        let pair = ArtCombo::pair(ArtToken::Interact, ArtToken::Interact);
+        let triple = ArtCombo::triple(ArtToken::Interact, ArtToken::Interact, ArtToken::Attack);
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair || combo == triple,
+        );
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair || combo == triple,
+        );
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair || combo == triple,
+        );
+        assert_eq!(w.take_completed(), Some(pair));
+        w.clear();
+
+        // After the pair fired, a later attack edge starts a new sequence and
+        // cannot retroactively turn the already-consumed pair into a triple.
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair || combo == triple,
+        );
+        assert!(w.take_completed().is_none());
     }
 
     #[test]

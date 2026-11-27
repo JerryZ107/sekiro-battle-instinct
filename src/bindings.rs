@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use crate::binding_validation::{BindingValidationError, validate_scheme, validate_scheme_set};
 
 use crate::{
-    config::{Config, ToolCombo, ToolFirst, ToolTail},
+    config::{Config, ToolCombo, ToolCombo3, ToolFirst, ToolTail},
     input::{ArtCombo, ArtToken},
 };
 
@@ -475,7 +475,11 @@ impl BindingSnapshot {
                 .or_else(|| config.arts.get(combo))
                 .copied();
             if let Some(uid) = uid {
-                art_entries.push((uid, vec![KeyToken::from_art(first), KeyToken::from_art(second)]));
+                let mut keys = vec![KeyToken::from_art(first), KeyToken::from_art(second)];
+                if let Some(third) = combo.third() {
+                    keys.push(KeyToken::from_art(third));
+                }
+                art_entries.push((uid, keys));
             }
         }
         art_entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_slice().cmp(b.1.as_slice())));
@@ -489,6 +493,16 @@ impl BindingSnapshot {
                 *uid,
                 vec![
                     KeyToken::from_tool_first(combo.first),
+                    KeyToken::from_tool_tail(combo.tail),
+                ],
+            ));
+        }
+        for (combo, uid) in &config.tools3 {
+            tool_entries.push((
+                *uid,
+                vec![
+                    KeyToken::from_tool_first(combo.first),
+                    KeyToken::from_tool_first(combo.middle),
                     KeyToken::from_tool_tail(combo.tail),
                 ],
             ));
@@ -635,6 +649,7 @@ pub fn apply_to_config(config: &mut Config, ui: &UiBindings) -> Result<()> {
         config.arts.retain(|_, value| *value != uid);
         config.instant_arts.retain(|_, value| *value != uid);
         config.tools.retain(|_, value| *value != uid);
+        config.tools3.retain(|_, value| *value != uid);
         if config.tool_on_t == Some(uid) {
             config.tool_on_t = None;
         }
@@ -657,8 +672,13 @@ pub fn apply_to_config(config: &mut Config, ui: &UiBindings) -> Result<()> {
             match category_for_uid(*uid) {
                 Some(BindingCategory::CombatArt) => {
                     let first = keys[0].to_art().ok_or_else(|| anyhow!("非法招式首键"))?;
-                    let second = keys[1].to_art().ok_or_else(|| anyhow!("非法招式尾键"))?;
-                    let combo = ArtCombo::pair(first, second);
+                    let second = keys[1].to_art().ok_or_else(|| anyhow!("非法招式第二键"))?;
+                    let combo = match keys.get(2) {
+                        Some(third) => {
+                            ArtCombo::triple(first, second, third.to_art().ok_or_else(|| anyhow!("非法招式第三键"))?)
+                        }
+                        None => ArtCombo::pair(first, second),
+                    };
                     if instant_uids.contains(uid) {
                         if config
                             .instant_arts
@@ -688,7 +708,7 @@ pub fn apply_to_config(config: &mut Config, ui: &UiBindings) -> Result<()> {
                             }
                             _ => return Err(anyhow!("单键忍具只能使用忍具键/忍具切换键")),
                         }
-                    } else {
+                    } else if keys.len() == 2 {
                         let first = keys[0]
                             .to_tool_first()
                             .ok_or_else(|| anyhow!("忍具键/忍具切换键只能作为尾键"))?;
@@ -696,6 +716,20 @@ pub fn apply_to_config(config: &mut Config, ui: &UiBindings) -> Result<()> {
                         let combo = ToolCombo { first, tail };
                         if config
                             .tools
+                            .insert(combo, *uid)
+                            .is_some_and(|previous| previous != *uid)
+                        {
+                            return Err(anyhow!("忍具键位冲突"));
+                        }
+                    } else {
+                        let first = keys[0]
+                            .to_tool_first()
+                            .ok_or_else(|| anyhow!("忍具键/忍具切换键只能作为尾键"))?;
+                        let middle = keys[1].to_tool_first().ok_or_else(|| anyhow!("忍具中键不支持该键位"))?;
+                        let tail = keys[2].to_tool_tail().ok_or_else(|| anyhow!("忍具尾键不支持该键位"))?;
+                        let combo = ToolCombo3 { first, middle, tail };
+                        if config
+                            .tools3
                             .insert(combo, *uid)
                             .is_some_and(|previous| previous != *uid)
                         {
@@ -838,6 +872,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_three_key_art_json() {
+        let text = r#"{
+          "version": 3,
+          "bindings": [
+            {"uid":7700,"keys":["Block","Attack","Interact"]}
+          ]
+        }"#;
+        let ui = UiBindings::parse(text).unwrap();
+        assert_eq!(
+            ui.entries[&7700],
+            vec![vec![KeyToken::Block, KeyToken::Attack, KeyToken::Interact]]
+        );
+    }
+
+    #[test]
     fn rejects_prosthetic_key_as_first() {
         let snap = BindingSnapshot::default();
         assert!(
@@ -958,6 +1007,25 @@ mod tests {
     }
 
     #[test]
+    fn three_key_art_scheme_applies_and_roundtrips_through_snapshot() {
+        let mut config = Config::from("7700 Sakura Dance rl\n");
+        let mut ui = UiBindings::default();
+        ui.entries
+            .insert(7700, vec![vec![KeyToken::Block, KeyToken::Attack, KeyToken::Interact]]);
+        apply_to_config(&mut config, &ui).unwrap();
+        assert_eq!(
+            config.art(ArtCombo::triple(ArtToken::Block, ArtToken::Attack, ArtToken::Interact)),
+            Some(7700)
+        );
+
+        let snapshot = BindingSnapshot::from_config(Path::new("__missing_cfg__"), &config, &ui);
+        assert_eq!(
+            snapshot.current_entry(7700).unwrap().keys,
+            vec![KeyToken::Block, KeyToken::Attack, KeyToken::Interact]
+        );
+    }
+
+    #[test]
     fn multiple_art_schemes_are_applied_for_same_uid() {
         let mut config = Config::from("7100 test ee\n");
         let mut ui = UiBindings::default();
@@ -973,6 +1041,31 @@ mod tests {
         assert_eq!(
             config.art(ArtCombo::pair(ArtToken::Block, ArtToken::Attack)),
             Some(7100)
+        );
+    }
+
+    #[test]
+    fn three_key_prosthetic_scheme_applies_and_roundtrips_through_snapshot() {
+        let mut config = Config::from("75300 Sabimaru ↑rq\n");
+        let mut ui = UiBindings::default();
+        ui.entries.insert(
+            75300,
+            vec![vec![KeyToken::Up, KeyToken::Block, KeyToken::ProstheticSwitch]],
+        );
+        apply_to_config(&mut config, &ui).unwrap();
+        assert_eq!(
+            config.tool3(ToolCombo3 {
+                first: ToolFirst::Up,
+                middle: ToolFirst::Block,
+                tail: ToolTail::Switch,
+            }),
+            Some(75300)
+        );
+
+        let snapshot = BindingSnapshot::from_config(Path::new("__missing_cfg__"), &config, &ui);
+        assert_eq!(
+            snapshot.current_entry(75300).unwrap().keys,
+            vec![KeyToken::Up, KeyToken::Block, KeyToken::ProstheticSwitch]
         );
     }
 

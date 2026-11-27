@@ -19,7 +19,7 @@ impl fmt::Display for BindingValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidUid(uid) => write!(f, "非法技能 UID：{uid}"),
-            Self::ArtNeedsTwoNormalKeys => write!(f, "流派招式必须配置为两个普通键位"),
+            Self::ArtNeedsTwoNormalKeys => write!(f, "流派招式必须配置为两或三个普通键位"),
             Self::ProstheticKeyCount => write!(f, "义手忍具键位数量非法"),
             Self::ProstheticSingleKey => write!(f, "单键忍具只能使用忍具键/忍具切换键"),
             Self::ProstheticKeyAsFirst => write!(f, "忍具键/忍具切换键只能作为尾键"),
@@ -39,22 +39,30 @@ pub fn validate_scheme(uid: u32, keys: &[KeyToken]) -> Result<(), BindingValidat
     let category = category_for_uid(uid).ok_or(BindingValidationError::InvalidUid(uid))?;
     match category {
         BindingCategory::CombatArt => {
-            if keys.len() != 2 || keys.iter().any(|key| key.is_prosthetic()) {
+            if !matches!(keys.len(), 2 | 3) || keys.iter().any(|key| key.is_prosthetic()) {
                 return Err(BindingValidationError::ArtNeedsTwoNormalKeys);
             }
         }
         BindingCategory::Prosthetic => {
-            if keys.is_empty() || keys.len() > 2 {
+            if keys.is_empty() || keys.len() > 3 {
                 return Err(BindingValidationError::ProstheticKeyCount);
             }
             if keys.len() == 1 && !keys[0].is_prosthetic() {
                 return Err(BindingValidationError::ProstheticSingleKey);
             }
-            if keys.len() == 2 && keys[0].is_prosthetic() {
+            if keys.len() >= 2 && (keys[0].is_prosthetic() || (keys.len() == 3 && keys[1].is_prosthetic())) {
                 return Err(BindingValidationError::ProstheticKeyAsFirst);
             }
             if keys.len() == 2 && keys[1].to_tool_tail().is_none() {
                 return Err(BindingValidationError::UnsupportedProstheticTail);
+            }
+            if keys.len() == 3 {
+                if keys[0].to_tool_first().is_none() || keys[1].to_tool_first().is_none() {
+                    return Err(BindingValidationError::ProstheticKeyAsFirst);
+                }
+                if keys[2].to_tool_tail().is_none() {
+                    return Err(BindingValidationError::UnsupportedProstheticTail);
+                }
             }
         }
     }
@@ -146,10 +154,26 @@ mod tests {
     }
 
     #[test]
-    fn combat_art_requires_two_normal_keys() {
+    fn combat_art_requires_two_or_three_normal_keys() {
         assert!(validate_candidate(&[], 7100, &[KeyToken::Interact, KeyToken::Attack]).is_ok());
+        assert!(validate_candidate(&[], 7100, &[KeyToken::Interact, KeyToken::Block, KeyToken::Attack]).is_ok());
         assert!(validate_candidate(&[], 7100, &[KeyToken::Interact]).is_err());
+        assert!(
+            validate_candidate(
+                &[],
+                7100,
+                &[KeyToken::Interact, KeyToken::Attack, KeyToken::Block, KeyToken::Jump]
+            )
+            .is_err()
+        );
         assert!(validate_candidate(&[], 7100, &[KeyToken::Interact, KeyToken::ProstheticUse]).is_err());
+    }
+
+    #[test]
+    fn prosthetic_accepts_three_key_first_middle_tail_shape() {
+        assert!(validate_candidate(&[], 70500, &[KeyToken::Up, KeyToken::Block, KeyToken::ProstheticUse]).is_ok());
+        assert!(validate_candidate(&[], 70500, &[KeyToken::Up, KeyToken::ProstheticUse, KeyToken::Attack]).is_err());
+        assert!(validate_candidate(&[], 70500, &[KeyToken::Up, KeyToken::Block, KeyToken::Down]).is_err());
     }
 
     #[test]

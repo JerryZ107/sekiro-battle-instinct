@@ -131,8 +131,10 @@ impl Mod {
         let mut config = self.base_config.clone();
         filter_config_by_availability(&mut config);
         let arts = config.arts.len() + config.instant_arts.len();
-        let tools =
-            config.tools.len() + usize::from(config.tool_on_t.is_some()) + usize::from(config.tool_on_q.is_some());
+        let tools = config.tools.len()
+            + config.tools3.len()
+            + usize::from(config.tool_on_t.is_some())
+            + usize::from(config.tool_on_q.is_some());
         log::warn!("keybinds: available filter arts={arts} tools={tools}");
         self.config = config;
         self.reset_binding_runtime_state();
@@ -153,6 +155,8 @@ impl Mod {
         self.combat_art.suppress_late_rl_skill = false;
         self.prosthetic.tool_first = None;
         self.prosthetic.tool_first_age = 0;
+        self.prosthetic.tool_middle = None;
+        self.prosthetic.tool_middle_age = 0;
         self.prosthetic.hold_tool_tail = None;
         self.prosthetic.tool_min_use = 0;
         self.prosthetic.cur_tool = None;
@@ -292,7 +296,9 @@ impl Mod {
         /***** update combat-art token buffer (normal action tokens + directions) *****/
         // Logical action bits keep in-game remaps and gamepad bindings working.
         if has_available_arts {
-            self.combat_art.combo.tick_frame(&self.action_frame);
+            self.combat_art
+                .combo
+                .tick_frame_with(&self.action_frame, |combo| self.config.art_or_instant(combo).is_some());
         } else {
             self.combat_art.combo.clear();
         }
@@ -355,8 +361,8 @@ impl Mod {
 
         let completed_combo = self.combat_art.combo.take_completed();
         let desired_art = if let Some(combo) = completed_combo {
-            // Two consecutive tokens matched (e.g. r↑, ↑e, ↑f, ee, ff, rl, rf, fr, fl).
-            if let (Some(uid), Some(hold)) = (self.config.art_or_instant(combo), combo.second()) {
+            // Two or three consecutive tokens matched (e.g. r↑, ↑e, ee, rl, or a triple).
+            if let (Some(uid), Some(hold)) = (self.config.art_or_instant(combo), combo.last()) {
                 self.combat_art.combo.clear();
                 let is_rl = combo.is_rl();
                 if self.combat_art.fire_busy() && !is_rl {
@@ -516,9 +522,9 @@ impl Mod {
 
         // --- Combat-art input takeover ---
         // Real keyboard B+A must never reach the skill slot; only mod-injected B+A (below) may
-        // activate arts. While waiting for the second key of block-first combos, also strip
+        // activate arts. While waiting for the next key of block-first combos, also strip
         // stray ATTACK so held-l + new block cannot vanilla-fire before the combo completes.
-        if has_available_arts && self.combat_art.combo.awaiting_block_second() && blocking {
+        if has_available_arts && self.combat_art.combo.awaiting_block_combo() && blocking {
             action::strip_input(input_handler, ATTACK);
         }
         if has_available_arts && blocking && attacking {
@@ -616,6 +622,7 @@ fn collect_availability_uids(config: &Config) -> Vec<UID> {
     uids.extend(config.arts.values().copied());
     uids.extend(config.instant_arts.values().copied());
     uids.extend(config.tools.values().copied());
+    uids.extend(config.tools3.values().copied());
     uids.extend(config.tool_on_t);
     uids.extend(config.tool_on_q);
     uids.sort_unstable();
@@ -686,6 +693,7 @@ where
         .collect();
 
     config.tools.retain(|_, uid| available(*uid));
+    config.tools3.retain(|_, uid| available(*uid));
     if config.tool_on_t.is_some_and(|uid| !available(uid)) {
         config.tool_on_t = None;
     }
@@ -708,7 +716,7 @@ fn filter_config_by_availability(config: &mut Config) {
 mod availability_tests {
     use super::*;
     use crate::action::DODGE;
-    use crate::config::{ToolCombo, ToolFirst};
+    use crate::config::{ToolCombo, ToolCombo3, ToolFirst};
     use crate::features::combat_art::SAKURA_DANCE;
 
     #[test]
@@ -774,6 +782,21 @@ mod availability_tests {
         assert!(uids.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(uids.iter().filter(|&&uid| uid == 70500).count(), 1);
         assert_eq!(uids, vec![5500, 7100, 70500, 78300]);
+    }
+
+    #[test]
+    fn three_key_tool_availability_is_filtered_and_collected() {
+        let mut config = Config::default();
+        let combo = ToolCombo3 {
+            first: ToolFirst::Up,
+            middle: ToolFirst::Right,
+            tail: ToolTail::Use,
+        };
+        config.tools3.insert(combo, 75300);
+        assert!(collect_availability_uids(&config).contains(&75300));
+
+        filter_config_by_availability_with(&mut config, |uid| uid != 75300);
+        assert!(config.tools3.is_empty());
     }
 
     #[test]

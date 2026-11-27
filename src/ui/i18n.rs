@@ -67,7 +67,9 @@ impl Lang {
     pub(crate) fn validation_error(self, error: BindingValidationError) -> String {
         match (self, error) {
             (Lang::Zh, BindingValidationError::InvalidUid(uid)) => format!("非法技能 UID：{uid}"),
-            (Lang::Zh, BindingValidationError::ArtNeedsTwoNormalKeys) => "流派招式必须配置为两个普通键位".to_string(),
+            (Lang::Zh, BindingValidationError::ArtNeedsTwoNormalKeys) => {
+                "流派招式必须配置为两或三个普通键位".to_string()
+            }
             (Lang::Zh, BindingValidationError::ProstheticKeyCount) => "义手忍具键位数量非法".to_string(),
             (Lang::Zh, BindingValidationError::ProstheticSingleKey) => "单键忍具只能使用忍具键/忍具切换键".to_string(),
             (Lang::Zh, BindingValidationError::ProstheticKeyAsFirst) => "忍具键/忍具切换键只能作为尾键".to_string(),
@@ -77,17 +79,17 @@ impl Lang {
             (Lang::Zh, BindingValidationError::Occupied) => "当前键位已被占用".to_string(),
             (Lang::En, BindingValidationError::InvalidUid(uid)) => format!("Invalid skill UID: {uid}"),
             (Lang::En, BindingValidationError::ArtNeedsTwoNormalKeys) => {
-                "Combat arts require two normal keys.".to_string()
+                "Combat arts require two or three normal keys.".to_string()
             }
             (Lang::En, BindingValidationError::ProstheticKeyCount) => "Invalid number of prosthetic keys.".to_string(),
             (Lang::En, BindingValidationError::ProstheticSingleKey) => {
                 "Single-key mode only accepts Use Tool or Switch Tool.".to_string()
             }
             (Lang::En, BindingValidationError::ProstheticKeyAsFirst) => {
-                "Use Tool / Switch Tool can only be the second key.".to_string()
+                "Use Tool / Switch Tool can only be the tail key.".to_string()
             }
             (Lang::En, BindingValidationError::UnsupportedProstheticTail) => {
-                "This key cannot be used as the second prosthetic key.".to_string()
+                "This key cannot be used as the prosthetic tail key.".to_string()
             }
             (Lang::En, BindingValidationError::DuplicateScheme) => {
                 "This skill already has the same scheme.".to_string()
