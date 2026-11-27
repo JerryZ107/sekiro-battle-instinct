@@ -3,10 +3,11 @@
 // Paper-doll damage reduction (纸人减伤)
 //
 // Damage tier is based on raw HP damage / player max HP:
-//   <   9%  -> no mitigation and no paper consumption
-//   <= 33%  -> tier 1, cost 1, reduce 60%
-//   <= 66%  -> tier 2, cost 2, reduce 60%
-//   >  66%  -> tier 3, cost 3, reduce 60%
+//   <= 10%  -> tier 0, no mitigation and no paper consumption
+//   <= 40%  -> tier 1, cost 1, reduce 60%
+//   <= 70%  -> tier 2, cost 2, reduce 60%
+//   >  70%  -> tier 3, cost 3, reduce 60%
+// Boundaries 10%, 40% and 70% belong to the lower tier.
 //
 // When there are not enough paper dolls:
 //   tier 3, 2 dolls -> cost 2, reduce 30%
@@ -173,7 +174,7 @@ pub fn prepare_damage(damage_info: *mut c_void, hp_before: i32) -> Option<Pendin
 
     let Some(tier) = tier_for_damage(raw_damage, max_hp) else {
         if guard.debug {
-            log::info!("PAPER_SKIP_LOW raw={raw_damage} maxHp={max_hp} threshold=9%");
+            log::info!("PAPER_SKIP_LOW raw={raw_damage} maxHp={max_hp} threshold=10%");
         }
         return None;
     };
@@ -291,13 +292,14 @@ fn tier_for_damage(raw_damage: i32, max_hp: i32) -> Option<Tier> {
     let max = max_hp.max(1) as u64;
     let scaled_damage = raw.saturating_mul(100);
 
-    // Below 9% max HP: do not spend paper dolls and do not alter the hit.
-    if scaled_damage < max.saturating_mul(9) {
+    // Tier 0 includes 0% through 10%: no paper dolls are spent and the hit
+    // is not altered. 10%, 40% and 70% belong to the lower tier.
+    if scaled_damage <= max.saturating_mul(10) {
         return None;
     }
-    Some(if scaled_damage <= max.saturating_mul(33) {
+    Some(if scaled_damage <= max.saturating_mul(40) {
         Tier::One
-    } else if scaled_damage <= max.saturating_mul(66) {
+    } else if scaled_damage <= max.saturating_mul(70) {
         Tier::Two
     } else {
         Tier::Three
@@ -347,20 +349,22 @@ mod tests {
 
     #[test]
     fn damage_tiers_use_raw_damage_over_max_hp() {
-        assert_eq!(tier_for_damage(89, 1000), None);
-        assert_eq!(tier_for_damage(90, 1000), Some(Tier::One));
-        assert_eq!(tier_for_damage(330, 1000), Some(Tier::One));
-        assert_eq!(tier_for_damage(331, 1000), Some(Tier::Two));
-        assert_eq!(tier_for_damage(660, 1000), Some(Tier::Two));
-        assert_eq!(tier_for_damage(661, 1000), Some(Tier::Three));
+        assert_eq!(tier_for_damage(100, 1000), None);
+        assert_eq!(tier_for_damage(101, 1000), Some(Tier::One));
+        assert_eq!(tier_for_damage(400, 1000), Some(Tier::One));
+        assert_eq!(tier_for_damage(401, 1000), Some(Tier::Two));
+        assert_eq!(tier_for_damage(700, 1000), Some(Tier::Two));
+        assert_eq!(tier_for_damage(701, 1000), Some(Tier::Three));
         assert_eq!(tier_for_damage(1120, 1120), Some(Tier::Three));
-        assert_eq!(tier_for_damage(169, 1120), Some(Tier::One));
-        assert_eq!(tier_for_damage(394, 1120), Some(Tier::Two));
 
-        // 9% boundary for a non-round max HP: 100/1120 is 8.93%, 101/1120
-        // is 9.02%. Exactly 9% belongs to tier one.
-        assert_eq!(tier_for_damage(100, 1120), None);
-        assert_eq!(tier_for_damage(101, 1120), Some(Tier::One));
+        // Non-round max HP: 112/1120 is exactly 10% and stays tier 0;
+        // 113/1120 is above 10% and enters tier 1.
+        assert_eq!(tier_for_damage(112, 1120), None);
+        assert_eq!(tier_for_damage(113, 1120), Some(Tier::One));
+        assert_eq!(tier_for_damage(448, 1120), Some(Tier::One));
+        assert_eq!(tier_for_damage(449, 1120), Some(Tier::Two));
+        assert_eq!(tier_for_damage(784, 1120), Some(Tier::Two));
+        assert_eq!(tier_for_damage(785, 1120), Some(Tier::Three));
     }
 
     #[test]

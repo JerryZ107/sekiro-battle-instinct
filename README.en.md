@@ -38,11 +38,12 @@ Incoming hit damage is divided into tiers based on its percentage of your maximu
 
 | Damage tier | Single-hit damage as % of max HP | Effect with enough emblems |
 | --- | --- | --- |
-| Tier 1 | 9%–33% | Spend 1 emblem; reduce this hit's HP loss by 60% |
-| Tier 2 | 33%–66% | Spend 2 emblems; reduce this hit's HP loss by 60% |
-| Tier 3 | 66%–100% | Spend 3 emblems; reduce this hit's HP loss by 60% |
+| Tier 0 | 0% (inclusive)–10% (inclusive) | No emblem cost; no mitigation |
+| Tier 1 | >10%–40% (inclusive) | Spend 1 emblem; reduce this hit's HP loss by 60% |
+| Tier 2 | >40%–70% (inclusive) | Spend 2 emblems; reduce this hit's HP loss by 60% |
+| Tier 3 | >70%–100% (inclusive) | Spend 3 emblems; reduce this hit's HP loss by 60% |
 
-Hits below **9%** of max HP do not consume emblems and receive no mitigation.
+The boundary values 10%, 40% and 70% belong to the lower tier.
 
 When emblems are insufficient, the following fallback rules apply:
 
