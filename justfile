@@ -23,6 +23,8 @@ dist:
     cp -f "./res/battle_instinct.cfg" "./dist/en/battle_instinct.cfg"
     cp -f "./res/battle_instinct_keybinds.json" "./dist/zh/battle_instinct_keybinds.json"
     cp -f "./res/battle_instinct_keybinds.json" "./dist/en/battle_instinct_keybinds.json"
+    cp -f "./tools/auto_alt_tab.ps1" "./dist/zh/auto_alt_tab.ps1"
+    cp -f "./tools/auto_alt_tab.ps1" "./dist/en/auto_alt_tab.ps1"
     cp -f "./third_party/modengine/dinput8_modengine.dll" "./dist/zh/dinput8_modengine.dll"
     cp -f "./third_party/modengine/dinput8_modengine.dll" "./dist/en/dinput8_modengine.dll"
     cp -f "./third_party/modengine/modengine.ini" "./dist/zh/modengine.ini"

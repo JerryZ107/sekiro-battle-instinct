@@ -18,7 +18,7 @@ mod logger;
 mod memory;
 mod menu_probe;
 mod ui;
-mod window_focus;
+mod window_focus_script;
 
 use core::Mod;
 use std::{
@@ -448,11 +448,7 @@ fn modify(path: &Path) {
         }
 
         if let Some(game_dir) = path.parent() {
-            if window_focus::enabled(game_dir) {
-                window_focus::schedule_after_startup();
-            } else {
-                log::warn!("window focus: disabled by disable_auto_alt_tab.enable");
-            }
+            window_focus_script::launch_if_available(game_dir);
         }
         Ok::<_, anyhow::Error>(())
     })();
