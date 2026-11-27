@@ -151,9 +151,28 @@ if ($gameWindow -eq [IntPtr]::Zero) {
 
 Write-Log "window found hwnd=$gameWindow"
 Start-Sleep -Milliseconds 500
+
+$foregroundBefore = [PjFocus]::GetForegroundWindow()
 Send-AltTab
-Write-Log 'sent alt+tab out'
+Write-Log "sent alt+tab out foreground_before=$foregroundBefore"
 Start-Sleep -Milliseconds 700
+
+$foregroundAfterOut = [PjFocus]::GetForegroundWindow()
+$leftForeground = ($foregroundAfterOut -ne $gameWindow)
+$minimizedOut = [PjFocus]::IsIconic($gameWindow)
+$didLeave = $leftForeground -or $minimizedOut
+Write-Log "after alt+tab foreground=$foregroundAfterOut left_foreground=$leftForeground minimized=$minimizedOut did_leave=$didLeave"
+
+if (-not $didLeave) {
+    # Some exclusive-fullscreen/input-capture states swallow synthetic
+    # Alt+Tab. Force a real minimize as the fallback so the outbound switch
+    # is guaranteed to happen before restoring the game window.
+    [void][PjFocus]::ShowWindowAsync($gameWindow, 6) # SW_MINIMIZE
+    Start-Sleep -Milliseconds 700
+    $foregroundAfterMinimize = [PjFocus]::GetForegroundWindow()
+    $minimizedOut = [PjFocus]::IsIconic($gameWindow)
+    Write-Log "forced minimize foreground=$foregroundAfterMinimize minimized=$minimizedOut"
+}
 
 $restored = $false
 for ($attempt = 1; $attempt -le 5; $attempt++) {
