@@ -149,8 +149,9 @@ pub struct Config {
     pub instant_arts: ComboTable<ArtCombo, UID>,
     /// Two-key prosthetic binds: (↑↓←→|r|l|e|f|q) then a tail key.
     pub tools: ComboTable<ToolCombo, UID>,
-    /// Three-key prosthetic binds: first → middle → tail. Each stage uses
-    /// the same 0.3s perception window and requires upstream keys to stay held.
+    /// Three-key prosthetic binds: first → middle → tail. First → middle
+    /// uses the configured 0.3s window; middle → tail allows 1s. All upstream
+    /// keys must stay held when the tail is pressed.
     pub tools3: ComboTable<ToolCombo3, UID>,
     /// Unique bare-`t` prosthetic (default after other tools are released).
     pub tool_on_t: Option<UID>,

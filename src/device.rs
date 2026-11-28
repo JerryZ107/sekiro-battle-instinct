@@ -4,10 +4,105 @@ use std::{
 };
 
 use gilrs::{Axis, EventType, Gilrs};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VIRTUAL_KEY};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyState, VIRTUAL_KEY};
 
 pub fn is_key_down(keycode: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(keycode.0.into()) as u16 & 0x8000 != 0 }
+}
+
+fn is_key_async_down(keycode: u16) -> bool {
+    unsafe { GetAsyncKeyState(keycode as i32) as u16 & 0x8000 != 0 }
+}
+
+/// Some game action bits are short press pulses rather than held states.
+/// Learn the physical key that produced an action edge so that a combo can
+/// still verify that the first key remains held while the tail is pressed.
+pub struct KeyHoldTracker {
+    down: [u64; 4],
+    mapped: [u64; 4],
+}
+
+impl KeyHoldTracker {
+    pub const fn new() -> Self {
+        Self {
+            down: [0; 4],
+            mapped: [0; 4],
+        }
+    }
+
+    /// Refresh all physical key states and return keys that became down.
+    pub fn update(&mut self) -> [u64; 4] {
+        let mut snapshot = [0u64; 4];
+        for vk in 8u16..=254 {
+            if is_key_async_down(vk) {
+                snapshot[(vk >> 6) as usize] |= 1u64 << (vk & 63);
+            }
+        }
+        self.update_from_snapshot(snapshot)
+    }
+
+    fn update_from_snapshot(&mut self, snapshot: [u64; 4]) -> [u64; 4] {
+        let mut newly_down = [0u64; 4];
+        for index in 0..4 {
+            newly_down[index] = snapshot[index] & !self.down[index];
+            self.down[index] = snapshot[index];
+        }
+        newly_down
+    }
+
+    /// Remember the physical key(s) learned at a game-action edge. An empty
+    /// edge set (for example a gamepad button) keeps the previous mapping.
+    pub fn learn(&mut self, newly_down: [u64; 4]) {
+        if newly_down.iter().any(|bits| *bits != 0) {
+            self.mapped = newly_down;
+        }
+    }
+
+    pub fn held(&self) -> bool {
+        (0..4).any(|word| self.mapped[word] & self.down[word] != 0)
+    }
+
+    pub fn clear(&mut self) {
+        self.down = [0; 4];
+        self.mapped = [0; 4];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyHoldTracker;
+
+    fn key_bit(vk: u16) -> [u64; 4] {
+        let mut bits = [0u64; 4];
+        bits[(vk >> 6) as usize] = 1u64 << (vk & 63);
+        bits
+    }
+
+    #[test]
+    fn learned_key_tracks_physical_hold_and_release() {
+        let mut tracker = KeyHoldTracker::new();
+        let ctrl = key_bit(0x11);
+
+        let newly_down = tracker.update_from_snapshot(ctrl);
+        tracker.learn(newly_down);
+        assert!(tracker.held());
+
+        tracker.update_from_snapshot([0; 4]);
+        assert!(!tracker.held());
+
+        tracker.update_from_snapshot(ctrl);
+        assert!(tracker.held());
+    }
+
+    #[test]
+    fn gamepad_edges_keep_the_previous_keyboard_mapping() {
+        let mut tracker = KeyHoldTracker::new();
+        let ctrl = key_bit(0x11);
+        let newly_down = tracker.update_from_snapshot(ctrl);
+        tracker.learn(newly_down);
+        tracker.learn([0; 4]);
+        assert!(tracker.held());
+    }
 }
 
 const RECONNECT_POLL_INTERVAL: Duration = Duration::from_millis(500);

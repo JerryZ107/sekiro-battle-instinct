@@ -5,7 +5,7 @@ use crate::{
     action::{self, ATTACK, BLOCK, CROUCH, GRAPPLE, INTERACT, JUMP, SPRINT, USE_PROSTHETIC, VANILLA_ART_INPUT},
     bindings,
     config::{Config, ToolTail},
-    device::{Gamepad, is_key_down},
+    device::{Gamepad, KeyHoldTracker, is_key_down},
     features::{
         combat_art::{
             ART_INPUT_PAUSE_DURATION, ATTACK_SUPRESSION_DURATION, BLOCK_INJECTION_DURATION, CombatArt, CombatArtState,
@@ -59,6 +59,10 @@ pub struct Mod {
     disable_block: bool,
     action_frame: ActionFrame,
     direction: DirectionBuffer,
+    /// Crouch is a pulse action on some binds; learn the physical key so the
+    /// "first key held" combo rule still works while that key is down.
+    crouch_hold: KeyHoldTracker,
+    prev_crouch_action: bool,
     /// Prosthetic-tool state machine, grouped in its feature module.
     prosthetic: ProstheticState,
     /// `None` when `no_gamepad.enable` is present: keyboard-only players and
@@ -99,6 +103,8 @@ impl Mod {
             combat_art,
             action_frame: ActionFrame::default(),
             direction: DirectionBuffer::new(),
+            crouch_hold: KeyHoldTracker::new(),
+            prev_crouch_action: false,
             prosthetic: ProstheticState::new(),
             disable_block: false,
         };
@@ -142,6 +148,8 @@ impl Mod {
 
     fn reset_binding_runtime_state(&mut self) {
         self.combat_art.combo.clear();
+        self.crouch_hold.clear();
+        self.prev_crouch_action = false;
         self.combat_art.clear_fire();
         self.combat_art.queued_art = None;
         self.combat_art.queue_flush_left = 0;
@@ -175,7 +183,7 @@ impl Mod {
             }
         };
 
-        if frame.was_held(ArtToken::Block) {
+        if frame.held(ArtToken::Block) {
             for direction in DIRECTIONS {
                 if frame.pressed(direction) {
                     push(ArtCombo::pair(ArtToken::Block, direction));
@@ -188,10 +196,10 @@ impl Mod {
                     push(ArtCombo::pair(direction, ArtToken::Attack));
                 }
             }
-            if frame.was_held(ArtToken::Interact) {
+            if frame.held(ArtToken::Interact) {
                 push(ArtCombo::pair(ArtToken::Interact, ArtToken::Attack));
             }
-            if frame.was_held(ArtToken::Grapple) {
+            if frame.held(ArtToken::Grapple) {
                 push(ArtCombo::pair(ArtToken::Grapple, ArtToken::Attack));
             }
         }
@@ -265,10 +273,27 @@ impl Mod {
         let (combo_up, combo_right, combo_down, combo_left) =
             self.direction.update(stick, w_down, d_down, s_down, a_down);
 
+        // Crouch can be emitted as a short action pulse even while the key is
+        // physically held. Track that key separately so the first-key hold
+        // check used by two/three-key combos remains valid.
+        let crouch_action = input_handler.action & CROUCH != 0;
+        let newly_down = self.crouch_hold.update();
+        if crouch_action && !self.prev_crouch_action {
+            self.crouch_hold.learn(newly_down);
+        }
+        self.prev_crouch_action = crouch_action;
+        let crouch_held = crouch_action || self.crouch_hold.held();
+
         // Single edge-detection pass. Combat art and prosthetic both consume
         // this frame, so the 11 token edges are no longer computed twice.
-        self.action_frame
-            .update(input_handler, combo_up, combo_right, combo_down, combo_left);
+        self.action_frame.update(
+            input_handler,
+            combo_up,
+            combo_right,
+            combo_down,
+            combo_left,
+            crouch_held,
+        );
 
         /***** parse the action bitflags from the shared frame *****/
         let attacking = self.action_frame.held(ArtToken::Attack);

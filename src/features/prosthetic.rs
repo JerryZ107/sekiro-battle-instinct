@@ -17,6 +17,10 @@ use crate::{
 pub const PROSTHETIC_SUPRESSION_DURATION: u8 = 2;
 pub const PROSTHETIC_RETURN_DELAY: Frames = Frames::standard(84);
 
+/// Middle -> tail stage of a three-key prosthetic binding (1s). The first
+/// and middle keys must both still be held when the tail is pressed.
+const TOOL_TRIPLE_TAIL_WINDOW: Frames = Frames::standard(60);
+
 // Slot index values used by the game's equip array.
 pub const PROSTHETIC_SLOT_0: u8 = 0;
 pub const PROSTHETIC_SLOT_1: u8 = 2;
@@ -263,12 +267,12 @@ impl ProstheticState {
         let Some(first) = self.tool_first else {
             return ToolTailMatch::None;
         };
-        let window = config.tool_window().as_actual();
+        let first_window = config.tool_window().as_actual();
 
         // Once a middle key exists, only the exact three-key sequence may fire.
         if let Some(middle) = self.tool_middle {
             let chain_held = tool_first_held(first, frame) && tool_first_held(middle, frame);
-            if chain_held && self.tool_middle_age < window {
+            if chain_held && self.tool_middle_age < TOOL_TRIPLE_TAIL_WINDOW.as_actual() {
                 if let Some(uid) = config.tool3(ToolCombo3 { first, middle, tail }) {
                     return ToolTailMatch::Arm(uid);
                 }
@@ -276,15 +280,18 @@ impl ProstheticState {
             return ToolTailMatch::None;
         }
 
-        // Two-key trigger priority: if this tail completes a configured pair,
-        // fire it and never treat the same edge as a triple middle key.
-        if let Some(uid) = config.tool(ToolCombo { first, tail }) {
-            return ToolTailMatch::Arm(uid);
+        // Two-key trigger priority: if this tail completes a configured pair
+        // while the first key is still held, fire it and never treat the same
+        // edge as a triple middle key. This mirrors the three-key hold chain.
+        if tool_first_held(first, frame) {
+            if let Some(uid) = config.tool(ToolCombo { first, tail }) {
+                return ToolTailMatch::Arm(uid);
+            }
         }
 
         // No pair matched. Keep this edge as the middle key only when the
         // first key is still held and the 0.3s first-key window is valid.
-        if tool_first_held(first, frame) && self.tool_first_age < window {
+        if tool_first_held(first, frame) && self.tool_first_age < first_window {
             if let Some(middle) = middle_for_tail(tail) {
                 return ToolTailMatch::Middle(middle);
             }
@@ -365,15 +372,15 @@ impl ProstheticState {
         }
 
         if self.tool_first.is_some() {
-            let window = config.tool_window().as_actual();
+            let first_window = config.tool_window().as_actual();
             if self.tool_middle.is_some() {
                 self.tool_middle_age = self.tool_middle_age.saturating_add(1);
-                if self.tool_middle_age >= window {
+                if self.tool_middle_age >= TOOL_TRIPLE_TAIL_WINDOW.as_actual() {
                     self.clear_tool_sequence();
                 }
             } else {
                 self.tool_first_age = self.tool_first_age.saturating_add(1);
-                if self.tool_first_age >= window {
+                if self.tool_first_age >= first_window {
                     self.clear_tool_sequence();
                 }
             }
@@ -514,10 +521,45 @@ mod tests {
             ToolTailMatch::None
         );
 
-        state.tool_middle_age = config.tool_window().as_actual();
+        // A long middle -> tail pause is allowed (up to 1s).
+        state.tool_middle_age = 45;
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &both_held),
+            ToolTailMatch::Arm(75300)
+        );
+
+        state.tool_middle_age = TOOL_TRIPLE_TAIL_WINDOW.as_actual();
         assert_eq!(
             state.classify_tool_tail(ToolTail::Block, &config, &both_held),
             ToolTailMatch::None
+        );
+    }
+
+    #[test]
+    fn two_key_tool_requires_first_key_held_when_tail_is_pressed() {
+        let mut config = Config::default();
+        config.tools.insert(
+            ToolCombo {
+                first: ToolFirst::Up,
+                tail: ToolTail::Block,
+            },
+            75300,
+        );
+        let mut state = ProstheticState::new();
+        state.push_tool_first(ToolFirst::Up);
+
+        // Tail edge after the first key was released must not arm the tool.
+        let tail_only = held_frame(&[ArtToken::Block]);
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &tail_only),
+            ToolTailMatch::None
+        );
+
+        // With the first key still held, the pair fires.
+        let both_held = held_frame(&[ArtToken::Up, ArtToken::Block]);
+        assert_eq!(
+            state.classify_tool_tail(ToolTail::Block, &config, &both_held),
+            ToolTailMatch::Arm(75300)
         );
     }
 

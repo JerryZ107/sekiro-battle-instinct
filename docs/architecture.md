@@ -51,7 +51,7 @@
 
 - `frame.rs` 的 `Frames::actual_at()` 改为 `u32` 运算并饱和，避免 `240` 帧 @ 300fps 这类长计时溢出 `u16`；`as_actual()` 统一四舍五入。
 - `Framerate` 不再在 30 个采样后永久冻结：每 60 帧继续采样，并跳过 `> max(3 × 预期, 2s)` 的暂停/加载窗口，支持游戏中途开关 FPS 解锁。
-- 玩家感知窗口全部按当前 FPS 缩放：`ArtComboWindow` 的 18/18/42 帧、`rl` 窗口、忍具两键窗口、排队延迟、忍具多段锁、心流持续时间。
+- 玩家感知窗口全部按当前 FPS 缩放：`ArtComboWindow` 的 18/18/42 帧、三键中键→尾键 60 帧、`rl` 窗口、忍具两键窗口、排队延迟、忍具多段锁、心流持续时间。
 - 注入类帧数（`BLOCK_INJECTION_DURATION`、`ATTACK_SUPRESSION_DURATION`、`PROSTHETIC_SUPPRESSION_DURATION`、`tool_min_use`）保持游戏原生帧，不做墙钟缩放，与上游 `dec32/sekiro-battle-instinct` 一致。
 - 配置中的 `*_frames` 字段仍按 60fps 存储；`Config::rl_window()/tool_window()/art_queue_delay()/tool_lock()` 返回 `Frames`，在计时器启动时再换算，避免启动阶段采样器尚未就绪时把窗口锁死在 60fps。
 

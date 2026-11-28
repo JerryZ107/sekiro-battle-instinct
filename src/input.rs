@@ -166,7 +166,7 @@ pub struct ActionFrame {
 }
 
 impl ActionFrame {
-    pub fn update(&mut self, input: &InputHandler, up: bool, right: bool, down: bool, left: bool) {
+    pub fn update(&mut self, input: &InputHandler, up: bool, right: bool, down: bool, left: bool, crouch_held: bool) {
         let action = input.action;
         let mut held = 0u16;
         if up {
@@ -199,7 +199,7 @@ impl ActionFrame {
         if action & SPRINT != 0 {
             held |= ArtToken::Sprint.bit();
         }
-        if action & CROUCH != 0 {
+        if action & CROUCH != 0 || crouch_held {
             held |= ArtToken::Crouch.bit();
         }
 
@@ -222,11 +222,6 @@ impl ActionFrame {
     #[inline(always)]
     pub fn held(self, token: ArtToken) -> bool {
         self.held & token.bit() != 0
-    }
-
-    #[inline(always)]
-    pub fn was_held(self, token: ArtToken) -> bool {
-        self.last_held & token.bit() != 0
     }
 
     #[inline(always)]
@@ -494,7 +489,7 @@ impl ComboKey for ArtCombo {
     }
 }
 
-/// Last two combat-art key edges within a short window.
+/// Last two or three combat-art key edges within their perception windows.
 pub struct ArtComboWindow {
     first: Option<ArtToken>,
     second: Option<ArtToken>,
@@ -517,8 +512,12 @@ impl ArtComboWindow {
     const MAX_AGE_FF: Frames = Frames::standard(18);
     /// Longer window when first key is `l` (attack), ~0.7s @60fps.
     const MAX_AGE_L: Frames = Frames::standard(42);
-    /// Every triple-key stage gets the same 0.3s perception window.
+    /// First -> middle stage of a three-key combo (~0.3s).
     const TRIPLE_STAGE: Frames = Frames::standard(18);
+    /// Middle -> tail stage of a three-key combo (1s). Both upstream keys
+    /// must still be held when the tail is pressed, so the longer window does
+    /// not make accidental triggers more likely.
+    const TRIPLE_TAIL_STAGE: Frames = Frames::standard(60);
 
     pub fn new(max_age_rl: Frames) -> ArtComboWindow {
         ArtComboWindow {
@@ -587,6 +586,7 @@ impl ArtComboWindow {
                     let rl_age = self.max_age_rl.as_actual().saturating_add(1);
                     rl_age.max(Self::TRIPLE_STAGE.as_actual())
                 }
+                (Some(_), Some(_), None) => Self::TRIPLE_TAIL_STAGE.as_actual(),
                 _ => Self::MAX_AGE.as_actual(),
             };
             if self.age >= max_age {
@@ -705,17 +705,23 @@ impl ArtComboWindow {
                 let pair = ArtCombo::pair(a, token);
                 let pair_bound = combo_is_bound(pair);
 
-                // The special `r` -> `l` rule applies to a configured pair:
-                // both keys must be held and the attack edge must be inside
-                // the rl window. A triple is allowed to use the generic 0.3s
-                // per-stage window instead.
+                // A configured pair only fires when the first key is still
+                // held as the tail is pressed, matching the hold-chain rule
+                // used by three-key combos. Same-key pairs such as `ee` still
+                // work because the new press puts that key into `held`.
+                if pair_bound && !self.token_held(a) {
+                    if a == ArtToken::Block && token == ArtToken::Attack && self.age >= self.max_age_rl.as_actual() {
+                        self.late_rl_rejected = true;
+                    }
+                    self.clear();
+                    return (false, false);
+                }
+
+                // The special `r` -> `l` rule additionally requires the attack
+                // edge to be inside the configured rl window.
                 if pair_bound && a == ArtToken::Block && token == ArtToken::Attack {
                     if self.age >= self.max_age_rl.as_actual() {
                         self.late_rl_rejected = true;
-                        self.clear();
-                        return (false, false);
-                    }
-                    if self.held & ArtToken::Block.bit() == 0 {
                         self.clear();
                         return (false, false);
                     }
@@ -746,7 +752,7 @@ impl ArtComboWindow {
             (Some(a), Some(b), None) => {
                 let triple = ArtCombo::triple(a, b, token);
                 let chain_held = self.token_held(a) && self.token_held(b);
-                if combo_is_bound(triple) && chain_held && self.age < Self::TRIPLE_STAGE.as_actual() {
+                if combo_is_bound(triple) && chain_held && self.age < Self::TRIPLE_TAIL_STAGE.as_actual() {
                     self.third = Some(token);
                     self.completed_this_frame = Some(triple);
                     (true, true)
@@ -1206,12 +1212,12 @@ mod test {
     }
 
     #[test]
-    fn triple_stages_expire_after_three_tenths_of_a_second() {
+    fn triple_first_to_middle_expires_after_three_tenths_of_a_second() {
         let triple = ArtCombo::triple(ArtToken::Attack, ArtToken::Right, ArtToken::Jump);
         let mut w = ArtComboWindow::new(Frames::standard(18));
 
         // Attack normally has a longer double-key window, but the triple
-        // middle stage is capped at 0.3s.
+        // first -> middle stage is capped at 0.3s.
         w.tick_with(
             false,
             false,
@@ -1258,8 +1264,77 @@ mod test {
         );
         assert!(w.take_completed().is_none());
         assert!(!w.awaiting_third());
+    }
 
-        // Middle -> tail is also limited to 0.3s.
+    #[test]
+    fn triple_middle_to_tail_allows_one_second() {
+        let triple = ArtCombo::triple(ArtToken::Attack, ArtToken::Right, ArtToken::Jump);
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        w.tick_with(
+            false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert!(w.awaiting_third());
+
+        // A 0.5s pause between the middle and tail key still fires.
+        for _ in 0..30 {
+            w.tick_with(
+                false,
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                |combo| combo == triple,
+            );
+        }
+        w.tick_with(
+            false,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            true,
+            false,
+            false,
+            |combo| combo == triple,
+        );
+        assert_eq!(w.take_completed(), Some(triple));
+
+        // Exactly one second (60 frames) after the middle key expires.
         let mut w = ArtComboWindow::new(Frames::standard(18));
         w.tick_with(
             false,
@@ -1290,7 +1365,7 @@ mod test {
             |combo| combo == triple,
         );
         assert!(w.awaiting_third());
-        for _ in 0..18 {
+        for _ in 0..60 {
             w.tick_with(
                 false,
                 true,
@@ -1321,6 +1396,75 @@ mod test {
             |combo| combo == triple,
         );
         assert!(w.take_completed().is_none());
+        assert!(!w.awaiting_third());
+    }
+
+    #[test]
+    fn pair_requires_first_key_held_when_tail_is_pressed() {
+        let pair = ArtCombo::pair(ArtToken::Up, ArtToken::Attack);
+        let mut w = ArtComboWindow::new(Frames::standard(18));
+
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair,
+        );
+        // Releasing the first key before the tail edge invalidates the pair.
+        w.tick_with(
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair,
+        );
+        assert!(w.take_completed().is_none());
+
+        // With the first key still held, the same pair fires.
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair,
+        );
+        w.tick_with(
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            |combo| combo == pair,
+        );
+        assert_eq!(w.take_completed(), Some(pair));
     }
 
     #[test]
